@@ -1,6 +1,6 @@
 {
   "name": "zaungast",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Read-only, offline reader for the local Teams cache, exposed as an MCP server (reads the on-disk IndexedDB LevelDB; no Graph API, no credentials). Not affiliated with or endorsed by Microsoft.",
   "type": "module",
   "bin": {
