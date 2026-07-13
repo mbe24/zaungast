@@ -50,8 +50,38 @@ claude mcp add zaungast -s user -- node "C:\\path\\to\\zaungast\\dist\\index.js"
 it.) After any code change, re-run `npm run build` and restart the server (a fresh session
 re-spawns it).
 
+## Finding the Teams database folder
+
+zaungast auto-discovers this, so you normally don't need it — but if discovery fails or you
+have multiple profiles, set `TEAMS_LEVELDB_DIR` to the folder described here.
+
+The new Teams client stores its data under:
+
+```
+%LOCALAPPDATA%\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\EBWebView\<profile>\IndexedDB\
+```
+
+Inside that `IndexedDB\` folder you'll see **two** entries for the Teams origin:
+
+```
+IndexedDB\
+├── https_teams.microsoft.com_0.indexeddb.leveldb   ← this one (set TEAMS_LEVELDB_DIR to it)
+└── https_teams.microsoft.com_0.indexeddb.blob      ← sibling blob store (not used)
+```
+
+The folder you want is the one ending **`.leveldb`** — it contains `CURRENT`, `MANIFEST-*`,
+and the `*.ldb` / `*.log` files. Set `TEAMS_LEVELDB_DIR` to *that* folder, **not** its parent
+`IndexedDB\` directory (which holds both). The `.blob` sibling (images and large binaries) is
+a handy landmark that you're in the right place — zaungast doesn't read it.
+
+Find the exact path with PowerShell:
+
+```powershell
+Get-ChildItem "$env:LOCALAPPDATA\Packages\MSTeams_*\LocalCache\Microsoft\MSTeams\EBWebView\*\IndexedDB\https_teams.microsoft.com_0.indexeddb.leveldb" -Directory | Select-Object -ExpandProperty FullName
+```
+
 ## Multiple Teams profiles / accounts
 
 zaungast picks the most-recently-active `https_teams.microsoft.com` database it finds. If you
-have several profiles and it picks the wrong one, pin it explicitly with `TEAMS_LEVELDB_DIR`
-(see [Configuration](configuration.md)).
+have several profiles (multiple `<profile>` or `WV2Profile_*` directories) and it picks the
+wrong one, pin the right one explicitly with `TEAMS_LEVELDB_DIR` using the path above.

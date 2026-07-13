@@ -22,34 +22,55 @@ week"* — without you copy-pasting, and without any cloud API.
 - **No credentials** — nothing to log in to, no tokens, no permissions to grant.
 - **Read-only & safe** — the Teams files are only ever *read/copied*, never written, locked,
   or modified. It cannot corrupt your Teams data.
-- **Token-economical** — every tool returns compact, shaped output (dense lines, snippets,
-  aggregates), never bulk dumps.
+- **Token-economical** — every tool returns compact, shaped output, never bulk dumps.
 - **Zero-config** — auto-discovers the local Teams database; just register and go.
 
-> ⚠️ **Platform:** currently **Windows only** (new Teams / WebView2). Teams on macOS uses a
-> different storage engine — see [Requirements](#requirements).
+> ⚠️ **Windows only** (new Teams / WebView2), Node.js ≥ 22.5. Teams on macOS uses a different
+> storage engine and isn't supported yet — see
+> [requirements](https://zaungast.readthedocs.io/en/latest/installation/#requirements).
 > **Not affiliated with or endorsed by Microsoft.** It reads your own local data on your own
 > machine.
 
 ## Installation
 
-Requires **Node.js ≥ 22.5** (for the built-in `node:sqlite`). The package is on npm, and
-`npx -y zaungast` fetches and runs it — so registering it in your MCP client is the whole
-install. No environment variables are needed in the common case; the local Teams database is
-auto-discovered.
+`npx -y zaungast` fetches and runs the server, so registering it in your MCP client is the
+whole install. No environment variables are needed in the common case — the local Teams
+database is auto-discovered.
 
 ### Claude Code
 
+Normal case — the Teams database is auto-discovered, so no variables are needed:
+
 ```sh
-claude mcp add zaungast -s user -- npx -y zaungast
+claude mcp add zaungast -- npx -y zaungast
 ```
 
-`-s user` makes it available in every project. Verify with `claude mcp list` (expect
-`zaungast … ✓ Connected`), then open a new session — the six tools are available.
+Add `--scope user` to make it available in every project. Verify with `claude mcp list`
+(expect `zaungast … ✓ Connected`), then open a new session.
+
+Only if auto-discovery fails or you have multiple profiles, set `TEAMS_LEVELDB_DIR`
+explicitly (the `-e` flag goes before the `--`) — see
+[finding the Teams database folder](https://zaungast.readthedocs.io/en/latest/installation/#finding-the-teams-database-folder):
+
+```sh
+claude mcp add zaungast \
+  -e TEAMS_LEVELDB_DIR="C:\Users\me\AppData\Local\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\EBWebView\WV2Profile_tfw\IndexedDB\https_teams.microsoft.com_0.indexeddb.leveldb" \
+  -- npx -y zaungast
+```
+
+### Codex
+
+Add to `~/.codex/config.toml` (or run `codex mcp add zaungast -- npx -y zaungast`):
+
+```toml
+[mcp_servers.zaungast]
+command = "npx"
+args = ["-y", "zaungast"]
+```
 
 ### Claude Desktop / other clients
 
-Add to your client's MCP config (e.g. `claude_desktop_config.json` or `.mcp.json`):
+Add to your client's MCP config (`claude_desktop_config.json`, `.mcp.json`, …):
 
 ```json
 {
@@ -59,9 +80,8 @@ Add to your client's MCP config (e.g. `claude_desktop_config.json` or `.mcp.json
 }
 ```
 
-If auto-discovery can't find your Teams database, set `TEAMS_LEVELDB_DIR` (see
-[Configuration](#configuration)). From-source and troubleshooting steps are in the
-[docs](https://zaungast.readthedocs.io/en/latest/installation/).
+From-source setup and other clients are covered in the
+[installation docs](https://zaungast.readthedocs.io/en/latest/installation/).
 
 ## Tools
 
@@ -74,63 +94,34 @@ If auto-discovery can't find your Teams database, set `TEAMS_LEVELDB_DIR` (see
 | `find_person` | Resolve a name/nickname to a canonical person + handle, with contact stats. |
 | `describe_schema` | Recovery tool: propose a field mapping when a Teams update changes the DB layout. |
 
-Full reference: [Tools documentation](https://zaungast.readthedocs.io/en/latest/tools/).
+Full reference: [tools documentation](https://zaungast.readthedocs.io/en/latest/tools/).
 
-## Requirements
+## Environment variables
 
-- **OS:** Windows (new Teams, `MSTeams` / WebView2). The reader targets Chromium's IndexedDB
-  LevelDB + Blink/V8 value format. Teams on **macOS** uses WebKit (a SQLite-backed IndexedDB
-  with a different serialization) and is not supported yet.
-- **Node.js ≥ 22.5** — uses the built-in `node:sqlite` for the in-memory index. (On Node 22
-  the server auto-enables the required `--experimental-sqlite` flag for you.)
-- The new Teams desktop app, signed in at least once (so there's a local cache to read).
+All optional — zaungast works with no configuration. Pass them via your MCP client's `env`
+block (as above).
 
-## Configuration
-
-All optional — zaungast works with no configuration.
-
-| Variable | Purpose |
-|----------|---------|
-| `TEAMS_LEVELDB_DIR` | Path to the Teams `…\IndexedDB\https_teams.microsoft.com_0.indexeddb.leveldb` directory. Set only if auto-discovery fails or you have multiple profiles. |
-| `ZAUNGAST_INCREMENTAL` | Refresh mode: `copy-reuse` (default, faster) or `reparse` (simpler). |
-| `ZAUNGAST_DB_DIR` | Read a static copy of the database directly (testing / offline analysis); skips discovery and live-refresh. |
-
-## How it works
-
-1. **Snapshot** — copies the Teams LevelDB files to a temp dir (read-only; the live files are
-   never touched), so a running Teams client can't be disrupted.
-2. **Decode** — a dependency-free reader parses the SSTables + write-ahead log, decompresses
-   Snappy blocks, decodes Chromium's IndexedDB key coding, and deserializes the Blink/V8
-   structured-clone values into chat records.
-3. **Index** — loads messages/conversations/people into an in-memory SQLite database with
-   FTS5 full-text search.
-4. **Serve & refresh** — answers tool calls from the index; on each call a ~1 ms probe checks
-   whether the cache changed and refreshes incrementally when it has.
-
-More detail: [How it works](https://zaungast.readthedocs.io/en/latest/how-it-works/).
+| Var | Default | Notes |
+|-----|---------|-------|
+| `TEAMS_LEVELDB_DIR` | auto-discovered | Path to the `…\IndexedDB\https_teams.microsoft.com_0.indexeddb.leveldb` directory. Set only if discovery fails or to pin a profile. |
+| `ZAUNGAST_INCREMENTAL` | `copy-reuse` | Refresh mode: `copy-reuse` (faster) or `reparse` (simpler). |
+| `ZAUNGAST_DB_DIR` | unset | Read a static *copy* of the database directly (offline analysis); skips discovery and live refresh. |
 
 ## Privacy & safety
 
-- **Everything stays local.** zaungast makes no network calls; it reads data already on your
-  machine and serves it to your local agent over stdio.
-- **It cannot harm Teams.** There is no code path that writes to, locks, or memory-maps the
-  Teams directory — only read-and-copy. Verified by design review and tests.
-- **Images/files are URL-only.** Chat images live in Teams' cloud behind auth; zaungast
-  surfaces that an attachment exists but never fetches it and never handles credentials.
+- **Stays local** — no network calls; reads data already on your machine and serves it to your
+  local agent over stdio.
+- **Cannot harm Teams** — no code path writes to, locks, or memory-maps the Teams directory;
+  only read-and-copy.
+- **Images/files are URL-only** — chat images live in Teams' cloud behind auth; zaungast notes
+  that an attachment exists but never fetches it and never handles credentials.
 
-## Development
+More in the [privacy & safety docs](https://zaungast.readthedocs.io/en/latest/privacy/).
 
-```sh
-git clone https://github.com/mbe24/zaungast && cd zaungast
-npm install
-npm run build            # compile to dist/
-npm run typecheck        # tsc --noEmit
-npm test                 # data-free unit tests
-npm run test:integration # full suite — needs a local Teams cache
-npm run assets           # re-render the SVG brand assets to PNG
-```
+## Documentation
 
-See the [development docs](https://zaungast.readthedocs.io/en/latest/development/).
+Full documentation — tools reference, how it works, configuration, privacy, troubleshooting,
+and development — lives at **<https://zaungast.readthedocs.io/>**.
 
 ## License
 
