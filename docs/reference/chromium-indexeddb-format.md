@@ -19,18 +19,7 @@ Blink trailer offset/size are **big-endian**) are called out at each site.
 
 ---
 
-## Table of contents
-
-1. [V8 ValueSerializer / ValueDeserializer wire format](#1-v8-valueserializer--valuedeserializer-wire-format)
-2. [Blink SerializedScriptValue envelope + host objects](#2-blink-serializedscriptvalue-envelope--host-objects)
-3. [Chromium IndexedDB LevelDB coding](#3-chromium-indexeddb-leveldb-coding)
-4. [LevelDB table (.ldb / SSTable) + Snappy raw block format](#4-leveldb-table-ldb--sstable--snappy-raw-block-format)
-5. [Documentation / version-adaptation strategy](#5-documentation--version-adaptation-strategy)
-6. [Sources](#6-sources)
-
----
-
-## The full nesting, top to bottom
+## Overview
 
 Before the details, the complete containment picture for one IndexedDB object-store record:
 
@@ -50,7 +39,7 @@ Before the details, the complete containment picture for one IndexedDB object-st
 
 ---
 
-# 1. V8 ValueSerializer / ValueDeserializer wire format
+## 1. V8 ValueSerializer / ValueDeserializer wire format
 
 **Primary source:** `v8/src/objects/value-serializer.cc`
 - `.cc` @ commit `a59996fbddfd1867aa5501283859fd4b6af210ba` (2026-07-01)
@@ -62,7 +51,7 @@ Before the details, the complete containment picture for one IndexedDB object-st
 namespace of `value-serializer.cc` (approx. lines 121–245 and 253–266). Only
 `kLatestVersion` and the version-history comment sit near the top of the `.cc`.
 
-## 1.1 Complete `SerializationTag` enum [PRIMARY, TRIANGULATED against dfindexeddb]
+### 1.1 Complete `SerializationTag` enum [PRIMARY, TRIANGULATED against dfindexeddb]
 
 Every ASCII value below was cross-checked against `dfindexeddb`'s `definitions.py`
 (which is pinned to an older V8 at `LATEST_VERSION = 15`, so it lacks the two newest tags,
@@ -140,7 +129,7 @@ very old blobs — they were how Blink host objects were tagged before v13):
 > `kArrayBuffer` for decoding — the only difference is a "don't allow mutation" semantic
 > flag on the deserialized object; the wire bytes are identical.
 
-## 1.2 ArrayBuffer / ArrayBufferView payloads [PRIMARY]
+### 1.2 ArrayBuffer / ArrayBufferView payloads [PRIMARY]
 
 Source: `WriteJSArrayBuffer` (approx. `.cc` L987–1075), `WriteJSArrayBufferView` (L1076–1111).
 
@@ -210,7 +199,7 @@ bits 2+     = reserved / unused
 > `kObjectReference` back-reference to one (comment at `.cc` L212–215). The view does not
 > carry its own buffer bytes; it points at the just-seen buffer.
 
-## 1.3 BigInt payload [PRIMARY] — bitfield is BYTE LENGTH, not digit count
+### 1.3 BigInt payload [PRIMARY] — bitfield is BYTE LENGTH, not digit count
 
 Source: `WriteBigIntContents` (`.cc` L389–398); `bigint.cc` L1274–1286; `bigint.h` L118–126.
 
@@ -229,7 +218,7 @@ integer of that width and negate if the sign bit is set. V8 deliberately encodes
 byte-length (not 64-bit-word count) so 32-bit and 64-bit builds produce interoperable data.
 `kBigIntObject` uses the identical payload, just a different lead tag.
 
-## 1.4 Date and RegExp payloads [PRIMARY]
+### 1.4 Date and RegExp payloads [PRIMARY]
 
 **`kDate`** (`WriteJSDate`, ~L880):
 ```
@@ -257,7 +246,7 @@ bit 8 (0x100) = unicodeSets (v)
 `kFlagCount = 9`. The deserializer masks off bits ≥ 9 and rejects bit 6 unless the
 experimental-regexp build flag is set.
 
-## 1.5 Object-reference id table [PRIMARY]
+### 1.5 Object-reference id table [PRIMARY]
 
 Single mint point on the write side: `WriteJSReceiver` (`.cc` L587–627):
 ```cpp
@@ -289,7 +278,7 @@ calls `WriteJSReceiver(buffer)` (id N) then `WriteJSReceiver(view)` (id N+1) —
 **Ids are assigned before recursing into contents**, so cyclic/self-referential graphs
 correctly back-reference their own not-yet-finished object.
 
-## 1.6 Two-byte string alignment [PRIMARY] — the padding rule
+### 1.6 Two-byte string alignment [PRIMARY] — the padding rule
 
 Source: `WriteString` (`.cc` L564–583), verbatim:
 ```cpp
@@ -319,7 +308,7 @@ UTF-16LE data lands 2-byte aligned. It is always 0 or 1 pad bytes (parity alignm
 > serialization buffer (`buffer_size_`), so if you're tracking absolute offset from the V8
 > header you can predict it, but skip-on-encounter is the robust approach.
 
-## 1.7 Error payload [PRIMARY, brief]
+### 1.7 Error payload [PRIMARY, brief]
 
 `kError` (`r`/`0x72`) is followed by a stream of `ErrorTag` sub-tag bytes terminated by an
 end marker; sub-tags carry the error type (Eval/Range/Reference/Syntax/Type/URI), an
@@ -329,7 +318,7 @@ associated payload (string or nested value) until the end sub-tag. Full `ErrorTa
 live in the same anonymous namespace in `value-serializer.cc`; consult source if you need
 to fully materialize errors (rare in IndexedDB records).
 
-## 1.8 `kLatestVersion` and version history [PRIMARY, TIME-SENSITIVE]
+### 1.8 `kLatestVersion` and version history [PRIMARY, TIME-SENSITIVE]
 
 `static const uint32_t kLatestVersion = 16;` (`.cc` ~L55, at commit `3f4cb1d`).
 Verbatim history comment:
@@ -359,7 +348,7 @@ profile/migration. **[TIME-SENSITIVE] — always read the varint; never hardcode
 
 ---
 
-# 2. Blink SerializedScriptValue envelope + host objects
+## 2. Blink SerializedScriptValue envelope + host objects
 
 **Primary source:** `third_party/blink/renderer/bindings/core/v8/serialization/` — files
 `serialized_script_value.{cc,h}`, `serialization_tag.h`, `v8_script_value_serializer.cc`,
@@ -368,7 +357,7 @@ profile/migration. **[TIME-SENSITIVE] — always read the varint; never hardcode
 Two agents pinned commit `9533c6cf5d638b0620ddab91b5e0d3e4636a2bb5` for stable line numbers;
 otherwise `main` as of 2026-07-10/11.
 
-## 2.0 Encoding primitives [PRIMARY] — get these right first
+### 2.0 Encoding primitives [PRIMARY] — get these right first
 
 | Primitive | Encoding |
 |---|---|
@@ -380,7 +369,7 @@ otherwise `main` as of 2026-07-10/11.
 | UTF8String field | `length:varint(uint32)` + `length` raw UTF-8 bytes |
 | **Trailer offset/size (after 0xFE)** | **fixed-width BIG-ENDIAN** — the ONE exception |
 
-## 2.1 Blink version envelope [PRIMARY, TRIANGULATED]
+### 2.1 Blink version envelope [PRIMARY, TRIANGULATED]
 
 `serialized_script_value.h`: `static constexpr uint32_t kWireFormatVersion = 21;`
 
@@ -412,7 +401,7 @@ Two thresholds that drive parsing:
   Below 16 → a single combined envelope (**one** `0xFF`). (`kMinVersionForSeparateEnvelope = 16`.)
 - **`version >= 21`** → the `0xFE` trailer-offset section is present. (`TrailerReader::kMinWireFormatVersion = 21`.)
 
-## 2.2 The trailer mechanism [PRIMARY, TRIANGULATED]
+### 2.2 The trailer mechanism [PRIMARY, TRIANGULATED]
 
 `serialization_tag.h` (L144–150):
 ```cpp
@@ -452,7 +441,7 @@ size.** Writer uses `base::U64ToBigEndian`/`U32ToBigEndian`; reader `…FromBigE
 > `dfindexeddb` reads the offset/size (to know where the V8 payload ends) but does not decode
 > the trailer record's contents; the trailer-record layout above is PRIMARY (Blink C++) only.
 
-## 2.3 Overall byte sequence — two nested 0xFF envelopes [PRIMARY, TRIANGULATED]
+### 2.3 Overall byte sequence — two nested 0xFF envelopes [PRIMARY, TRIANGULATED]
 
 Verbatim comment (`v8_script_value_serializer.cc` ~L72–87):
 > The serialization format has two "envelopes": an outer one controlled by Blink and an
@@ -494,7 +483,7 @@ second `0xFF`. dfindexeddb `_ReadVersionEnvelope` uses `_MIN_VERSION_FOR_SEPARAT
 > primary-source IndexedDB value framing; be aware the wrapper may exist and was not fully
 > reconciled against Chromium's backing-store source here.
 
-## 2.4 Blink `SerializationTag` (host-object sub-tags) [PRIMARY]
+### 2.4 Blink `SerializationTag` (host-object sub-tags) [PRIMARY]
 
 `enum SerializationTag : uint8_t` in `serialization_tag.h` (49 enumerators). These are the
 payload of V8's `kHostObject` (`\`/`0x5C`): V8 emits `0x5C`, then Blink reads one of these
@@ -561,7 +550,7 @@ bytes and dispatches. `uint32`/`uint64` = **varint**; `double` = 8 raw LE bytes.
 > `DataCloneError` when serialized for storage and should not appear (`IsForStorage()`
 > guards in `v8_script_value_serializer_for_modules.cc`).
 
-## 2.5 Host-object payload layouts [PRIMARY] (read order = authoritative)
+### 2.5 Host-object payload layouts [PRIMARY] (read order = authoritative)
 
 Version gates are exact — replicate them or you desync. All from
 `v8_script_value_deserializer.cc` unless noted; CryptoKey is in the **modules** deserializer.
@@ -645,7 +634,7 @@ MlKem768X25519=26.
 
 ---
 
-# 3. Chromium IndexedDB LevelDB coding
+## 3. Chromium IndexedDB LevelDB coding
 
 **Primary source:** `content/browser/indexed_db/indexed_db_leveldb_coding.{cc,h}`; design doc
 `content/browser/indexed_db/docs/leveldb_coding_scheme.md`; backing-store read/write in
@@ -653,7 +642,7 @@ MlKem768X25519=26.
 under `instance/` recently; if a path 404s, search under `content/browser/indexed_db/instance/`
 or `components/services/storage/indexed_db/`.)
 
-## 3.1 KeyPrefix encoding [PRIMARY] — bit layout is 3/3/2
+### 3.1 KeyPrefix encoding [PRIMARY] — bit layout is 3/3/2
 
 Source: `indexed_db_leveldb_coding.h` L140–231; `KeyPrefix::Decode`/`EncodeInternal`
 (`.cc` L1749–1835); design doc L127–145.
@@ -680,7 +669,7 @@ first_byte = ((db_bytes-1) << 5) | ((os_bytes-1) << 2) | (idx_bytes-1)
 > (Distinct from the encoded IDBKey suffix, where numbers/dates are stored big-endian — see
 > §3.4.)
 
-## 3.2 Special index_id values [PRIMARY]
+### 3.2 Special index_id values [PRIMARY]
 
 Source: `.cc` L76–78; `kMinimumIndexId` in `.h` L36; dispatch in `KeyPrefix::MaybeType`
 (`.cc` L1888–1907).
@@ -702,7 +691,7 @@ Classification (`KeyPrefix::Type` — a derived enum, not the raw index_id):
 > source says `kMinimumIndexId = 30`. **Trust 30** (current Chromium); the CCL figure is
 > likely an older version or an error.
 
-## 3.3 Object-store data VALUE format [PRIMARY]
+### 3.3 Object-store data VALUE format [PRIMARY]
 
 Source: design doc L286; `BackingStore::Transaction::PutRecord` (`backing_store.cc` L2312–2361);
 cursor read (L3669–3682).
@@ -725,7 +714,7 @@ ssv     : byte[...]   ← raw Blink SerializedScriptValue, to end of value; star
 There is **no length prefix on the SSV** — it is simply "everything after the varint." The
 SSV begins with Blink's `kVersionTag = 0xFF` (confirmed `serialization_tag.h` L147).
 
-## 3.4 Blobs / external objects [PRIMARY] — fully external, no inline prefix
+### 3.4 Blobs / external objects [PRIMARY] — fully external, no inline prefix
 
 Source: design doc L106–124, L300–308; `EncodeExternalObjects` (`backing_store.cc` L460–493).
 
@@ -760,7 +749,7 @@ per external object:
 prefix" handler in the main data record — the main value is always `varint(version) + SSV`.
 Blob metadata is out-of-line under `index_id == 3`.
 
-## 3.5 The `idb_cmp1` comparator [PRIMARY, summary]
+### 3.5 The `idb_cmp1` comparator [PRIMARY, summary]
 
 Source: `indexed_db_leveldb_operations.cc` L43–56; `content::indexed_db::Compare`
 (`indexed_db_leveldb_coding.cc` L1328–1469).
@@ -778,7 +767,7 @@ key.
 
 ---
 
-# 4. LevelDB table (.ldb / SSTable) + Snappy raw block format
+## 4. LevelDB table (.ldb / SSTable) + Snappy raw block format
 
 **Primary source:** upstream `github.com/google/leveldb` (`doc/table_format.md`,
 `table/format.{h,cc}`, `table/block_builder.cc`, `table/block.cc`, `table/table_builder.cc`,
@@ -788,7 +777,7 @@ key.
 > Chromium's fork is at `third_party/leveldatabase` (NOT `third_party/leveldb`); `src/` is
 > vendored from the `external/leveldatabase` mirror.
 
-## 4.1 Block trailer [PRIMARY] — 5 bytes, masked CRC32C, little-endian
+### 4.1 Block trailer [PRIMARY] — 5 bytes, masked CRC32C, little-endian
 
 `table/format.h`: `static const size_t kBlockTrailerSize = 5;`
 ```
@@ -816,7 +805,7 @@ The underlying CRC is standard **CRC32C (Castagnoli)**, reflected, init `0xFFFFF
 final-xor `0xFFFFFFFF` — same as Chromium's `base::Crc32c`. To verify a block:
 `crc = Unmask(readLE32(trailer+1)); ok = (crc == crc32c(block_contents ++ [type]))`.
 
-## 4.2 Compression types [PRIMARY] — Chromium fork has NO zstd
+### 4.2 Compression types [PRIMARY] — Chromium fork has NO zstd
 
 Upstream `include/leveldb/options.h` (current main) defines three:
 ```cpp
@@ -836,7 +825,7 @@ and a `default: return Status::Corruption("bad block type")`.
 > LevelDB does have zstd = 0x2, but Chromium's fork does not). [PRIMARY — confirmed in the
 > fork's actual options.h and format.cc.]
 
-## 4.3 Block internal layout [PRIMARY]
+### 4.3 Block internal layout [PRIMARY]
 
 `block_builder.cc` header comment (verbatim):
 ```
@@ -859,7 +848,7 @@ DecodeFixed32(data + size - 4)`; `restart_offset_ = size - (1 + NumRestarts()) *
 `DecodeEntry` has a fast path when all three varint32 fit in one byte each (`< 128`), reading
 3 bytes; else it decodes three varint32s.
 
-## 4.4 Can one value exceed block_size? [PRIMARY] — YES
+### 4.4 Can one value exceed block_size? [PRIMARY] — YES
 
 `table_builder.cc Add()`:
 ```cpp
@@ -877,7 +866,7 @@ key/value across blocks, and none that rejects an oversized value.** Consequentl
 > multiple blocks. Do not assume any block is ≤ 4096 bytes** — use each block's `BlockHandle`
 > (offset + size, both varint64, from the index block / footer) to learn its true extent.
 
-## 4.5 Defaults + footer [PRIMARY]
+### 4.5 Defaults + footer [PRIMARY]
 
 | Constant | Value | Source |
 |---|---|---|
@@ -899,7 +888,7 @@ number. Comparator orders by user key, then **decreasing** sequence number. For 
 reader you typically strip the trailing 8 bytes to recover the IDB-encoded user key, then
 decode per §3.
 
-## 4.6 Snappy raw (unframed) block format [PRIMARY — snappy format_description.txt]
+### 4.6 Snappy raw (unframed) block format [PRIMARY — snappy format_description.txt]
 
 LevelDB stores the **raw/unframed** Snappy format inside compressed blocks.
 
@@ -940,7 +929,7 @@ rely on that.)
 
 ---
 
-# 5. Documentation / version-adaptation strategy
+## 5. Documentation / version-adaptation strategy
 
 How the two mature re-implementations stay robust across Chromium/V8/Blink drift, and what to
 mirror in TypeScript. [TRIANGULATED — both projects independently confirm the same version
@@ -972,7 +961,7 @@ thresholds used above: V8 v12/v13/v14/v15, Blink v16/v21.]
 Neither README pins a validated Chromium version range; both resync against live source. CCL's
 blog advises consulting *current* Chromium source rather than a compatibility matrix.
 
-## Patterns to mirror in the TypeScript reader
+### Patterns to mirror in the TypeScript reader
 
 - **Central tag→handler registry** (`Map<number, Handler>`) for both V8 `SerializationTag` and
   Blink host-object tags, instead of a monolithic switch — adding a new tag becomes additive.
@@ -999,7 +988,7 @@ blog advises consulting *current* Chromium source rather than a compatibility ma
 
 ---
 
-# 6. Sources
+## 6. Sources
 
 **V8 ValueSerializer (§1):**
 - `value-serializer.cc` @ `a59996fbddfd1867aa5501283859fd4b6af210ba` — https://github.com/v8/v8/blob/a59996fbddfd1867aa5501283859fd4b6af210ba/src/objects/value-serializer.cc
@@ -1053,7 +1042,7 @@ blog advises consulting *current* Chromium source rather than a compatibility ma
 
 ---
 
-## Appendix: items flagged uncertain / to verify against source before relying on
+### Appendix: items flagged uncertain / to verify against source before relying on
 
 - **[INFERRED]** Exact originating CL/commit for `kImmutableArrayBuffer` (`0x43`) and
   `kFloat16Array` (`0x68`) — confirmed present in current V8 `main` and confirmed to postdate
