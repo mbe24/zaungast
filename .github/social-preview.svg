@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-label="zaungast: your Teams chats, quietly read — a local, offline, read-only MCP">
+  <defs>
+    <linearGradient id="sky" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#223560"/>
+      <stop offset="62%" stop-color="#2C5B77"/>
+      <stop offset="100%" stop-color="#2F7A80"/>
+    </linearGradient>
+    <linearGradient id="wood" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#D8AE6E"/>
+      <stop offset="100%" stop-color="#BE8F49"/>
+    </linearGradient>
+    <linearGradient id="lens" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8BE0F0"/>
+      <stop offset="100%" stop-color="#2C9EC2"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="78%" cy="52%" r="42%">
+      <stop offset="0%" stop-color="#F2A64B" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#F2A64B" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1280" height="640" fill="url(#sky)"/>
+  <rect x="0" y="0" width="1280" height="640" fill="url(#glow)"/>
+
+  <!-- fence across the bottom -->
+  <g>
+    <rect x="0" y="470" width="1280" height="170" fill="#B0863F"/>
+    <g fill="url(#wood)" stroke="#9A7238" stroke-width="3">
+      <path d="M-6 452 l20 -20 l44 0 l20 20 v208 h-104 z"/>
+      <path d="M104 452 l20 -20 l44 0 l20 20 v208 h-104 z"/>
+      <path d="M214 452 l20 -20 l44 0 l20 20 v208 h-104 z"/>
+      <path d="M324 452 l20 -20 l44 0 l20 20 v208 h-104 z"/>
+      <path d="M434 452 l20 -20 l44 0 l20 20 v208 h-104 z"/>
+      <path d="M544 452 l20 -20 l44 0 l20 20 v208 h-104 z"/>
+      <path d="M654 452 l20 -20 l44 0 l20 20 v208 h-104 z"/>
+      <path d="M764 452 l20 -20 l44 0 l20 20 v208 h-104 z"/>
+      <path d="M874 452 l20 -20 l44 0 l20 20 v208 h-104 z"/>
+      <path d="M984 452 l20 -20 l44 0 l20 20 v208 h-104 z"/>
+      <path d="M1094 452 l20 -20 l44 0 l20 20 v208 h-104 z"/>
+      <path d="M1204 452 l20 -20 l44 0 l20 20 v208 h-104 z"/>
+    </g>
+    <g stroke="#A67C3B" stroke-width="2.5" opacity="0.5" stroke-linecap="round">
+      <line x1="36" y1="470" x2="36" y2="640"/><line x1="146" y1="470" x2="146" y2="640"/>
+      <line x1="256" y1="470" x2="256" y2="640"/><line x1="366" y1="470" x2="366" y2="640"/>
+      <line x1="476" y1="470" x2="476" y2="640"/><line x1="586" y1="470" x2="586" y2="640"/>
+      <line x1="696" y1="470" x2="696" y2="640"/><line x1="806" y1="470" x2="806" y2="640"/>
+      <line x1="916" y1="470" x2="916" y2="640"/><line x1="1026" y1="470" x2="1026" y2="640"/>
+      <line x1="1136" y1="470" x2="1136" y2="640"/><line x1="1246" y1="470" x2="1246" y2="640"/>
+    </g>
+  </g>
+
+  <!-- peeker on the right, peeking over the fence -->
+  <g transform="translate(1010 300) scale(1.5)">
+    <path d="M-106 8 q-26 4 -30 40 q-2 26 22 30 l34 -6 z" fill="#E7B98A" stroke="#C98F5E" stroke-width="3"/>
+    <path d="M106 8 q26 4 30 40 q2 26 -22 30 l-34 -6 z" fill="#E7B98A" stroke="#C98F5E" stroke-width="3"/>
+    <g stroke="#22232B" stroke-width="4">
+      <rect x="-88" y="-42" width="72" height="86" rx="20" fill="#33343E"/>
+      <rect x="16" y="-42" width="72" height="86" rx="20" fill="#33343E"/>
+      <rect x="-22" y="-26" width="44" height="30" rx="10" fill="#3E3F4A"/>
+    </g>
+    <circle cx="-52" cy="38" r="30" fill="url(#lens)" stroke="#1E1F26" stroke-width="5"/>
+    <circle cx="52" cy="38" r="30" fill="url(#lens)" stroke="#1E1F26" stroke-width="5"/>
+    <circle cx="-62" cy="28" r="8" fill="#FFFFFF" opacity="0.85"/>
+    <circle cx="42" cy="28" r="8" fill="#FFFFFF" opacity="0.85"/>
+    <ellipse cx="0" cy="-42" rx="126" ry="30" fill="#EFE3C7" stroke="#C99A54" stroke-width="4"/>
+    <path d="M-92 -42 q6 -96 92 -96 q86 0 92 96 z" fill="#EFE3C7" stroke="#C99A54" stroke-width="4"/>
+    <path d="M-84 -60 q84 -26 168 0" fill="none" stroke="#C99A54" stroke-width="7" stroke-linecap="round"/>
+  </g>
+
+  <!-- wordmark + tagline -->
+  <g font-family="'Segoe UI', 'DejaVu Sans', Arial, sans-serif">
+    <text x="90" y="250" font-size="132" font-weight="800" fill="#F3ECDD" letter-spacing="-2">zaungast</text>
+    <rect x="94" y="276" width="150" height="8" rx="4" fill="#F2A64B"/>
+    <text x="96" y="336" font-size="40" font-weight="600" fill="#EAF1F2">Your Teams chats, quietly read.</text>
+    <text x="96" y="384" font-size="26" fill="#AEC6CC">A local-first, offline, read-only MCP — reads the on-disk</text>
+    <text x="96" y="418" font-size="26" fill="#AEC6CC">Teams cache. No Graph API, no cloud, no credentials.</text>
+    <g font-size="22" font-weight="600">
+      <rect x="96" y="440" width="112" height="38" rx="19" fill="#ffffff" fill-opacity="0.10"/>
+      <text x="152" y="465" fill="#EAF1F2" text-anchor="middle">stdio</text>
+      <rect x="220" y="440" width="112" height="38" rx="19" fill="#ffffff" fill-opacity="0.10"/>
+      <text x="276" y="465" fill="#EAF1F2" text-anchor="middle">local</text>
+      <rect x="344" y="440" width="150" height="38" rx="19" fill="#ffffff" fill-opacity="0.10"/>
+      <text x="419" y="465" fill="#EAF1F2" text-anchor="middle">read-only</text>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,8 @@
+data/
+data-alt/
+data.backup/
+.env
+*.token
+node_modules/
+dist/
+experiments/

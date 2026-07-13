@@ -1,0 +1,47 @@
+{
+  "name": "zaungast",
+  "version": "0.1.0",
+  "description": "Read-only, offline reader for the local Teams cache, exposed as an MCP server (reads the on-disk IndexedDB LevelDB; no Graph API, no credentials). Not affiliated with or endorsed by Microsoft.",
+  "type": "module",
+  "bin": {
+    "zaungast": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc && node -e \"require('fs').cpSync('src/schema/versions','dist/schema/versions',{recursive:true})\"",
+    "start": "node --experimental-sqlite dist/index.js",
+    "dev": "node --experimental-sqlite --import tsx src/index.ts",
+    "tsx": "node --experimental-sqlite --import tsx",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-sqlite --import tsx test/unit.ts",
+    "test:integration": "node --experimental-sqlite --import tsx src/_inctest.ts && node --experimental-sqlite --import tsx src/_reusetest.ts && node --experimental-sqlite --import tsx src/_fbtest.ts",
+    "assets": "node scripts/render-assets.mjs",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "microsoft-teams",
+    "indexeddb",
+    "leveldb",
+    "offline",
+    "read-only"
+  ],
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/node": "^26.1.1",
+    "tsx": "^4.23.0",
+    "typescript": "^7.0.2"
+  }
+}
