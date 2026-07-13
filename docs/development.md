@@ -45,7 +45,9 @@ fast `copy-reuse` path provably correct.
 - `src/tools.ts`, `src/schemas.ts`, `src/server.ts` — the MCP tools and their argument
   schemas. `src/index.ts` is the bootstrap; `src/main.ts` is the actual server entry.
 
-See [How it works](how-it-works.md) for the read path in detail.
+See [How it works](how-it-works.md) for the read path in detail, and the
+[Chromium IndexedDB format reference](reference/chromium-indexeddb-format.md) for the
+byte-level spec each layer implements.
 
 ## Releasing
 

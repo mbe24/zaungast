@@ -28,6 +28,9 @@ so the comparator is never needed. The pure-JS pipeline:
 A version **fingerprint** (normalized store names + field-key sets) selects a checked-in
 field **mapping**, so the volatile Teams schema is separated from the stable Chromium format.
 
+The exact byte layouts of each of these layers are documented in the
+[Chromium IndexedDB format reference](reference/chromium-indexeddb-format.md).
+
 ## Indexing & serving
 
 Decoded records are loaded into an in-memory **SQLite** database (`node:sqlite`) with an
