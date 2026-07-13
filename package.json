@@ -1,8 +1,14 @@
 {
   "name": "zaungast",
   "version": "0.1.1",
-  "description": "Read-only, offline reader for the local Teams cache, exposed as an MCP server (reads the on-disk IndexedDB LevelDB; no Graph API, no credentials). Not affiliated with or endorsed by Microsoft.",
+  "description": "Read-only, offline MCP server for Teams — search chats, read conversations, surface trending topics, and find people straight from the local on-disk cache, with no Graph API, no cloud, and no credentials. Not affiliated with or endorsed by Microsoft.",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mbe24/zaungast.git"
+  },
+  "homepage": "https://github.com/mbe24/zaungast#readme",
+  "bugs": "https://github.com/mbe24/zaungast/issues",
   "bin": {
     "zaungast": "dist/index.js"
   },
