@@ -66,12 +66,27 @@ const TAG = {
   FALSE: 0x46,
   INT32: 0x49,
   DOUBLE: 0x4e,
+  BIGINT: 0x5a, // 'Z'
   STR1: 0x22,
   BEGIN_OBJ: 0x6f,
   END_OBJ: 0x7b,
   BEGIN_DENSE: 0x41,
   END_DENSE: 0x24,
 };
+
+// SSV bigint: tag + varint(bitfield) + magnitude bytes (little-endian), where
+// bitfield = (byteLength << 1) | signBit. Inverse of Reader.bigint().
+function encodeBigInt(v: bigint): Buffer {
+  const neg = v < 0n;
+  let mag = neg ? -v : v;
+  const bytes: number[] = [];
+  while (mag > 0n) {
+    bytes.push(Number(mag & 0xffn));
+    mag >>= 8n;
+  }
+  const bitfield = (bytes.length << 1) | (neg ? 1 : 0);
+  return Buffer.concat([Buffer.from([TAG.BIGINT]), varint(bitfield), Buffer.from(bytes)]);
+}
 
 function encodeString(s: string): Buffer {
   for (let i = 0; i < s.length; i++) {
@@ -95,6 +110,7 @@ export function encodeValue(v: unknown): Buffer {
   if (v === null || v === undefined) return Buffer.from([TAG.NULL]);
   if (typeof v === 'boolean') return Buffer.from([v ? TAG.TRUE : TAG.FALSE]);
   if (typeof v === 'string') return encodeString(v);
+  if (typeof v === 'bigint') return encodeBigInt(v);
   if (typeof v === 'number') {
     if (Number.isInteger(v) && Math.abs(v) < 2 ** 31)
       return Buffer.concat([Buffer.from([TAG.INT32]), zigzagVarint(v)]);

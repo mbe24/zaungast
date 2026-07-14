@@ -5,7 +5,7 @@
 //   0xFF version, 0xFE blink-envelope, 0x00 padding
 //   '_' undefined, '0' null, 'T' true, 'F' false
 //   'I' int32 (zigzag varint), 'U' uint32 varint, 'N' double(8 LE), 'D' date(double ms)
-//   'B' bigint (bitfield varint + words), '"' one-byte str, 'c' two-byte(utf16le), 'S' utf8
+//   'Z'/'z' bigint (bitfield varint + LE magnitude bytes), '"' one-byte str, 'c' two-byte(utf16le), 'S' utf8
 //   'o' begin object, '{' end object (+varint propCount)
 //   'A' begin dense array (+varint len), '$' end dense array (+varint props,+varint len)
 //   'a' begin sparse array (+varint len), '@' end sparse array (+varint props,+varint len)
@@ -270,11 +270,14 @@ class Reader {
   }
 
   bigint(): bigint {
+    // bitfield = (byteLength << 1) | signBit; then `byteLength` magnitude bytes, little-endian.
     const bitfield = this.varint();
     const byteLength = bitfield >> 1;
-    this.pos += byteLength; // skip digits (we don't need exact bigint value)
+    let v = 0n;
+    for (let i = 0; i < byteLength; i++) v |= BigInt(this.buf[this.pos + i]) << BigInt(8 * i);
+    this.pos += byteLength;
     if (this.trace) this.log(`bigint ${byteLength}B`);
-    return 0n;
+    return bitfield & 1 ? -v : v;
   }
 
   arrayBuffer(resizable = false): Buffer {

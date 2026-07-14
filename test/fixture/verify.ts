@@ -25,7 +25,7 @@ import type { Entry } from '../../src/format/types.js';
 import { ingest } from '../../src/ingest/ingest.js';
 import { search, listConversations, topTopics, findPerson } from '../../src/tools.js';
 import { generateFixture } from './generate.js';
-import { stringWithLength, utf16beBytes } from './encode.js';
+import { stringWithLength, utf16beBytes, idbValue } from './encode.js';
 import { ALL_PROFILES, CONVERSATIONS, STUDENTS } from './data.js';
 
 let pass = 0,
@@ -60,6 +60,17 @@ console.log('=== UTF-16BE non-BMP round-trip ===');
   const s = 'hi 😀 café 𝕏 end';
   eq('readStringWithLength surrogate pairs', readStringWithLength(stringWithLength(s), 0)[0], s);
   eq('utf16be surrogate pairs', utf16be(utf16beBytes(s)), s);
+}
+
+// ---- 0b. BigInt round-trip: the decoder must reconstruct the exact value (not approximate) ----
+console.log('\n=== BigInt round-trip ===');
+{
+  const src = { pos: 42n, negLarge: -98765432109876543210n, zero: 0n, big: 1n << 100n };
+  const back = decodeValue(idbValue(src)) as Record<string, unknown>;
+  ok('bigint positive', back.pos === 42n, `got ${back.pos}`);
+  ok('bigint negative (>64-bit)', back.negLarge === -98765432109876543210n, `got ${back.negLarge}`);
+  ok('bigint zero', back.zero === 0n, `got ${back.zero}`);
+  ok('bigint 2^100', back.big === 1n << 100n, `got ${back.big}`);
 }
 
 // ---- 1. loadEntries ----
