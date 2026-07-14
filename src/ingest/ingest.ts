@@ -1,12 +1,10 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-// @ts-ignore
-import { loadEntries, decodePrefix } from '../format/idb.js'
-// @ts-ignore
-import { fingerprint } from '../format/fingerprint.js'
-// @ts-ignore
-import { loadMapping, selectMapping, extractEntity, entityTargets } from '../format/resolver.js'
+import {
+  loadEntries, decodePrefix, fingerprint,
+  loadMapping, selectMapping, extractEntity, entityTargets,
+} from '../format/index.js'
 import { ChatStore, type StoreMeta } from './store.js'
 import { htmlToText, isSystemMessage, mentionedMris, hasAttachment } from '../util/text.js'
 

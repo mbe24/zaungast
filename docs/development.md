@@ -36,8 +36,16 @@ fast `copy-reuse` path provably correct.
 
 ## Architecture
 
-- `src/format/` — the stable, dependency-free reader (SSTable, WAL, Snappy, IndexedDB key
-  coding, Blink/V8 structured-clone, fingerprint, discovery). Unchanged across Teams updates.
+- `src/format/` — the stable, dependency-free reader. `src/format/index.ts` is the public
+  barrel every caller imports; it's the single seam. Underneath:
+  - `src/format/chromium/` — the Windows Chromium-IndexedDB-on-LevelDB byte format (SSTable,
+    write-ahead log, Snappy, IndexedDB key coding, V8 structured clone). Engine-specific — a
+    second platform (e.g. macOS WebKit-on-SQLite) would be a sibling directory yielding the
+    same record contract, not a rewrite.
+  - `src/format/fingerprint.ts`, `resolver.ts`, `discover.ts` — the engine-agnostic schema
+    layer (version fingerprint, field mapping) and the on-disk locator. Unchanged across Teams
+    updates.
+  - `src/format/types.ts` — the shared record/result contracts.
 - `src/schema/versions/` — per-fingerprint field **mappings** (the volatile part).
 - `src/ingest/` — `store.ts` (SQLite schema + derived recompute) and `ingest.ts` (decode →
   rows, full + incremental).

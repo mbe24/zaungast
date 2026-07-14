@@ -11,25 +11,45 @@
 //   'a' begin sparse array (+varint len), '@' end sparse array (+varint props,+varint len)
 //   ';' begin map, ':' end map ; '\'' begin set, ',' end set
 //   'R' regexp (str + varint flags)
+import type { ArrayBufferViewMarker, DeserializeOptions, RegExpMarker, SsvValue } from '../types.js'
+
+// Error thrown by Reader.err(), carrying the last N trace entries for deserializeDebug().
+interface SsvError extends Error {
+  trace?: string[]
+}
+
+// The structured-clone stream can yield ANY decoded value as an object/array/map key or
+// index (V8's ToPropertyKey coercion applies to whatever came out of the stream at runtime).
+// TypeScript can't express "index by whatever this dynamic value coerces to" — this cast is
+// type-only (erased at runtime) and does not change the property assignment's behavior; it
+// runs exactly as the untyped original did (`target[key] = val`).
+function setProp(target: object, key: unknown, val: unknown): void {
+  ;(target as Record<string, unknown>)[key as string] = val
+}
 
 class Reader {
-  constructor(buf, opts = {}) {
+  buf: Buffer
+  pos: number
+  trace: string[] | null
+  // V8 assigns an incrementing id to every JS receiver (object/array/map/set/…) as it is
+  // entered; kObjectReference ('^') + varint(id) refers back to one. Register on ENTRY so
+  // forward refs / cycles resolve. Primitives and strings get no id.
+  objects: unknown[]
+
+  constructor(buf: Buffer, opts: DeserializeOptions = {}) {
     this.buf = buf
     this.pos = 0
     this.trace = opts.debug ? [] : null
-    // V8 assigns an incrementing id to every JS receiver (object/array/map/set/…) as it is
-    // entered; kObjectReference ('^') + varint(id) refers back to one. Register on ENTRY so
-    // forward refs / cycles resolve. Primitives and strings get no id.
     this.objects = []
   }
-  eof() { return this.pos >= this.buf.length }
+  eof(): boolean { return this.pos >= this.buf.length }
   // V8 pads with 0x00 before two-byte strings to keep their data 2-byte aligned. 0x00 is
   // never a valid tag or terminator, so skipping it wherever we expect one is safe.
-  skipPadding() { while (this.pos < this.buf.length && this.buf[this.pos] === 0x00) this.pos++ }
-  peek() { this.skipPadding(); return this.buf[this.pos] }
-  log(desc) { if (this.trace) { this.trace.push(`@${this.pos} ${desc}`); if (this.trace.length > 60) this.trace.shift() } }
+  skipPadding(): void { while (this.pos < this.buf.length && this.buf[this.pos] === 0x00) this.pos++ }
+  peek(): number { this.skipPadding(); return this.buf[this.pos] }
+  log(desc: string): void { if (this.trace) { this.trace.push(`@${this.pos} ${desc}`); if (this.trace.length > 60) this.trace.shift() } }
 
-  varint() {
+  varint(): number {
     let v = 0, shift = 0
     while (true) {
       if (this.pos >= this.buf.length) throw this.err('varint ran off end')
@@ -40,22 +60,20 @@ class Reader {
     }
     return v
   }
-  zigzag() { const v = this.varint(); return v % 2 ? -(v + 1) / 2 : v / 2 }
-  double() { const d = this.buf.readDoubleLE(this.pos); this.pos += 8; return d }
-  bytes(n) { const b = this.buf.subarray(this.pos, this.pos + n); this.pos += n; return b }
+  zigzag(): number { const v = this.varint(); return v % 2 ? -(v + 1) / 2 : v / 2 }
+  double(): number { const d = this.buf.readDoubleLE(this.pos); this.pos += 8; return d }
+  bytes(n: number): Buffer { const b = this.buf.subarray(this.pos, this.pos + n); this.pos += n; return b }
 
-  err(msg) {
-    const e = new Error(`SSV: ${msg} at pos ${this.pos}/${this.buf.length}`)
+  err(msg: string): SsvError {
+    const e = new Error(`SSV: ${msg} at pos ${this.pos}/${this.buf.length}`) as SsvError
     if (this.trace) e.trace = this.trace.slice()
     return e
   }
 
-  header() {
-    // The value is wrapped in a Blink envelope + a V8 envelope, and occasionally an extra
-    // outer Blink envelope. Each envelope is `0xFF <version>`; a Blink version >= 21 adds
-    // `0xFE` + a 12-byte trailer (8-byte offset + 4-byte size). The real payload root is a
-    // JS object (0x6F). Anchor on the LAST `0xFF <ver> [0xFE + 12] [0x00…] 0x6F` in the
-    // small preamble — this transparently skips any number of nested envelopes.
+  // Anchor on the LAST `0xFF <ver> [0xFE + 12-byte trailer] [0x00…] 0x6F` in the small preamble —
+  // this transparently skips any number of nested envelopes. Returns the object-root offset, or
+  // -1 if none was found.
+  findEnvelopeRoot(): number {
     const scan = Math.min(this.buf.length - 1, 48)
     let root = -1
     for (let i = 0; i < scan; i++) {
@@ -65,8 +83,11 @@ class Reader {
       while (this.buf[j] === 0x00) j++
       if (this.buf[j] === 0x6f) root = j
     }
-    if (root >= 0) { this.pos = root; return }
-    // Fallback: consume 0xFF<ver>/0xFE/0x00 runs until a real value tag.
+    return root
+  }
+
+  // Fallback when no object root is found: consume 0xFF<ver> / 0xFE / 0x00 runs until a real tag.
+  skipEnvelopePreamble(): void {
     while (!this.eof()) {
       const b = this.buf[this.pos]
       if (b === 0xff) { this.pos += 2; continue }
@@ -76,7 +97,16 @@ class Reader {
     }
   }
 
-  value() {
+  header(): void {
+    // The value is wrapped in a Blink envelope + a V8 envelope, and occasionally an extra outer
+    // Blink envelope. Each envelope is `0xFF <version>`; a Blink version >= 21 adds `0xFE` + a
+    // 12-byte trailer (8-byte offset + 4-byte size). The real payload root is a JS object (0x6F).
+    const root = this.findEnvelopeRoot()
+    if (root >= 0) { this.pos = root; return }
+    this.skipEnvelopePreamble()
+  }
+
+  value(): unknown {
     this.skipPadding()
     if (this.pos >= this.buf.length) throw this.err('value() past end')
     const tag = this.buf[this.pos++]
@@ -112,7 +142,7 @@ class Reader {
     }
   }
 
-  bigint() {
+  bigint(): bigint {
     const bitfield = this.varint()
     const byteLength = bitfield >> 1
     this.pos += byteLength // skip digits (we don't need exact bigint value)
@@ -120,7 +150,7 @@ class Reader {
     return 0n
   }
 
-  arrayBuffer(resizable = false) {
+  arrayBuffer(resizable = false): Buffer {
     const byteLength = this.varint()
     if (resizable) this.varint() // maxByteLength
     const bytes = this.bytes(byteLength)
@@ -132,7 +162,7 @@ class Reader {
 
   // 'V' ArrayBufferView: subtag(1) + byteOffset(varint) + byteLength(varint) + flags(varint).
   // Follows a value that yielded an ArrayBuffer; we just skip the metadata and return a marker.
-  arrayBufferView() {
+  arrayBufferView(): ArrayBufferViewMarker {
     this.pos++            // view subtype tag
     this.varint()         // byteOffset
     const len = this.varint() // byteLength
@@ -142,14 +172,14 @@ class Reader {
   }
 
   // read key/value pairs until `endTag`, return count consumed via terminator handling by caller
-  object() {
-    const obj = {}
+  object(): Record<string, unknown> {
+    const obj: Record<string, unknown> = {}
     this.objects.push(obj)
     while (this.peek() !== 0x7b) { // '{'
       if (this.pos >= this.buf.length) throw this.err('object unterminated')
       const key = this.value()
       const val = this.value()
-      if (typeof key === 'string' || typeof key === 'number') obj[key] = val
+      if (typeof key === 'string' || typeof key === 'number') setProp(obj, key, val)
     }
     this.pos++            // consume '{'
     this.varint()         // property count
@@ -157,51 +187,51 @@ class Reader {
     return obj
   }
 
-  denseArray() {
+  denseArray(): unknown[] {
     const len = this.varint()
-    const arr = []
+    const arr: unknown[] = []
     this.objects.push(arr)
     for (let i = 0; i < len; i++) arr.push(this.value())
     // trailing own-properties (key/value) until '$'
     while (this.peek() !== 0x24) { // '$'
       if (this.pos >= this.buf.length) throw this.err('denseArray unterminated')
       const key = this.value(); const val = this.value()
-      if (typeof key === 'string' || typeof key === 'number') arr[key] = val
+      if (typeof key === 'string' || typeof key === 'number') setProp(arr, key, val)
     }
     this.pos++; this.varint(); this.varint()
     this.log(`END_DENSE len=${len}`)
     return arr
   }
 
-  sparseArray() {
+  sparseArray(): unknown[] {
     const len = this.varint()
-    const arr = new Array(len)
+    const arr: unknown[] = new Array(len)
     this.objects.push(arr)
     while (this.peek() !== 0x40) { // '@'
       if (this.pos >= this.buf.length) throw this.err('sparseArray unterminated')
       const idx = this.value()
       const val = this.value()
-      if (typeof idx === 'number' || typeof idx === 'string') arr[idx] = val
+      if (typeof idx === 'number' || typeof idx === 'string') setProp(arr, idx, val)
     }
     this.pos++; this.varint(); this.varint()
     this.log(`END_SPARSE len=${len}`)
     return arr
   }
 
-  map() {
-    const m = {}
+  map(): Record<string, unknown> {
+    const m: Record<string, unknown> = {}
     this.objects.push(m)
     while (this.peek() !== 0x3a) { // ':'
       if (this.pos >= this.buf.length) throw this.err('map unterminated')
-      const k = this.value(); const v = this.value(); m[k] = v
+      const k = this.value(); const v = this.value(); setProp(m, k, v)
     }
     this.pos++; this.varint()
     this.log('END_MAP')
     return m
   }
 
-  set() {
-    const s = []
+  set(): unknown[] {
+    const s: unknown[] = []
     this.objects.push(s)
     while (this.peek() !== 0x2c) { // ','
       if (this.pos >= this.buf.length) throw this.err('set unterminated')
@@ -212,14 +242,14 @@ class Reader {
     return s
   }
 
-  regexp() {
+  regexp(): RegExpMarker {
     const pattern = this.value()
     const flags = this.varint()
     return { __regexp: pattern, flags }
   }
 }
 
-export function deserialize(buf, opts = {}) {
+export function deserialize(buf: Buffer, opts: DeserializeOptions = {}): SsvValue {
   const r = new Reader(buf, opts)
   r.header()
   try {
@@ -228,14 +258,17 @@ export function deserialize(buf, opts = {}) {
     // Lenient: return the partially-decoded root (fields decoded before the failure).
     // Chat fields (content/sender/time) appear early, so they survive an unsupported
     // embedded structure (e.g. a Blob HostObject) later in the record.
-    if (opts.lenient && r.objects.length) { const root = r.objects[0]; if (root) { root.__partial = true; return root } }
+    if (opts.lenient && r.objects.length) {
+      const root = r.objects[0]
+      if (root) { (root as Record<string, unknown>).__partial = true; return root }
+    }
     throw e
   }
 }
 
 // debug helper: returns {value?, error?, trace}
-export function deserializeDebug(buf) {
+export function deserializeDebug(buf: Buffer): { value?: unknown; error?: string; trace?: string[] | null } {
   const r = new Reader(buf, { debug: true })
   try { r.header(); const v = r.value(); return { value: v, trace: r.trace } }
-  catch (e) { return { error: e.message, trace: e.trace ?? r.trace } }
+  catch (e) { return { error: (e as SsvError).message, trace: (e as SsvError).trace ?? r.trace } }
 }

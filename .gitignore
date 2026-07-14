@@ -6,3 +6,4 @@ data.backup/
 node_modules/
 dist/
 experiments/
+plan/

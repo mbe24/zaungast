@@ -2,11 +2,12 @@
 // Format ref: https://github.com/google/leveldb/blob/main/doc/table_format.md
 import fs from 'node:fs'
 import * as Snappy from './snappy.js'
+import type { BlockHandle, BlockReadResult, TableEntry, TableReadResult } from '../types.js'
 
 const MAGIC_LOW = 0x4775248b
 const MAGIC_HIGH = 0xdb4775248b80fb57n // full 64-bit magic
 
-function readVarint(buf, off) {
+function readVarint(buf: Buffer, off: number): [bigint, number] {
   let result = 0n
   let shift = 0n
   let pos = off
@@ -18,13 +19,13 @@ function readVarint(buf, off) {
   }
   return [result, pos]
 }
-function readVarintNum(buf, off) {
+function readVarintNum(buf: Buffer, off: number): [number, number] {
   const [v, pos] = readVarint(buf, off)
   return [Number(v), pos]
 }
 
-function readBlockHandle(buf, off) {
-  let offset, size, pos
+function readBlockHandle(buf: Buffer, off: number): [BlockHandle, number] {
+  let offset: number, size: number, pos: number
   ;[offset, pos] = readVarintNum(buf, off)
   ;[size, pos] = readVarintNum(buf, pos)
   return [{ offset, size }, pos]
@@ -40,16 +41,16 @@ const CRC32C_TABLE = (() => {
   }
   return t
 })()
-export function crc32c(buf, start, end) {
+export function crc32c(buf: Buffer, start: number, end: number): number {
   let c = 0xffffffff
   for (let i = start; i < end; i++) c = CRC32C_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8)
   return (c ^ 0xffffffff) >>> 0
 }
 // leveldb's masking: Mask(crc) = rotate_right(crc,15) + kMaskDelta; kMaskDelta = 0xa282ead8.
-export function unmaskCrc(m) { const x = (m - 0xa282ead8) >>> 0; return ((x >>> 17) | (x << 15)) >>> 0 }
+export function unmaskCrc(m: number): number { const x = (m - 0xa282ead8) >>> 0; return ((x >>> 17) | (x << 15)) >>> 0 }
 
 // Read a block's raw bytes given a handle, handling the 5-byte trailer + compression.
-function readBlock(fd, handle, verifyCrc = false) {
+function readBlock(fd: number, handle: BlockHandle, verifyCrc = false): BlockReadResult {
   const { offset, size } = handle
   const buf = Buffer.alloc(size + 5) // include 1-byte type + 4-byte crc trailer
   // fs.readSync may perform a SHORT READ for large blocks — loop until fully read.
@@ -60,7 +61,7 @@ function readBlock(fd, handle, verifyCrc = false) {
     got += n
   }
   const compressionType = buf[size]
-  let crcOk = null
+  let crcOk: boolean | null = null
   if (verifyCrc) {
     const stored = unmaskCrc(buf.readUInt32LE(size + 1))
     crcOk = crc32c(buf, 0, size + 1) === stored
@@ -76,7 +77,7 @@ function readBlock(fd, handle, verifyCrc = false) {
 export { readBlock, readBlockHandle }
 
 // Parse the entries of a data/index block (with restart-point prefix compression).
-export function* parseBlock(data) {
+export function* parseBlock(data: Buffer): Generator<TableEntry> {
   const n = data.length
   // last 4 bytes = num_restarts
   const numRestarts = data.readUInt32LE(n - 4)
@@ -84,7 +85,7 @@ export function* parseBlock(data) {
   let pos = 0
   let prevKey = Buffer.alloc(0)
   while (pos < restartsStart) {
-    let shared, nonShared, valueLen
+    let shared: number, nonShared: number, valueLen: number
     ;[shared, pos] = readVarintNum(data, pos)
     ;[nonShared, pos] = readVarintNum(data, pos)
     ;[valueLen, pos] = readVarintNum(data, pos)
@@ -98,7 +99,7 @@ export function* parseBlock(data) {
   }
 }
 
-export function readTable(path) {
+export function readTable(path: string): TableReadResult {
   const fd = fs.openSync(path, 'r')
   const stat = fs.fstatSync(fd)
   const fileSize = stat.size
@@ -108,9 +109,9 @@ export function readTable(path) {
   if (magic !== MAGIC_HIGH) {
     console.error(`WARNING: bad magic ${magic.toString(16)} (expected ${MAGIC_HIGH.toString(16)})`)
   }
-  // metaindex handle, then index handle (varints at start of footer)
-  let [metaIndexHandle, p] = readBlockHandle(footer, 0)
-  let [indexHandle] = readBlockHandle(footer, p)
+  // metaindex handle (skipped), then index handle (varints at start of footer)
+  const [, p] = readBlockHandle(footer, 0)
+  const [indexHandle] = readBlockHandle(footer, p)
 
   // Verify CRCs: a copy taken while a table was being written could be torn. If the index
   // block itself is corrupt we can't trust the table — skip it. Corrupt data blocks are
@@ -123,9 +124,9 @@ export function readTable(path) {
   const { data: indexData, crcOk: idxOk } = readBlock(fd, indexHandle, true)
   if (idxOk === false) { fs.closeSync(fd); return { entries: [], lossy: true } }
 
-  const entries = []
+  const entries: TableEntry[] = []
   let lossy = false
-  for (const [ikey, ivalue] of parseBlock(indexData)) {
+  for (const [, ivalue] of parseBlock(indexData)) {
     // index value = BlockHandle of a data block
     const [handle] = readBlockHandle(ivalue, 0)
     try {
@@ -137,7 +138,7 @@ export function readTable(path) {
   return { entries, lossy }
 }
 
-if (import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`) {
+if (import.meta.url === `file://${process.argv[1].replaceAll('\\', '/')}`) {
   const path = process.argv[2]
   const { entries, lossy } = readTable(path)
   console.log(`Total entries: ${entries.length}${lossy ? ' (LOSSY)' : ''}`)

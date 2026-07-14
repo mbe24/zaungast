@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import type { DiscoverCandidate, DiscoverOptions } from './types.js'
 
 // Auto-detect the Teams IndexedDB leveldb dir. Returns ranked candidates (newest first).
 // Manual override always wins: env TEAMS_LEVELDB_DIR or config.dir.
@@ -10,28 +11,28 @@ import os from 'node:os'
 //       IndexedDB\https_teams.*.indexeddb.leveldb
 // <profile> is usually WV2Profile_tfw but varies; there can be several (multi-account).
 
-function existsDir(p) { try { return fs.statSync(p).isDirectory() } catch { return false } }
-function mtime(p) { try { return fs.statSync(p).mtimeMs } catch { return 0 } }
+function existsDir(p: string): boolean { try { return fs.statSync(p).isDirectory() } catch { return false } }
+function mtime(p: string): number { try { return fs.statSync(p).mtimeMs } catch { return 0 } }
 
 // walk one level of children matching a predicate
-function children(dir, test) {
+function children(dir: string, test: (name: string) => boolean): string[] {
   try { return fs.readdirSync(dir).filter(test).map(n => path.join(dir, n)) } catch { return [] }
 }
 
 // A leveldb dir is valid if it has CURRENT + a MANIFEST-*.
-function isLevelDb(dir) {
+function isLevelDb(dir: string): boolean {
   try {
     const files = fs.readdirSync(dir)
     return files.includes('CURRENT') && files.some(f => f.startsWith('MANIFEST-'))
   } catch { return false }
 }
 
-export function discoverTeamsDbs({ override } = {}) {
+export function discoverTeamsDbs({ override }: DiscoverOptions = {}): DiscoverCandidate[] {
   if (override) return [{ dir: override, source: 'override', mtime: mtime(override), valid: isLevelDb(override) }]
 
   const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
   const packages = path.join(localAppData, 'Packages')
-  const candidates = []
+  const candidates: DiscoverCandidate[] = []
 
   for (const pkg of children(packages, n => /^MSTeams_/i.test(n))) {
     const ebweb = path.join(pkg, 'LocalCache', 'Microsoft', 'MSTeams', 'EBWebView')
@@ -56,7 +57,7 @@ export function discoverTeamsDbs({ override } = {}) {
   return candidates
 }
 
-if (process.argv[1] && process.argv[1].endsWith('discover.js')) {
+if (process.argv[1]?.endsWith('discover.js')) {
   const found = discoverTeamsDbs({ override: process.env.TEAMS_LEVELDB_DIR })
   console.log(`found ${found.length} candidate(s):\n`)
   for (const c of found) {

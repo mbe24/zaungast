@@ -1,7 +1,6 @@
-// @ts-ignore
-import { loadEntries, decodePrefix, readStringWithLength, readVarint, utf16be, decodeValue } from '../format/idb.js'
-// @ts-ignore
-import { fingerprint } from '../format/fingerprint.js'
+import {
+  loadEntries, decodePrefix, readStringWithLength, readVarint, utf16be, decodeValue, fingerprint,
+} from '../format/index.js'
 
 // Propose-only schema recovery: when a Teams update changes the DB layout (unknown
 // fingerprint), sample the raw stores and propose a field mapping for a human to verify and

@@ -6,22 +6,28 @@
 //     op: 1=kTypeValue -> key(varlen)+value(varlen); 0=kTypeDeletion -> key(varlen)
 import fs from 'node:fs'
 import { crc32c, unmaskCrc } from './sstable.js'
+import type { WalBatch, WalOp } from '../types.js'
 
 const BLOCK = 32768
 const HEADER = 7
 
-function readVarint(buf, off) {
+function readVarint(buf: Buffer, off: number): [number, number] {
   let v = 0, shift = 0, pos = off
-  while (true) { const c = buf[pos++]; v += (c & 0x7f) * 2 ** shift; if (!(c & 0x80)) break; shift += 7 }
+  while (true) {
+    const c = buf[pos++]
+    v += (c & 0x7f) * 2 ** shift
+    if (!(c & 0x80)) break
+    shift += 7
+  }
   return [v, pos]
 }
 
 // Return array of {sequence, ops:[{type,key,value}]}
-export function parseLog(path) {
+export function parseWriteAheadLog(path: string): WalBatch[] {
   const data = fs.readFileSync(path)
-  const batches = []
+  const batches: WalBatch[] = []
   let pos = 0
-  let frag = null // {parts:[]}
+  let frag: Buffer[] | null = null // {parts:[]}
 
   while (pos + HEADER <= data.length) {
     const blockOff = pos % BLOCK
@@ -50,15 +56,15 @@ export function parseLog(path) {
     else if (type === 4) { if (frag) { frag.push(chunk); emit(Buffer.concat(frag)); frag = null } } // LAST
   }
 
-  function emit(record) {
+  function emit(record: Buffer): void {
     if (record.length < 12) return
     const sequence = Number(record.readBigUInt64LE(0))
     const count = record.readUInt32LE(8)
     let p = 12
-    const ops = []
+    const ops: WalOp[] = []
     for (let i = 0; i < count && p < record.length; i++) {
       const opType = record[p++]
-      let klen, vlen, key, value
+      let klen: number, vlen: number, key: Buffer, value: Buffer | undefined
       ;[klen, p] = readVarint(record, p)
       key = record.subarray(p, p + klen); p += klen
       if (opType === 1) { [vlen, p] = readVarint(record, p); value = record.subarray(p, p + vlen); p += vlen }
@@ -70,8 +76,8 @@ export function parseLog(path) {
   return batches
 }
 
-if (import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`) {
-  const batches = parseLog(process.argv[2])
+if (import.meta.url === `file://${process.argv[1].replaceAll('\\', '/')}`) {
+  const batches = parseWriteAheadLog(process.argv[2])
   let ops = 0; for (const b of batches) ops += b.ops.length
   console.log(`batches: ${batches.length}, total ops: ${ops}`)
 }

@@ -4,8 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { ingest, applyIncremental } from './ingest/ingest.js'
-// @ts-ignore
-import { loadEntries, loadEntriesReuse } from './format/idb.js'
+import { loadEntries, loadEntriesReuse } from './format/index.js'
 
 const DIR = process.argv[2]
 let pass = 0, fail = 0
@@ -103,14 +102,8 @@ console.log('\n=== F. truncated (lossy) new .ldb → lossy, not cached (so it re
 }
 
 // ---- Session-level: copy-reuse mode must equal reparse mode after identical mutations ----
-// @ts-ignore
-import { decodePrefix } from './format/idb.js'
-// @ts-ignore
-import { entityTargets, loadMapping, selectMapping } from './format/resolver.js'
-// @ts-ignore
-import { fingerprint } from './format/fingerprint.js'
-// @ts-ignore
-import { crc32c } from './format/sstable.js'
+import { decodePrefix, entityTargets, loadMapping, selectMapping, fingerprint } from './format/index.js'
+import { crc32c } from './format/chromium/sstable.js'
 import { fileURLToPath } from 'node:url'
 
 const VDIR = fileURLToPath(new URL('./schema/versions/', import.meta.url))

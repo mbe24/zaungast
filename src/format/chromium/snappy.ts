@@ -6,11 +6,16 @@
 //   tag&3 == 3  copy 4-byte:  len = (tag>>2)+1     ; offset = next 4 bytes LE
 // Copies may overlap (offset < len) → must copy byte-by-byte.
 
-export function uncompress(input) {
+export function uncompress(input: Buffer): Buffer {
   let ip = 0
   // uncompressed length (varint)
   let outLen = 0, shift = 0
-  while (true) { const c = input[ip++]; outLen += (c & 0x7f) * 2 ** shift; if (!(c & 0x80)) break; shift += 7 }
+  while (true) {
+    const c = input[ip++]
+    outLen += (c & 0x7f) * 2 ** shift
+    if (!(c & 0x80)) break
+    shift += 7
+  }
 
   const out = Buffer.allocUnsafe(outLen)
   let op = 0
@@ -33,7 +38,7 @@ export function uncompress(input) {
       ip += len
       op += len
     } else {
-      let len, offset
+      let len: number, offset: number
       if (type === 1) {
         len = ((tag >> 2) & 0x07) + 4
         offset = ((tag >> 5) << 8) | input[ip++]

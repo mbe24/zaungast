@@ -4,14 +4,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ingest, applyIncremental } from './ingest/ingest.js'
 import { ChatStore } from './ingest/store.js'
-// @ts-ignore
-import { loadEntries, decodePrefix } from './format/idb.js'
-// @ts-ignore
-import { entityTargets, loadMapping, selectMapping } from './format/resolver.js'
-// @ts-ignore
-import { fingerprint } from './format/fingerprint.js'
-// @ts-ignore
-import { crc32c } from './format/sstable.js'
+import { loadEntries, decodePrefix, entityTargets, loadMapping, selectMapping, fingerprint } from './format/index.js'
+import { crc32c } from './format/chromium/sstable.js'
 
 function maskCrc(c: number): number { return (((c >>> 15) | (c << 17)) + 0xa282ead8) >>> 0 }
 function varint(n: number): Buffer { const b: number[] = []; while (n >= 0x80) { b.push((n & 0x7f) | 0x80); n >>>= 7 } b.push(n); return Buffer.from(b) }
