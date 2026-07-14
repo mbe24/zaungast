@@ -14,9 +14,9 @@ on-disk cache**, with no Graph API, no cloud, and no credentials, and token-econ
 for coding agents (Claude Code, Claude Desktop, …).
 
 The new Teams client stores your chats in a local on-disk database; zaungast reads a copy of
-it directly and serves it over MCP, so your agent can pull in Teams context — *"what did Grace
-say about the deploy", "catch me up on the muted channel", "what's my team on about this
-week"* — without you copy-pasting, and without any cloud API.
+it directly and serves it over MCP, so your agent can pull in Teams context — *"what was
+decided about the release date", "catch me up on a channel I muted", "what's my team been
+discussing this week"* — without you copy-pasting, and without any cloud API.
 
 - **Local & offline** — reads the on-disk Teams cache. No MS Graph API, no network calls.
 - **No credentials** — nothing to log in to, no tokens, no permissions to grant.

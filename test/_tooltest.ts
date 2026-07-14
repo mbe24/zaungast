@@ -29,10 +29,7 @@ show(
 
 show('search {query:"weekend", limit:4}', search(store, meta, d, { query: 'weekend', limit: 4 }));
 show('search {mentions_me:true, limit:4}', search(store, meta, d, { mentions_me: true, limit: 4 }));
-show(
-  'search {from:"Grace", query:"release date", limit:4}',
-  search(store, meta, d, { from: 'Grace', limit: 4 }),
-);
+show('search {from:"Grace", limit:4}', search(store, meta, d, { from: 'Grace', limit: 4 }));
 
 show('top_topics {window:"7d", n:6}', topTopics(store, meta, d, { window: '7d', n: 6 }));
 

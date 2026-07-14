@@ -90,7 +90,7 @@ console.log('=== bot classification ===');
 console.log('=== topic extraction ===');
 {
   const { phrases } = makeExtractor(new Set());
-  const p = phrases('the exam review is broken');
+  const p = phrases('the exam review is cancelled');
   ok('keeps content phrase', p.includes('exam review'));
   ok('drops stopwords', !p.includes('the') && !p.includes('is'));
   const de = makeExtractor(new Set()).phrases('das seminar ist abgesagt');
