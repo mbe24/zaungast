@@ -128,10 +128,16 @@ const HEADER = 7
 // rotate_right(c,15) = (c>>>15) | (c<<17), all mod 2**32. sstable.ts exports the inverse
 // (unmaskCrc) but not this forward direction, so it's reimplemented here (same formula the
 // task spec gives, and the same one test/_inctest.ts uses for its own crafted WAL records).
-function maskCrc(c: number): number {
+// Exported: sstable-encode.ts (the .ldb writer) needs the identical forward mask for its
+// per-block CRC trailers.
+export function maskCrc(c: number): number {
   const rotated = ((c >>> 15) | (c << 17)) >>> 0
   return (rotated + 0xa282ead8) >>> 0
 }
+
+// Re-exported so sstable-encode.ts (and any other fixture module) can import both crc32c and
+// maskCrc from this single low-level-encoders module, rather than reaching into src/ directly.
+export { crc32c }
 
 export interface WalOpIn { type: 1 | 0; key: Buffer; value?: Buffer } // type 1=value, 0=deletion
 

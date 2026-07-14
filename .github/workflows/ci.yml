@@ -34,5 +34,10 @@ jobs:
       - name: Fixture integration test
         run: npm run test:fixture
         # Generates a synthetic leveldb cache (no PII) and drives the full read -> ingest ->
-        # tools pipeline against it. The mutation/equivalence suites (npm run test:integration)
-        # still need a real local Teams cache with .ldb tables and run on a developer machine.
+        # tools pipeline against it.
+
+      - name: Integration suite (synthetic fixture)
+        run: npm run test:integration:ci
+        # Generates a synthetic .ldb+.log cache and runs the mutation/equivalence harnesses
+        # (incremental refresh == full rebuild, compaction, tombstones) against it — the same
+        # suites that otherwise need a real local cache (npm run test:integration).

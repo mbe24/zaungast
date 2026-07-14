@@ -12,6 +12,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { keyPrefix, stringWithLength, utf16beBytes, idbKeyString, idbValue, buildLog, type WalOpIn } from './encode.js'
+import { encodeTable, ldbKey } from './sstable-encode.js'
+import { readTable } from '../../src/format/chromium/sstable.js'
 import { ALL_PROFILES, CONVERSATIONS, type ConversationDef, type MessageDef } from './data.js'
 
 const ORIGIN = 'https://teams.microsoft.com'
@@ -128,6 +130,77 @@ export function generateFixture(dir: string): void {
   fs.writeFileSync(path.join(dir, 'MANIFEST-000001'), 'zaungast synthetic fixture stub manifest\n')
 }
 
+// ---- Mixed .ldb + .log layout (copy-reuse / equivalence tests need this — a WAL-only dir never
+// exercises readTable()/loadEntriesReuse()'s .ldb-cache path at all) ----
+//
+// buildOps() returns one (key,value) op per leveldb record, IN THE SAME DETERMINISTIC ORDER
+// generateFixture() uses. We assign each op a strictly-increasing sequence number in that order,
+// then split the sequence range: the OLDER prefix becomes one or more .ldb tables (immutable,
+// as real compacted tables are), and the NEWER suffix stays in the .log — mirroring a real
+// LevelDB directory where the WAL always holds the most-recently-written (highest-sequence) data
+// not yet flushed/compacted. `ldbFraction` (default 0.7) controls how much of the data is
+// "older" (in tables) vs. "newer" (in the log); `ldbFileCount` (default 2) splits that older
+// portion across that many separate .ldb files (contiguous seq ranges per file — like separate
+// flushes/levels) so tests that need >1 .ldb (e.g. "a flush appears", "compaction removes one of
+// several tables") have something to work with out of the box.
+export interface TablesFixtureOptions { ldbFraction?: number; ldbFileCount?: number }
+
+export function generateFixtureWithTables(dir: string, opts: TablesFixtureOptions = {}): void {
+  const { ldbFraction = 0.7, ldbFileCount = 2 } = opts
+  fs.mkdirSync(dir, { recursive: true })
+  const ops = buildOps()
+  const n = ops.length
+  const ldbCount = Math.max(ldbFileCount, Math.round(n * ldbFraction)) // ensure room for ldbFileCount files
+  const ldbOps = ops.slice(0, ldbCount)
+  const logOps = ops.slice(ldbCount)
+
+  // Split the older prefix into `ldbFileCount` contiguous, non-overlapping seq ranges — each its
+  // own standalone .ldb file. seq = 1-based position in `ops` (matches buildBatches()'s scheme).
+  const perFile = Math.ceil(ldbOps.length / ldbFileCount)
+  for (let i = 0; i < ldbFileCount; i++) {
+    const slice = ldbOps.slice(i * perFile, (i + 1) * perFile)
+    if (slice.length === 0) continue
+    const seqBase = i * perFile
+    const tableEntries = slice.map((op, j) => ({ key: ldbKey(op.key, BigInt(seqBase + j + 1), 1), value: op.value }))
+    fs.writeFileSync(path.join(dir, `00000${4 + i}.ldb`), encodeTable(tableEntries))
+  }
+
+  const logBatches = logOps.map((op, i) => ({ sequence: ldbCount + i + 1, ops: [{ type: 1 as const, key: op.key, value: op.value }] }))
+  fs.writeFileSync(path.join(dir, `00000${4 + ldbFileCount}.log`), buildLog(logBatches))
+
+  fs.writeFileSync(path.join(dir, 'CURRENT'), 'MANIFEST-000001\n')
+  fs.writeFileSync(path.join(dir, 'MANIFEST-000001'), 'zaungast synthetic fixture stub manifest (tables)\n')
+}
+
+// ---- Mutation / compaction helpers for equivalence tests (applied to a dir already produced by
+// generateFixtureWithTables, typically a copy so the original fixture stays pristine) ----
+
+// Append a brand-new .log file holding one WriteBatch per op, sequence numbers starting at
+// `startSeq` — simulates new writes landing in the WAL (a plain append / edit / new message).
+export function appendLog(dir: string, filename: string, ops: { key: Buffer; value: Buffer; type?: 0 | 1 }[], startSeq: number): void {
+  const batches = ops.map((op, i) => ({
+    sequence: startSeq + i,
+    ops: [op.type === 0 ? { type: 0 as const, key: op.key } : { type: 1 as const, key: op.key, value: op.value as Buffer }],
+  }))
+  fs.writeFileSync(path.join(dir, filename), buildLog(batches))
+}
+
+// Remove an .ldb file — simulates a compaction input disappearing (loadEntriesReuse must detect
+// this via its `compacted` flag and the caller must force a full rebuild).
+export function removeLdb(dir: string, filename: string): void {
+  fs.rmSync(path.join(dir, filename))
+}
+
+// Rewrite an existing .ldb file, dropping entries whose (userKey) trailer-stripped bytes match
+// `dropUserKey` — simulates a real compaction eliding a tombstoned/dead key entirely (as opposed
+// to `removeLdb`, which drops a WHOLE table). Reads the table back with the production reader
+// (readTable) so this stays a faithful "recompact" rather than a hand-rolled parse.
+export function rewriteLdbDropping(dir: string, filename: string, dropUserKey: Buffer): void {
+  const { entries } = readTable(path.join(dir, filename))
+  const kept = entries.filter(([ikey]) => !ikey.subarray(0, ikey.length - 8).equals(dropUserKey))
+  fs.writeFileSync(path.join(dir, filename), encodeTable(kept.map(([key, value]) => ({ key, value }))))
+}
+
 // Manual invocation: node --experimental-sqlite --import tsx test/fixture/generate.ts <outDir>
 // NOTE: the `import.meta.url === \`file://${argv[1].replaceAll(...)}\`` pattern used by the
 // production src/*.ts files' own main-blocks (write-ahead-log.ts, sstable.ts) does not actually
@@ -137,7 +210,9 @@ export function generateFixture(dir: string): void {
 // robust, platform-correct comparison instead (real path equality) so manual invocation works.
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const outDir = process.argv[2]
-  if (!outDir) { console.error('usage: generate.ts <outDir>'); process.exit(1) }
-  generateFixture(outDir)
-  console.log(`wrote synthetic fixture to ${outDir}`)
+  const tables = process.argv.includes('--tables')
+  if (!outDir) { console.error('usage: generate.ts <outDir> [--tables]'); process.exit(1) }
+  if (tables) generateFixtureWithTables(outDir)
+  else generateFixture(outDir)
+  console.log(`wrote synthetic fixture (${tables ? '.ldb+.log' : 'WAL-only'}) to ${outDir}`)
 }
