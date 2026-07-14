@@ -1,6 +1,7 @@
 // Minimal read-only LevelDB SSTable (.ldb) parser.
 // Format ref: https://github.com/google/leveldb/blob/main/doc/table_format.md
 import fs from 'node:fs'
+import { pathToFileURL } from 'node:url'
 import * as Snappy from './snappy.js'
 import type { BlockHandle, BlockReadResult, TableEntry, TableReadResult } from '../types.js'
 
@@ -138,7 +139,7 @@ export function readTable(path: string): TableReadResult {
   return { entries, lossy }
 }
 
-if (import.meta.url === `file://${process.argv[1].replaceAll('\\', '/')}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const path = process.argv[2]
   const { entries, lossy } = readTable(path)
   console.log(`Total entries: ${entries.length}${lossy ? ' (LOSSY)' : ''}`)
