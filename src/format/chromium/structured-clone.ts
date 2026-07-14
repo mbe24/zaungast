@@ -14,6 +14,7 @@
 import type {
   ArrayBufferViewMarker,
   DeserializeOptions,
+  HostObjectMarker,
   RegExpMarker,
   SsvValue,
 } from '../types.js';
@@ -262,6 +263,8 @@ class Reader {
         if (trace) this.log(`objref #${id}`);
         return this.objects[id];
       } // '^'
+      case 0x5c:
+        return this.hostObject(); // '\' kHostObject — Blink DOM extension (Blob/File)
       default:
         throw this.err(
           `unknown tag 0x${tag.toString(16)} ('${tag >= 0x20 && tag < 0x7f ? String.fromCharCode(tag) : '.'}')`, // NOSONAR S7758 — UTF-16 code units by design (see verify.ts round-trip)
@@ -390,6 +393,54 @@ class Reader {
     const pattern = this.value();
     const flags = this.varint();
     return { __regexp: pattern, flags };
+  }
+
+  // ReadUTF8String: varint(byteLength) + that many UTF-8 bytes. Blink writes Blob uuid/type this
+  // way (same coding as the 'S' value tag). Used only for skipping/reading host-object strings.
+  utf8String(): string {
+    const n = this.varint();
+    const s = this.buf.toString('utf8', this.pos, this.pos + n);
+    this.pos += n;
+    return s;
+  }
+
+  // '\' kHostObject: V8 delegates to Blink's V8ScriptValueDeserializer::ReadHostObject, which
+  // reads a Blink SerializationTag byte then type-specific fields (v8_script_value_deserializer.cc
+  // ReadDOMObject). URL-only design: we do NOT decode media bytes — we parse just enough to
+  // advance `this.pos` exactly and return a metadata-only marker. V8's ReadHostObject assigns the
+  // host object a ref id (next_id_++ / AddObjectWithID), so we register the marker on this.objects
+  // to keep back-references ('^') aligned. Strings are ReadUTF8String (varint len + utf8), and
+  // sizes/indices are ReadUint32/ReadUint64 (varint). In this corpus all occurrences are Blobs
+  // (app-icon 'imageBlob' fields) serialized as kBlobIndexTag with index 0.
+  // For an UNKNOWN Blink SerializationTag we THROW — an unknown-length structure can't be safely
+  // skipped, so we stay correct rather than guessing (e.g. kFileTag 'f', whose layout is
+  // version-gated, lands here).
+  hostObject(): HostObjectMarker {
+    const subtag = this.buf[this.pos++]; // Blink SerializationTag
+    let marker: HostObjectMarker;
+    switch (subtag) {
+      case 0x69: // 'i' kBlobIndexTag: ReadUint32(index)
+        marker = { __blobIndex: this.varint() };
+        break;
+      case 0x65: // 'e' kFileIndexTag: ReadUint32(index)
+        marker = { __blobIndex: this.varint(), __file: true };
+        break;
+      case 0x62: {
+        // 'b' kBlobTag: ReadUTF8String(uuid), ReadUTF8String(type), ReadUint64(size)
+        this.utf8String(); // uuid (discarded — not media, but no downstream use)
+        const type = this.utf8String();
+        const size = this.varint(); // uint64; real blob sizes fit in a JS safe integer
+        marker = { __blob: { type, size } };
+        break;
+      }
+      default:
+        throw this.err(
+          `unknown host-object tag 0x${subtag.toString(16)} ('${subtag >= 0x20 && subtag < 0x7f ? String.fromCharCode(subtag) : '.'}')`,
+        );
+    }
+    this.objects.push(marker);
+    if (this.trace) this.log(`hostObject 0x${subtag.toString(16)}`);
+    return marker;
   }
 }
 

@@ -111,6 +111,21 @@ export interface RegExpMarker {
   flags: number;
 }
 
+// Marker for an embedded Blink Blob host object (V8 kHostObject / Blink kBlobTag). URL-only
+// design: we never decode the media bytes — only the metadata needed to advance the cursor.
+export interface BlobMarker {
+  __blob: { type: string; size: number };
+}
+
+// Marker for a Blink Blob/File-by-index host object (kBlobIndexTag 'i' / kFileIndexTag 'e'):
+// the payload lives in a side blob_info array we don't have, so we surface only the index.
+export interface BlobIndexMarker {
+  __blobIndex: number;
+  __file?: boolean;
+}
+
+export type HostObjectMarker = BlobMarker | BlobIndexMarker;
+
 export interface PartialObjectMarker {
   __partial: true;
 }

@@ -25,7 +25,7 @@ import type { Entry } from '../../src/format/types.js';
 import { ingest } from '../../src/ingest/ingest.js';
 import { search, listConversations, topTopics, findPerson } from '../../src/tools.js';
 import { generateFixture } from './generate.js';
-import { stringWithLength, utf16beBytes, idbValue } from './encode.js';
+import { stringWithLength, utf16beBytes, idbValue, blobIndexHost, blobHost } from './encode.js';
 import { ALL_PROFILES, CONVERSATIONS, STUDENTS } from './data.js';
 
 let pass = 0,
@@ -71,6 +71,29 @@ console.log('\n=== BigInt round-trip ===');
   ok('bigint negative (>64-bit)', back.negLarge === -98765432109876543210n, `got ${back.negLarge}`);
   ok('bigint zero', back.zero === 0n, `got ${back.zero}`);
   ok('bigint 2^100', back.big === 1n << 100n, `got ${back.big}`);
+}
+
+// ---- 0c. Blink Blob host-object round-trip (kHostObject '\' 0x5c) ----
+// Mirrors the real Teams app-icon record: an object whose imageBlob field is an embedded Blink
+// Blob host object. URL-only design → the decoder returns a metadata-only marker, never bytes.
+console.log('\n=== Blob host-object round-trip ===');
+{
+  // kBlobIndexTag ('i'): exactly what all 6 real records use (index 0). Fields BEFORE and AFTER
+  // the host object must survive so back-ref/cursor alignment is proven end-to-end.
+  const idxRec = decodeValue(
+    idbValue({ appId: 'app-1', imageUrl: 'https://x/y', imageBlob: blobIndexHost(0), after: 42 }),
+  ) as Record<string, unknown>;
+  eq('blob-index appId before host object', idxRec.appId, 'app-1');
+  eq('blob-index imageUrl before host object', idxRec.imageUrl, 'https://x/y');
+  eq('blob-index marker', idxRec.imageBlob, { __blobIndex: 0 });
+  eq('field after host object still decodes', idxRec.after, 42);
+
+  // kBlobTag ('b'): uuid + type + size. Marker exposes type/size only (no media bytes).
+  const blobRec = decodeValue(
+    idbValue({ b: blobHost('uuid-abc', 'image/png', 12345), tail: 'ok' }),
+  ) as Record<string, unknown>;
+  eq('blob marker type/size', blobRec.b, { __blob: { type: 'image/png', size: 12345 } });
+  eq('field after blob host object still decodes', blobRec.tail, 'ok');
 }
 
 // ---- 1. loadEntries ----

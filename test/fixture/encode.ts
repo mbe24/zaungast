@@ -102,11 +102,36 @@ function encodeDouble(d: number): Buffer {
   return Buffer.concat([Buffer.from([TAG.DOUBLE]), b]);
 }
 
+// ---- Blink host object (V8 kHostObject '\'=0x5c) — inverse of Reader.hostObject() ----
+// UTF-8 string with a varint byte-length prefix (Blink's ReadUTF8String coding).
+function encodeUtf8String(s: string): Buffer {
+  const body = Buffer.from(s, 'utf8');
+  return Buffer.concat([varint(body.length), body]);
+}
+
+// kBlobIndexTag ('i'): kHostObject + 'i' + varint(index). What real Teams app-icon records use.
+export function blobIndexHost(index: number): Buffer {
+  return Buffer.concat([Buffer.from([0x5c, 0x69]), varint(index)]);
+}
+
+// kBlobTag ('b'): kHostObject + 'b' + ReadUTF8String(uuid) + ReadUTF8String(type) + varint(size).
+export function blobHost(uuid: string, type: string, size: number): Buffer {
+  return Buffer.concat([
+    Buffer.from([0x5c, 0x62]),
+    encodeUtf8String(uuid),
+    encodeUtf8String(type),
+    varint(size),
+  ]);
+}
+
 // Recursively encode any JS value our fixture data uses. Object key order is preserved
 // (Object.entries iteration order for string keys), and `undefined` values/entries are OMITTED —
 // this lets the data model use `field: maybeUndefined` to mean "field absent", matching how real
 // Teams records vary field presence (e.g. a DM with no threadProperties.topic).
 export function encodeValue(v: unknown): Buffer {
+  // A Buffer is treated as pre-encoded SSV bytes emitted verbatim — the escape hatch used to
+  // embed a host object (Blob) that encodeValue has no JS representation for. See blobIndexHost().
+  if (Buffer.isBuffer(v)) return v;
   if (v === null || v === undefined) return Buffer.from([TAG.NULL]);
   if (typeof v === 'boolean') return Buffer.from([v ? TAG.TRUE : TAG.FALSE]);
   if (typeof v === 'string') return encodeString(v);
