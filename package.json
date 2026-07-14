@@ -22,6 +22,8 @@
     "dev": "node --experimental-sqlite --import tsx src/index.ts",
     "tsx": "node --experimental-sqlite --import tsx",
     "typecheck": "tsc --noEmit",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
     "test": "node --experimental-sqlite --import tsx test/unit.ts",
     "test:fixture": "node --experimental-sqlite --import tsx test/fixture/verify.ts",
     "test:integration:ci": "node --experimental-sqlite --import tsx test/run-integration.ts",
@@ -49,6 +51,7 @@
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
     "@types/node": "^26.1.1",
+    "prettier": "^3.9.5",
     "tsx": "^4.23.0",
     "typescript": "^7.0.2"
   }

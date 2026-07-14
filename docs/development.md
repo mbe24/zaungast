@@ -15,12 +15,24 @@ Requires Node.js ≥ 22.5.
 |--------|-------------|
 | `npm run build` | Compile TypeScript to `dist/` and copy schema mappings. |
 | `npm run typecheck` | `tsc --noEmit`. |
+| `npm run format` | Format `src/` + `test/` with Prettier. |
+| `npm run format:check` | Verify formatting (run in CI). |
 | `npm test` | Data-free unit tests (`test/unit.ts`) — run in CI. |
 | `npm run test:fixture` | Generate a synthetic leveldb cache and drive the full read → ingest → tools pipeline against it — no real data; run in CI. |
 | `npm run test:integration:ci` | Run the mutation/equivalence harnesses against a synthetic `.ldb`+`.log` fixture — no real data; run in CI. |
 | `npm run test:integration` | Same harnesses against a **real** local Teams cache (see below). |
 | `npm run dev` | Run the server from source via `tsx` (no build step). |
 | `npm run assets` | Re-render the SVG brand assets in `assets/` and `.github/` to PNG. |
+
+## Code style
+
+Formatting is enforced by **Prettier** (`.prettierrc`: semicolons, single quotes, 100 columns);
+`npm run format:check` runs in CI. Run `npm run format` before committing.
+
+There is no ESLint yet: `typescript-eslint` does not support TypeScript 7 (its parser targets
+`typescript < 6.1`), so it can't run on this codebase. It'll be added once upstream supports
+TS 7; the intended ruleset is typescript-eslint `recommended` + `no-unused-vars` (ignoring `_`)
++ `no-console` scoped to `src/` (stdout is the MCP transport).
 
 ## Tests
 
