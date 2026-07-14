@@ -1,0 +1,7 @@
+# Normalize line endings: store and check out LF everywhere, overriding core.autocrlf.
+# Without this, Prettier (which writes LF) fights git's CRLF conversion on Windows, and the
+# whole tree shows as "modified" after `npm run format`.
+* text=auto eol=lf
+
+# Binary assets — never treat as text or touch line endings.
+*.png binary
