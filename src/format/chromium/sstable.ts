@@ -5,7 +5,6 @@ import { pathToFileURL } from 'node:url';
 import * as Snappy from './snappy.js';
 import type { BlockHandle, BlockReadResult, TableEntry, TableReadResult } from '../types.js';
 
-const MAGIC_LOW = 0x4775248b;
 const MAGIC_HIGH = 0xdb4775248b80fb57n; // full 64-bit magic
 
 function readVarint(buf: Buffer, off: number): [bigint, number] {
