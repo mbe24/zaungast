@@ -2,10 +2,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ingest, applyIncremental } from './ingest/ingest.js'
-import { ChatStore } from './ingest/store.js'
-import { loadEntries, decodePrefix, entityTargets, loadMapping, selectMapping, fingerprint } from './format/index.js'
-import { crc32c } from './format/chromium/sstable.js'
+import { ingest, applyIncremental } from '../src/ingest/ingest.js'
+import { ChatStore } from '../src/ingest/store.js'
+import { loadEntries, decodePrefix, entityTargets, loadMapping, selectMapping, fingerprint } from '../src/format/index.js'
+import { crc32c } from '../src/format/chromium/sstable.js'
 
 function maskCrc(c: number): number { return (((c >>> 15) | (c << 17)) + 0xa282ead8) >>> 0 }
 function varint(n: number): Buffer { const b: number[] = []; while (n >= 0x80) { b.push((n & 0x7f) | 0x80); n >>>= 7 } b.push(n); return Buffer.from(b) }
@@ -23,7 +23,8 @@ function craftDeletionLog(userKey: Buffer, seq: bigint): Buffer {
   return Buffer.concat([crc, len, type, batch])
 }
 
-const DIR = process.argv[2]
+const DIR = process.argv[2] ?? process.env.ZAUNGAST_TEST_DIR
+if (!DIR) { console.error('Set ZAUNGAST_TEST_DIR or pass a leveldb dir as argv[2]'); process.exit(1) }
 let pass = 0, fail = 0
 const ok = (name: string, cond: boolean, detail = '') => { if (cond) { pass++; console.log(`  PASS ${name}`) } else { fail++; console.log(`  FAIL ${name} ${detail}`) } }
 
@@ -43,7 +44,7 @@ function ftsConsistent(store: ChatStore): boolean {
   const b = db.prepare(`select group_concat(id) g from (select id from messages where is_system=0 and content<>'' order by id)`).get() as any
   return (a?.g ?? null) === (b?.g ?? null)
 }
-const VDIR = fileURLToPath(new URL('./schema/versions/', import.meta.url))
+const VDIR = fileURLToPath(new URL('../src/schema/versions/', import.meta.url))
 function getMapping(live: any) {
   const mappings = fs.readdirSync(VDIR).filter((f) => f.endsWith('.json')).map((f) => loadMapping(path.join(VDIR, f)))
   return selectMapping(mappings, fingerprint(live)).mapping
@@ -129,7 +130,7 @@ console.log('\n=== D. deletion: crafted tombstone for a chain → incremental de
 
 console.log('\n=== E. Session end-to-end: warm full → mutate → incremental refresh ===')
 {
-  const { Session } = await import('./session.js')
+  const { Session } = await import('../src/session.js')
   const copy = copyDir(DIR)
   const s = new (Session as any)({ overrideDir: copy, minDebounceMs: 0, maxIncrementals: 2, incrementalMode: 'reparse' })
   const m0 = s.refreshNow(true)  // full
@@ -146,7 +147,7 @@ console.log('\n=== E. Session end-to-end: warm full → mutate → incremental r
 
 console.log('\n=== F. backstop: full every maxIncrementals refreshes ===')
 {
-  const { Session } = await import('./session.js')
+  const { Session } = await import('../src/session.js')
   const copy = copyDir(DIR)
   const s = new (Session as any)({ overrideDir: copy, minDebounceMs: 0, maxIncrementals: 2, incrementalMode: 'reparse' })
   s.refreshNow(true) // full
@@ -222,7 +223,7 @@ console.log('\n=== J. tripwire: mapped-store target change → full rebuild; irr
 
 console.log('\n=== K. Session cold-start lossy full is flagged and self-heals ===')
 {
-  const { Session } = await import('./session.js')
+  const { Session } = await import('../src/session.js')
   const corrupt = copyDir(DIR)
   const ldb = fs.readdirSync(corrupt).filter((f) => f.endsWith('.ldb')).sort()[0]
   const good = fs.readFileSync(path.join(DIR, ldb))
@@ -258,7 +259,7 @@ console.log('\n=== L. hardening: post-COMMIT recompute throw → needFullRebuild
 
 console.log('\n=== M. hardening: Session leaves no temp snapshot dir behind on a refresh throw ===')
 {
-  const { Session } = await import('./session.js')
+  const { Session } = await import('../src/session.js')
   const before = fs.readdirSync(os.tmpdir()).filter((d) => d.startsWith('zaungast-')).length
   const copy = copyDir(DIR)
   const s = new (Session as any)({ overrideDir: copy, minDebounceMs: 0, incrementalMode: 'reparse' })

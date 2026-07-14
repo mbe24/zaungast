@@ -1,9 +1,10 @@
 // Tests for the feedback-driven features (single ingest, reused store).
-import { ingest } from './ingest/ingest.js'
-import { search, topTopics, findPerson, readMessages } from './tools.js'
-import { describeSchema } from './tools/describeSchema.js'
+import { ingest } from '../src/ingest/ingest.js'
+import { search, topTopics, findPerson, readMessages } from '../src/tools.js'
+import { describeSchema } from '../src/tools/describeSchema.js'
 
-const DIR = process.argv[2]
+const DIR = process.argv[2] ?? process.env.ZAUNGAST_TEST_DIR
+if (!DIR) { console.error('Set ZAUNGAST_TEST_DIR or pass a leveldb dir as argv[2]'); process.exit(1) }
 let pass = 0, fail = 0
 const ok = (n: string, c: boolean, d = '') => { if (c) { pass++; console.log(`  PASS ${n}`) } else { fail++; console.log(`  FAIL ${n} ${d}`) } }
 

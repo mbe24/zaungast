@@ -1,7 +1,9 @@
-import { Session } from './session.js'
-import { listConversations, readMessages, search, topTopics } from './tools.js'
+import { Session } from '../src/session.js'
+import { listConversations, readMessages, search, topTopics } from '../src/tools.js'
 
-const s = new Session({ dir: process.argv[2] })
+const DIR = process.argv[2] ?? process.env.ZAUNGAST_TEST_DIR
+if (!DIR) { console.error('Set ZAUNGAST_TEST_DIR or pass a leveldb dir as argv[2]'); process.exit(1) }
+const s = new Session({ dir: DIR })
 const { store, meta, staleProbeDeferred: d } = s.get()
 
 const show = (title: string, out: string) => console.log(`\n########## ${title} ##########\n${out}`)

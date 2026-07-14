@@ -3,10 +3,11 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { ingest, applyIncremental } from './ingest/ingest.js'
-import { loadEntries, loadEntriesReuse } from './format/index.js'
+import { ingest, applyIncremental } from '../src/ingest/ingest.js'
+import { loadEntries, loadEntriesReuse } from '../src/format/index.js'
 
-const DIR = process.argv[2]
+const DIR = process.argv[2] ?? process.env.ZAUNGAST_TEST_DIR
+if (!DIR) { console.error('Set ZAUNGAST_TEST_DIR or pass a leveldb dir as argv[2]'); process.exit(1) }
 let pass = 0, fail = 0
 const ok = (n: string, c: boolean, d = '') => { if (c) { pass++; console.log(`  PASS ${n}`) } else { fail++; console.log(`  FAIL ${n} ${d}`) } }
 
@@ -102,11 +103,11 @@ console.log('\n=== F. truncated (lossy) new .ldb → lossy, not cached (so it re
 }
 
 // ---- Session-level: copy-reuse mode must equal reparse mode after identical mutations ----
-import { decodePrefix, entityTargets, loadMapping, selectMapping, fingerprint } from './format/index.js'
-import { crc32c } from './format/chromium/sstable.js'
+import { decodePrefix, entityTargets, loadMapping, selectMapping, fingerprint } from '../src/format/index.js'
+import { crc32c } from '../src/format/chromium/sstable.js'
 import { fileURLToPath } from 'node:url'
 
-const VDIR = fileURLToPath(new URL('./schema/versions/', import.meta.url))
+const VDIR = fileURLToPath(new URL('../src/schema/versions/', import.meta.url))
 function maskCrc(c: number): number { return (((c >>> 15) | (c << 17)) + 0xa282ead8) >>> 0 }
 function varint(n: number): Buffer { const b: number[] = []; while (n >= 0x80) { b.push((n & 0x7f) | 0x80); n >>>= 7 } b.push(n); return Buffer.from(b) }
 function craftDeletionLog(userKey: Buffer, seq: bigint): Buffer {
@@ -132,7 +133,7 @@ function storeDump(store: any): string {
 
 console.log('\n=== G. Session copy-reuse == reparse after the same mutation (mode equivalence) ===')
 {
-  const { Session } = await import('./session.js')
+  const { Session } = await import('../src/session.js')
   const dR = copyDir(DIR), dC = copyDir(DIR)
   const sR = new (Session as any)({ overrideDir: dR, minDebounceMs: 0, incrementalMode: 'reparse' })
   const sC = new (Session as any)({ overrideDir: dC, minDebounceMs: 0, incrementalMode: 'copy-reuse' })
@@ -150,7 +151,7 @@ console.log('\n=== G. Session copy-reuse == reparse after the same mutation (mod
 
 console.log('\n=== H. Session copy-reuse multi-step (add then delete) == reparse ===')
 {
-  const { Session } = await import('./session.js')
+  const { Session } = await import('../src/session.js')
   const dR = copyDir(DIR), dC = copyDir(DIR)
   const sR = new (Session as any)({ overrideDir: dR, minDebounceMs: 0, incrementalMode: 'reparse' })
   const sC = new (Session as any)({ overrideDir: dC, minDebounceMs: 0, incrementalMode: 'copy-reuse' })
@@ -166,7 +167,7 @@ console.log('\n=== H. Session copy-reuse multi-step (add then delete) == reparse
 
 console.log('\n=== I. H1 end-to-end: compaction (merge .ldb) → copy-reuse store == reparse, no resurrection ===')
 {
-  const { Session } = await import('./session.js')
+  const { Session } = await import('../src/session.js')
   const dC = copyDir(DIR), dR = copyDir(DIR)
   const sC = new (Session as any)({ overrideDir: dC, minDebounceMs: 0, incrementalMode: 'copy-reuse' })
   const sR = new (Session as any)({ overrideDir: dR, minDebounceMs: 0, incrementalMode: 'reparse' })
@@ -189,7 +190,7 @@ console.log('\n=== I. H1 end-to-end: compaction (merge .ldb) → copy-reuse stor
 
 console.log('\n=== J. needFullRebuild in copy-reuse latches a full rebuild (pendingFull) ===')
 {
-  const { Session } = await import('./session.js')
+  const { Session } = await import('../src/session.js')
   const d = copyDir(DIR)
   const s = new (Session as any)({ overrideDir: d, minDebounceMs: 0, incrementalMode: 'copy-reuse' })
   s.refreshNow(true); s.refreshNow(false)
@@ -204,7 +205,7 @@ console.log('\n=== J. needFullRebuild in copy-reuse latches a full rebuild (pend
 
 console.log('\n=== K. partial-.ldb wedge (H-A/H-B): a truncated snapshot .ldb recovers within one refresh ===')
 {
-  const { Session } = await import('./session.js')
+  const { Session } = await import('../src/session.js')
   const d = copyDir(DIR)
   const s = new (Session as any)({ overrideDir: d, minDebounceMs: 0, incrementalMode: 'copy-reuse' })
   s.refreshNow(true); s.refreshNow(false) // warm; snapshot dir populated
@@ -224,7 +225,7 @@ console.log('\n=== K. partial-.ldb wedge (H-A/H-B): a truncated snapshot .ldb re
 
 console.log('\n=== L. backstop fires in copy-reuse mode ===')
 {
-  const { Session } = await import('./session.js')
+  const { Session } = await import('../src/session.js')
   const d = copyDir(DIR)
   const s = new (Session as any)({ overrideDir: d, minDebounceMs: 0, maxIncrementals: 1, incrementalMode: 'copy-reuse' })
   s.refreshNow(true)

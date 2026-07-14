@@ -25,10 +25,12 @@ Requires Node.js ≥ 22.5.
 - **Unit** (`npm test`) exercise the pure layers — Snappy, structured-clone decode, CRC32C,
   key coding, HTML→text, handles, topic extraction — with synthetic inputs and **no Teams
   data**. These run in CI.
-- **Integration** (`npm run test:integration`) drive ingest, the tools, and the refresh
-  lifecycle against a real on-disk Teams cache. They can't run in CI (shipping a real cache
-  would leak PII), so they run locally. Point them at a copy of your leveldb dir; the harness
-  scripts take the directory as an argument.
+- **Integration** (`npm run test:integration`, backed by `test/_inctest.ts`, `test/_reusetest.ts`,
+  and `test/_fbtest.ts`) drive ingest, the tools, and the refresh lifecycle against a real
+  on-disk Teams cache. They can't run in CI (shipping a real cache would leak PII), so they run
+  locally. Point them at a copy of your leveldb dir: pass it as `argv[2]` to each harness, or
+  set `ZAUNGAST_TEST_DIR` (used by `npm run test:integration`, since the npm script can't take
+  a positional argument per harness).
 
 The integration suite's backbone is an **equivalence invariant**: an incrementally-refreshed
 store must be byte-identical to a full rebuild of the same on-disk state — which keeps the
