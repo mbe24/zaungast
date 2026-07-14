@@ -250,7 +250,7 @@ class Reader {
       } // '^'
       default:
         throw this.err(
-          `unknown tag 0x${tag.toString(16)} ('${tag >= 0x20 && tag < 0x7f ? String.fromCharCode(tag) : '.'}')`,
+          `unknown tag 0x${tag.toString(16)} ('${tag >= 0x20 && tag < 0x7f ? String.fromCharCode(tag) : '.'}')`, // NOSONAR S7758 — UTF-16 code units by design (see verify.ts round-trip)
         );
     }
   }

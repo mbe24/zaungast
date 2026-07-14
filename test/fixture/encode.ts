@@ -38,7 +38,7 @@ export function keyPrefix(databaseId: number, objectStoreId: number, indexId: nu
 export function stringWithLength(s: string): Buffer {
   const len = varint(s.length);
   const body = Buffer.alloc(s.length * 2);
-  for (let i = 0; i < s.length; i++) body.writeUInt16BE(s.charCodeAt(i), i * 2);
+  for (let i = 0; i < s.length; i++) body.writeUInt16BE(s.charCodeAt(i), i * 2); // NOSONAR S7758 — UTF-16 code units by design (see verify.ts round-trip)
   return Buffer.concat([len, body]);
 }
 
@@ -46,7 +46,7 @@ export function stringWithLength(s: string): Buffer {
 // used for store-name metadata row VALUES.
 export function utf16beBytes(s: string): Buffer {
   const body = Buffer.alloc(s.length * 2);
-  for (let i = 0; i < s.length; i++) body.writeUInt16BE(s.charCodeAt(i), i * 2);
+  for (let i = 0; i < s.length; i++) body.writeUInt16BE(s.charCodeAt(i), i * 2); // NOSONAR S7758 — UTF-16 code units by design (see verify.ts round-trip)
   return body;
 }
 
@@ -74,9 +74,10 @@ const TAG = {
 };
 
 function encodeString(s: string): Buffer {
-  for (let i = 0; i < s.length; i++)
-    if (s.charCodeAt(i) > 0xff)
-      throw new Error(`fixture strings must be latin1/ASCII: ${JSON.stringify(s)}`);
+  for (let i = 0; i < s.length; i++) {
+    const cu = s.charCodeAt(i); // NOSONAR S7758 — UTF-16 code units by design (see verify.ts round-trip)
+    if (cu > 0xff) throw new Error(`fixture strings must be latin1/ASCII: ${JSON.stringify(s)}`);
+  }
   return Buffer.concat([Buffer.from([TAG.STR1]), varint(s.length), Buffer.from(s, 'latin1')]);
 }
 

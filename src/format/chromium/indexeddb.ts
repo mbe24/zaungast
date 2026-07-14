@@ -247,7 +247,7 @@ export function readStringWithLength(buf: Buffer, off: number): [string, number]
   const [len, pos] = readVarint(buf, off);
   const chars: string[] = [];
   for (let i = 0; i < len; i++)
-    chars.push(String.fromCharCode((buf[pos + i * 2] << 8) | buf[pos + i * 2 + 1]));
+    chars.push(String.fromCharCode((buf[pos + i * 2] << 8) | buf[pos + i * 2 + 1])); // NOSONAR S7758 — UTF-16 code units by design (see verify.ts round-trip)
   return [chars.join(''), pos + len * 2];
 }
 
@@ -275,6 +275,6 @@ export function decodeValue(
 export function utf16be(buf: Buffer | null): string {
   const b = buf as Buffer;
   const chars: string[] = [];
-  for (let i = 0; i + 1 < b.length; i += 2) chars.push(String.fromCharCode((b[i] << 8) | b[i + 1]));
+  for (let i = 0; i + 1 < b.length; i += 2) chars.push(String.fromCharCode((b[i] << 8) | b[i + 1])); // NOSONAR S7758 — UTF-16 code units by design (see verify.ts round-trip)
   return chars.join('');
 }
