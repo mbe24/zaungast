@@ -7,6 +7,7 @@ import {
   decodeValue,
   fingerprint,
 } from '../format/index.js';
+import type { DecodedPrefix, Entry } from '../format/types.js';
 
 // Propose-only schema recovery: when a Teams update changes the DB layout (unknown
 // fingerprint), sample the raw stores and propose a field mapping for a human to verify and
@@ -75,15 +76,27 @@ function proposeEntity(
   return { map, hits };
 }
 
-export function describeSchema(dir: string, args: any = {}): string {
-  const { live } = loadEntries(dir);
-  const fp = fingerprint(live);
+// A store literally named "conversation(s)" is almost certainly the conversation entity even
+// with a mediocre field-hit count; a store whose name merely mentions "conversation" is a
+// weaker signal; anything else relies on field hits alone.
+function conversationNameBonus(storeName: string): number {
+  if (/^conversations?$/i.test(storeName)) return 100;
+  if (/conversation/i.test(storeName)) return 10;
+  return 0;
+}
 
+// ---- schema catalog (db-name / store-name metadata rows) ----
+// Chromium keeps its IndexedDB schema catalog as metadata rows: database names live in the
+// (0,0,0) keyspace under marker 0xc9, store names in the (db,0,0) keyspace under marker 0x32.
+function buildCatalog(live: Entry[]): {
+  dbNames: Map<number, string>;
+  storeNames: Map<string, string>;
+} {
   const dbNames = new Map<number, string>();
   const storeNames = new Map<string, string>();
   for (const { key, value } of live) {
     if (key.length < 1) continue;
-    let p: any;
+    let p: DecodedPrefix;
     try {
       p = decodePrefix(key);
     } catch {
@@ -109,11 +122,48 @@ export function describeSchema(dir: string, args: any = {}): string {
       if (key[pp] === 0) storeNames.set(`${p.databaseId}:${osId}`, utf16be(value));
     }
   }
+  return { dbNames, storeNames };
+}
 
-  const CAP = 8;
+// Decode one sampled record's value into `info`'s field set: the record's own top-level keys,
+// threadProperties' keys (conversation topics live there), and — for message-map containers —
+// the union of the first few sub-entries' keys (the first entry can be a control/typing/sparse
+// entry missing the fields the mapping references).
+function sampleRecordFields(info: StoreInfo, value: Buffer | null): void {
+  try {
+    const obj = decodeValue(value);
+    if (!obj || typeof obj !== 'object') return;
+    for (const k of Object.keys(obj)) info.fields.add(k);
+    const tp = (obj as any).threadProperties;
+    if (tp && typeof tp === 'object') for (const k of Object.keys(tp)) info.fields.add(k);
+    for (const container of ['messageMap', 'messages']) {
+      const c = (obj as any)[container];
+      if (c && typeof c === 'object' && !Array.isArray(c)) {
+        for (const entry of Object.values(c).slice(0, 3)) {
+          if (entry && typeof entry === 'object') {
+            info.nested ??= new Set();
+            info.nestedUnder = container;
+            for (const k of Object.keys(entry as object)) info.nested.add(k);
+          }
+        }
+      }
+    }
+  } catch {
+    /* skip undecodable sample */
+  }
+}
+
+// Walk every live record under an object store (indexId 1), counting per-store record totals
+// and sampling up to `cap` records per store for field discovery.
+function sampleStores(
+  live: Entry[],
+  dbNames: Map<number, string>,
+  storeNames: Map<string, string>,
+  cap: number,
+): Map<string, StoreInfo> {
   const stores = new Map<string, StoreInfo>();
   for (const { key, value } of live) {
-    let p: any;
+    let p: DecodedPrefix;
     try {
       p = decodePrefix(key);
     } catch {
@@ -137,101 +187,66 @@ export function describeSchema(dir: string, args: any = {}): string {
       stores.set(sk, info);
     }
     info.count++;
-    if (info.sampled < CAP) {
+    if (info.sampled < cap) {
       info.sampled++;
-      try {
-        const obj = decodeValue(value);
-        if (obj && typeof obj === 'object') {
-          for (const k of Object.keys(obj)) info.fields.add(k);
-          // conversation topics live under threadProperties — surface those keys too
-          const tp = (obj as any).threadProperties;
-          if (tp && typeof tp === 'object') for (const k of Object.keys(tp)) info.fields.add(k);
-          // detect a message-map container (records that hold many sub-messages). Union the
-          // first few entries per container — the first can be a control/typing/sparse entry
-          // missing the fields the mapping references.
-          for (const container of ['messageMap', 'messages']) {
-            const c = (obj as any)[container];
-            if (c && typeof c === 'object' && !Array.isArray(c)) {
-              for (const entry of Object.values(c).slice(0, 3)) {
-                if (entry && typeof entry === 'object') {
-                  info.nested ??= new Set();
-                  info.nestedUnder = container;
-                  for (const k of Object.keys(entry as object)) info.nested.add(k);
-                }
-              }
-            }
-          }
-        }
-      } catch {
-        /* skip undecodable sample */
-      }
+      sampleRecordFields(info, value);
     }
   }
+  return stores;
+}
 
-  const all = [...stores.values()].sort((a, b) => b.count - a.count);
+// Fields any proposal might reference are pinned to the FRONT of the printed list so a
+// truncation can never hide exactly the paths the proposal maps (that's what made the old
+// output read as "you mapped fields that don't exist").
+function showFields(set: Set<string>, interest: Set<string>): string {
+  const arr = [...set];
+  return (
+    [...arr.filter((f) => interest.has(f)), ...arr.filter((f) => !interest.has(f))]
+      .slice(0, 24)
+      .join(', ') || '(none decoded)'
+  );
+}
 
-  // score candidates
-  const msgCand = all
-    .map((s) => ({ s, p: proposeEntity(s.nested ?? s.fields, MSG_FIELDS) }))
-    .filter((x) => x.p.hits >= 3 && x.p.map.content)
-    .sort((a, b) => b.p.hits - a.p.hits);
-  const convScore = (x: any) =>
-    x.p.hits +
-    (/^conversations?$/i.test(x.s.store) ? 100 : /conversation/i.test(x.s.store) ? 10 : 0);
-  const convCand = all
-    .map((s) => ({ s, p: proposeEntity(s.fields, CONV_FIELDS) }))
-    .filter((x) => x.p.hits >= 2 && (x.p.map.topic || /conversation/i.test(x.s.store)))
-    .sort((a, b) => convScore(b) - convScore(a));
-
-  // Fields any proposal might reference — pin these to the FRONT of the printed list so a
-  // truncation can never hide exactly the paths the proposal maps (that's what made the old
-  // output read as "you mapped fields that don't exist").
-  const INTEREST = new Set([
-    ...Object.values(MSG_FIELDS).flat(),
-    ...Object.values(CONV_FIELDS).flat(),
-  ]);
-  const showFields = (set: Set<string>): string => {
-    const arr = [...set];
-    return (
-      [...arr.filter((f) => INTEREST.has(f)), ...arr.filter((f) => !INTEREST.has(f))]
-        .slice(0, 24)
-        .join(', ') || '(none decoded)'
-    );
-  };
-
+// Render the "Top data stores (by record count):" section, one entry per store (record-level
+// fields, plus — when a message-map container was found — the nested per-entry fields too).
+function renderStoreList(all: StoreInfo[], limit: number, interest: Set<string>): string[] {
   const lines: string[] = [];
-  lines.push(`fingerprint ${fp.hash} · ${dbNames.size} databases · ${all.length} data stores`);
-  lines.push('', 'Top data stores (by record count):');
-  for (const s of all.slice(0, Number(args.limit) || 20)) {
+  for (const s of all.slice(0, limit)) {
     lines.push(`  ${s.store} (${s.dbNorm})  ${s.count} recs`);
     if (s.nestedUnder) {
       // Show BOTH levels, labeled — the proposal's iterate/keep reference the record level while
       // content/sender/time live in the nested entries; a verifier needs to see where each lives.
       lines.push(
-        `     record fields: ${showFields(s.fields)}`,
-        `     per ${s.nestedUnder}.* entry: ${showFields(s.nested!)}`,
+        `     record fields: ${showFields(s.fields, interest)}`,
+        `     per ${s.nestedUnder}.* entry: ${showFields(s.nested!, interest)}`,
       );
     } else {
-      lines.push(`     fields: ${showFields(s.fields)}`);
+      lines.push(`     fields: ${showFields(s.fields, interest)}`);
     }
   }
+  return lines;
+}
 
-  const buildEntity = (cand: any, iterate?: string) => {
-    if (!cand) return null;
-    const e: any = {
-      db: `*${cand.s.dbNorm.replace(/^Teams:/, '').split(':')[0]}*`,
-      store: cand.s.store,
-      fields: cand.p.map,
-    };
-    if (iterate) {
-      e.iterate = `${iterate}.*`;
-      e.keep = { field: 'type', equals: 'Message' };
-    }
-    return e;
+function buildEntity(cand: any, iterate?: string): any {
+  if (!cand) return null;
+  const e: any = {
+    db: `*${cand.s.dbNorm.replace(/^Teams:/, '').split(':')[0]}*`,
+    store: cand.s.store,
+    fields: cand.p.map,
   };
+  if (iterate) {
+    e.iterate = `${iterate}.*`;
+    e.keep = { field: 'type', equals: 'Message' };
+  }
+  return e;
+}
+
+// Assemble the propose-only mapping object: best message/conversation candidates (if any),
+// keyed by the entity name the resolver expects.
+function buildProposal(fpHash: string, msgCand: any[], convCand: any[]): any {
   const proposal: any = {
     schemaVersion: 'teams-PROPOSED',
-    knownFingerprints: [fp.hash],
+    knownFingerprints: [fpHash],
     match: { requireStores: [] },
     entities: {},
   };
@@ -243,7 +258,39 @@ export function describeSchema(dir: string, args: any = {}): string {
     proposal.entities.conversation = buildEntity(convCand[0]);
     proposal.match.requireStores.push(convCand[0].s.store);
   }
+  return proposal;
+}
 
+export function describeSchema(dir: string, args: any = {}): string {
+  const { live } = loadEntries(dir);
+  const fp = fingerprint(live);
+
+  const { dbNames, storeNames } = buildCatalog(live);
+  const stores = sampleStores(live, dbNames, storeNames, 8);
+  const all = [...stores.values()].sort((a, b) => b.count - a.count);
+
+  // score candidates
+  const msgCand = all
+    .map((s) => ({ s, p: proposeEntity(s.nested ?? s.fields, MSG_FIELDS) }))
+    .filter((x) => x.p.hits >= 3 && x.p.map.content)
+    .sort((a, b) => b.p.hits - a.p.hits);
+  const convScore = (x: any) => x.p.hits + conversationNameBonus(x.s.store);
+  const convCand = all
+    .map((s) => ({ s, p: proposeEntity(s.fields, CONV_FIELDS) }))
+    .filter((x) => x.p.hits >= 2 && (x.p.map.topic || /conversation/i.test(x.s.store)))
+    .sort((a, b) => convScore(b) - convScore(a));
+
+  const interest = new Set([
+    ...Object.values(MSG_FIELDS).flat(),
+    ...Object.values(CONV_FIELDS).flat(),
+  ]);
+
+  const lines: string[] = [];
+  lines.push(`fingerprint ${fp.hash} · ${dbNames.size} databases · ${all.length} data stores`);
+  lines.push('', 'Top data stores (by record count):');
+  lines.push(...renderStoreList(all, Number(args.limit) || 20, interest));
+
+  const proposal = buildProposal(fp.hash, msgCand, convCand);
   lines.push(
     '',
     'PROPOSED mapping (VERIFY before saving to src/schema/versions/teams-<ver>.json):',

@@ -33,7 +33,8 @@ export function parseTime(s: string | number | undefined, now = Date.now()): num
   if (rel) {
     const n = +rel[1];
     const u = rel[2];
-    return now - n * (u === 'd' ? 864e5 : u === 'h' ? 36e5 : 6e4);
+    const subDayMs = u === 'h' ? 36e5 : 6e4;
+    return now - n * (u === 'd' ? 864e5 : subDayMs);
   }
   const t = Date.parse(s);
   return Number.isNaN(t) ? undefined : t;
@@ -72,7 +73,7 @@ function convIdsFor(db: DB, arg: string): string[] {
   return (
     db
       .prepare(
-        `select id from conversations where topic like ? escape '\\' or participant_names like ? escape '\\'`,
+        String.raw`select id from conversations where topic like ? escape '\' or participant_names like ? escape '\'`,
       )
       .all(like, like) as any[]
   ).map((r) => r.id);
@@ -83,7 +84,7 @@ function senderFilter(db: DB, arg: string): { sql: string; params: any[]; miss?:
     if (!r) return { sql: '1=0', params: [], miss: `no person matches ${arg}` };
     return { sql: 'm.sender_mri=?', params: [r.mri] };
   }
-  return { sql: "m.sender_name like ? escape '\\'", params: [`%${likeEscape(arg)}%`] };
+  return { sql: String.raw`m.sender_name like ? escape '\'`, params: [`%${likeEscape(arg)}%`] };
 }
 
 // Resolve an `exclude` list into conversation ids / sender MRIs / plain words. Handles fail
@@ -118,7 +119,7 @@ function coverageNote(db: DB, scopeSql: string, scopeParams: any[]): string {
   const r = db
     .prepare(`select min(m.ts) lo, max(m.ts) hi from messages m where ${scopeSql} and m.ts>0`)
     .get(...scopeParams) as any;
-  if (!r || !r.hi) return 'no cached messages in this scope';
+  if (!r?.hi) return 'no cached messages in this scope';
   return `newest cached in this scope: ${fmtTs(r.hi)} · oldest ${fmtTs(r.lo)} — local cache may lag the server`;
 }
 // A conversation title-substring that matches >1 conversation → non-blocking disambiguation note.
@@ -129,7 +130,10 @@ function convAmbiguityNote(db: DB, arg: string, ids: string[]): string {
       `select handle,topic,participant_names from conversations where id in (${ids.map(() => '?').join(',')}) order by last_ts desc limit 4`,
     )
     .all(...ids) as any[];
-  return `note: in:"${arg}" matched ${ids.length} conversations (${rows.map((r) => `${r.handle} ${r.topic || r.participant_names || ''}`.trim()).join(', ')}) — searching all; pass a c:handle to narrow`;
+  const names = rows
+    .map((r) => `${r.handle} ${r.topic || r.participant_names || ''}`.trim())
+    .join(', ');
+  return `note: in:"${arg}" matched ${ids.length} conversations (${names}) — searching all; pass a c:handle to narrow`;
 }
 
 // ================= TOOLS =================
@@ -175,7 +179,100 @@ export function listConversations(
     const title = r.topic || r.participant_names || '(untitled)';
     return `${r.handle} [${r.kind}] "${title}" · ${r.msg_count} msg · last ${fmtTs(r.last_ts)}`;
   });
-  return `${envelope(meta, deferred, `${rows.length} conversations`)}\n${lines.join('\n') || '(none)'}`;
+  const extra = `${rows.length} conversations`;
+  return `${envelope(meta, deferred, extra)}\n${lines.join('\n') || '(none)'}`;
+}
+
+// Resolve a `conversation` selector (handle or title/participant substring) to a single
+// conversation id, or an early-return string (ambiguous-picker text, or a "no match" message)
+// when it can't unambiguously resolve.
+function resolveConversationArg(db: DB, conversation: string): { id: string } | { early: string } {
+  const ids = convIdsFor(db, conversation);
+  if (!ids.length) return { early: `no conversation matches "${conversation}"` };
+  if (ids.length > 1 && !conversation.startsWith('c:')) {
+    const cands = db
+      .prepare(
+        `select handle,kind,topic,participant_names from conversations
+      where id in (${ids.map(() => '?').join(',')}) order by last_ts desc limit 8`,
+      )
+      .all(...ids) as any[];
+    return {
+      early:
+        `ambiguous — ${ids.length} conversations match. Pick a handle:\n` +
+        cands.map((c) => `  ${c.handle} [${c.kind}] ${c.topic || c.participant_names}`).join('\n'),
+    };
+  }
+  return { id: ids[0] };
+}
+
+// Fetch the rows to render: either a window CENTERED on `around` (half before/half after,
+// oldest→newest), or the last `limit` rows matching `conds`/`params` (also oldest→newest).
+function fetchMessageRows(
+  db: DB,
+  id: string,
+  limit: number,
+  conds: string[],
+  params: any[],
+  around: string | undefined,
+): { rows: any[] } | { early: string } {
+  if (around) {
+    const aroundId = around.replace(/^m:/, '');
+    const a = db
+      .prepare('select ts from messages where conv_id=? and id=?')
+      .get(id, aroundId) as any;
+    if (!a) return { early: `message ${around} not found in this conversation` };
+    const half = Math.floor(limit / 2);
+    const before = db
+      .prepare(
+        `select * from messages where conv_id=? and is_system=0 and ts<=? order by ts desc, id desc limit ?`,
+      )
+      .all(id, a.ts, half) as any[];
+    const after = db
+      .prepare(
+        `select * from messages where conv_id=? and is_system=0 and ts>? order by ts asc, id asc limit ?`,
+      )
+      .all(id, a.ts, half) as any[];
+    return { rows: [...before.toReversed(), ...after] };
+  }
+  // last `limit` in the window, rendered oldest→newest (story order)
+  const rows = (
+    db
+      .prepare(
+        `select * from messages where ${conds.join(' and ')} order by ts desc, id desc limit ?`,
+      )
+      .all(...params, limit) as any[]
+  ).reverse();
+  return { rows };
+}
+
+// Render message rows oldest→newest, collapsing consecutive same-sender runs (by MRI, not
+// display name) unless more than 15 minutes have passed since the previous message.
+function renderMessageLines(rows: any[]): string[] {
+  let lastMri: string | null = null;
+  let lastTs = 0;
+  return rows.map((r) => {
+    const collapsed = r.sender_mri === lastMri && r.ts - lastTs < 15 * 60_000;
+    lastMri = r.sender_mri;
+    lastTs = r.ts;
+    const senderLabel = r.is_mine ? 'ME' : r.sender_name || '(unknown)';
+    const who = collapsed ? '  ↳' : senderLabel;
+    const marks = (r.has_attach ? ' [attachment]' : '') + (r.mentions_me ? ' [@me]' : '');
+    return `${fmtTs(r.ts)} ${who}> ${clip(r.content, 280)}${marks}`;
+  });
+}
+
+// Show both local bounds so a caller knows the cache slice — "newest local" flags when the
+// local cache lags the server (its most recent cached message may be days old).
+function buildReadMessagesHead(
+  conv: any,
+  shown: number,
+  total: number,
+  earliest: number,
+  newest: number,
+  olderCursor: string,
+): string {
+  const olderSuffix = olderCursor ? ` · older: ${olderCursor}` : '';
+  return `${conv.handle} [${conv.kind}] "${conv.topic || conv.participant_names}" · showing ${shown}/${total} · local cache ${fmtTs(earliest)}–${fmtTs(newest)}${olderSuffix}`;
 }
 
 export function readMessages(
@@ -188,21 +285,10 @@ export function readMessages(
   const bt = badTime(args, ['since', 'until']);
   if (bt) return bt;
   if (!args.conversation) return 'error: conversation (handle or title substring) is required';
-  const ids = convIdsFor(db, String(args.conversation));
-  if (!ids.length) return `no conversation matches "${args.conversation}"`;
-  if (ids.length > 1 && !String(args.conversation).startsWith('c:')) {
-    const cands = db
-      .prepare(
-        `select handle,kind,topic,participant_names from conversations
-      where id in (${ids.map(() => '?').join(',')}) order by last_ts desc limit 8`,
-      )
-      .all(...ids) as any[];
-    return (
-      `ambiguous — ${ids.length} conversations match. Pick a handle:\n` +
-      cands.map((c) => `  ${c.handle} [${c.kind}] ${c.topic || c.participant_names}`).join('\n')
-    );
-  }
-  const id = ids[0];
+  const resolved = resolveConversationArg(db, String(args.conversation));
+  if ('early' in resolved) return resolved.early;
+  const id = resolved.id;
+
   const limit = Math.min(Number(args.limit) || 40, 200);
   const conds = ['conv_id=?', 'is_system=0'];
   const p: any[] = [id];
@@ -223,35 +309,17 @@ export function readMessages(
     p.push(Number(older[1]), Number(older[1]), older[2]);
   }
 
-  let rows: any[];
-  if (args.around) {
-    const aroundId = String(args.around).replace(/^m:/, '');
-    const a = db
-      .prepare('select ts from messages where conv_id=? and id=?')
-      .get(id, aroundId) as any;
-    if (!a) return `message ${args.around} not found in this conversation`;
-    const half = Math.floor(limit / 2);
-    const before = db
-      .prepare(
-        `select * from messages where conv_id=? and is_system=0 and ts<=? order by ts desc, id desc limit ?`,
-      )
-      .all(id, a.ts, half) as any[];
-    const after = db
-      .prepare(
-        `select * from messages where conv_id=? and is_system=0 and ts>? order by ts asc, id asc limit ?`,
-      )
-      .all(id, a.ts, half) as any[];
-    rows = [...before.reverse(), ...after];
-  } else {
-    // last `limit` in the window, rendered oldest→newest (story order)
-    rows = (
-      db
-        .prepare(
-          `select * from messages where ${conds.join(' and ')} order by ts desc, id desc limit ?`,
-        )
-        .all(...p, limit) as any[]
-    ).reverse();
-  }
+  const fetched = fetchMessageRows(
+    db,
+    id,
+    limit,
+    conds,
+    p,
+    args.around ? String(args.around) : undefined,
+  );
+  if ('early' in fetched) return fetched.early;
+  const rows = fetched.rows;
+
   const conv = db
     .prepare('select handle,kind,topic,participant_names from conversations where id=?')
     .get(id) as any;
@@ -266,104 +334,124 @@ export function readMessages(
   // Only offer an older: cursor when there really are older messages (else the agent pages into nothing).
   const oldest = rows[0];
   const olderCursor = oldest && oldest.ts > earliest ? `older:${oldest.ts}:${oldest.id}` : '';
-  // Show both local bounds so a caller knows the cache slice — "newest local" flags when the
-  // local cache lags the server (its most recent cached message may be days old).
-  const head = `${conv.handle} [${conv.kind}] "${conv.topic || conv.participant_names}" · showing ${rows.length}/${total} · local cache ${fmtTs(earliest)}–${fmtTs(newest)}${olderCursor ? ` · older: ${olderCursor}` : ''}`;
-  let lastMri: string | null = null,
-    lastTs = 0;
-  const lines = rows.map((r) => {
-    // collapse consecutive same-sender runs (by MRI, not display name), but reset after a 15-min gap
-    const collapsed = r.sender_mri === lastMri && r.ts - lastTs < 15 * 60_000;
-    lastMri = r.sender_mri;
-    lastTs = r.ts;
-    const who = collapsed ? '  ↳' : r.is_mine ? 'ME' : r.sender_name || '(unknown)';
-    const marks = (r.has_attach ? ' [attachment]' : '') + (r.mentions_me ? ' [@me]' : '');
-    return `${fmtTs(r.ts)} ${who}> ${clip(r.content, 280)}${marks}`;
-  });
+  const head = buildReadMessagesHead(conv, rows.length, total, earliest, newest, olderCursor);
+  const lines = renderMessageLines(rows);
   return `${envelope(meta, deferred)}\n${head}\n${lines.join('\n') || '(no messages)'}`;
 }
 
-export function search(
-  store: ChatStore,
-  meta: StoreMeta,
-  deferred: boolean,
-  args: SearchArgs = {},
-): string {
-  const db = store.db;
-  const bt = badTime(args, ['since', 'until']);
-  if (bt) return bt;
-  const limit = Math.min(Number(args.limit) || 20, 60);
-  // scopeConds = who/where/kind + excludes (NOT time, NOT the query term) — used for the
-  // coverage note so "newest cached" means "in this scope", not "newest matching the query".
-  const scopeConds: string[] = ['m.is_system=0'];
-  const scopeParams: any[] = [];
+// Apply the `from:` filter: resolve to a sender condition, plus (for a name substring, not a
+// p:handle) a non-blocking "matched N people" note when the substring is ambiguous.
+function applyFromFilter(
+  db: DB,
+  from: string,
+): { cond: string; params: any[]; note?: string } | { miss: string } {
+  const f = senderFilter(db, from);
+  if (f.miss) return { miss: f.miss };
+  let note: string | undefined;
+  if (!from.startsWith('p:')) {
+    const ppl = db
+      .prepare(
+        String.raw`select handle,name from people where name like ? escape '\' order by msg_count desc`,
+      )
+      .all(`%${likeEscape(from)}%`) as any[];
+    if (ppl.length > 1)
+      note = `note: from:"${from}" matched ${ppl.length} people (${ppl
+        .slice(0, 4)
+        .map((p) => `${p.handle} ${p.name}`)
+        .join(', ')}) — pass a p:handle to narrow`;
+  }
+  return { cond: f.sql, params: f.params, note };
+}
+// Apply the `in:` filter: resolve a conversation selector to a scope condition, or "no
+// conversation matches" when nothing resolves.
+function applyInFilter(
+  db: DB,
+  inArg: string,
+): { cond: string; params: any[]; note?: string } | { miss: string } {
+  const ids = convIdsFor(db, inArg);
+  if (!ids.length) return { miss: `no conversation matches "${inArg}"` };
+  const amb = convAmbiguityNote(db, inArg, ids);
+  return {
+    cond: `m.conv_id in (${ids.map(() => '?').join(',')})`,
+    params: ids,
+    note: amb || undefined,
+  };
+}
+// Apply the `exclude` list (c:/p: handles only — plain words aren't used by search) as extra
+// scope conditions, or a miss when a handle doesn't resolve.
+function applyExcludeFilter(
+  db: DB,
+  exclude: string[],
+): { conds: string[]; params: any[] } | { miss: string } {
+  const ex = resolveExcludes(db, exclude);
+  if (ex.miss) return { miss: ex.miss };
+  const conds: string[] = [];
+  const params: any[] = [];
+  if (ex.convIds.length) {
+    conds.push(`m.conv_id not in (${ex.convIds.map(() => '?').join(',')})`);
+    params.push(...ex.convIds);
+  }
+  if (ex.mris.length) {
+    conds.push(`m.sender_mri not in (${ex.mris.map(() => '?').join(',')})`);
+    params.push(...ex.mris);
+  }
+  return { conds, params };
+}
+// Build the scope filter (who/where/kind + excludes — NOT time, NOT the query term) from
+// search args, used both to run the query and to compute the coverage note. Returns an
+// early-return miss string when a from:/in:/exclude handle doesn't resolve, so a typo'd handle
+// never silently matches nothing (or everything).
+function buildSearchScope(
+  db: DB,
+  args: SearchArgs,
+): { conds: string[]; params: any[]; notes: string[] } | { miss: string } {
+  const conds: string[] = ['m.is_system=0'];
+  const params: any[] = [];
   const notes: string[] = [];
   if (args.from) {
-    const f = senderFilter(db, String(args.from));
-    if (f.miss) return f.miss;
-    scopeConds.push(f.sql);
-    scopeParams.push(...f.params);
-    if (!String(args.from).startsWith('p:')) {
-      const ppl = db
-        .prepare(
-          "select handle,name from people where name like ? escape '\\' order by msg_count desc",
-        )
-        .all(`%${likeEscape(String(args.from))}%`) as any[];
-      if (ppl.length > 1)
-        notes.push(
-          `note: from:"${args.from}" matched ${ppl.length} people (${ppl
-            .slice(0, 4)
-            .map((p) => `${p.handle} ${p.name}`)
-            .join(', ')}) — pass a p:handle to narrow`,
-        );
-    }
+    const f = applyFromFilter(db, String(args.from));
+    if ('miss' in f) return { miss: f.miss };
+    conds.push(f.cond);
+    params.push(...f.params);
+    if (f.note) notes.push(f.note);
   }
   if (args.in) {
-    const ids = convIdsFor(db, String(args.in));
-    if (!ids.length) return `no conversation matches "${args.in}"`;
-    scopeConds.push(`m.conv_id in (${ids.map(() => '?').join(',')})`);
-    scopeParams.push(...ids);
-    const amb = convAmbiguityNote(db, String(args.in), ids);
-    if (amb) notes.push(amb);
+    const inRes = applyInFilter(db, String(args.in));
+    if ('miss' in inRes) return { miss: inRes.miss };
+    conds.push(inRes.cond);
+    params.push(...inRes.params);
+    if (inRes.note) notes.push(inRes.note);
   }
   if (args.kind) {
-    scopeConds.push('m.kind=?');
-    scopeParams.push(args.kind);
+    conds.push('m.kind=?');
+    params.push(args.kind);
   }
-  if (args.mentions_me) scopeConds.push('m.mentions_me=1');
-  if (args.has_attachment) scopeConds.push('m.has_attach=1');
+  if (args.mentions_me) conds.push('m.mentions_me=1');
+  if (args.has_attachment) conds.push('m.has_attach=1');
   if (args.exclude?.length) {
-    const ex = resolveExcludes(db, args.exclude);
-    if (ex.miss) return ex.miss;
-    if (ex.convIds.length) {
-      scopeConds.push(`m.conv_id not in (${ex.convIds.map(() => '?').join(',')})`);
-      scopeParams.push(...ex.convIds);
-    }
-    if (ex.mris.length) {
-      scopeConds.push(`m.sender_mri not in (${ex.mris.map(() => '?').join(',')})`);
-      scopeParams.push(...ex.mris);
-    }
+    const exRes = applyExcludeFilter(db, args.exclude);
+    if ('miss' in exRes) return { miss: exRes.miss };
+    conds.push(...exRes.conds);
+    params.push(...exRes.params);
   }
+  return { conds, params, notes };
+}
 
-  const conds = [...scopeConds];
-  const params = [...scopeParams];
-  const since = parseTime(args.since);
-  if (since) {
-    conds.push('m.ts>=?');
-    params.push(since);
-  }
-  const until = parseTime(args.until);
-  if (until) {
-    conds.push('m.ts<?');
-    params.push(until);
-  }
-
-  const match = args.query && String(args.query).trim() ? ftsMatch(String(args.query)) : null;
-  let rows: any[];
-  let order: string;
+// Execute the search: FTS5 MATCH+bm25 ranking when available and a query is given, else a plain
+// content LIKE scan ordered by recency. `conds`/`params` are extended in place: the LIKE path
+// appends the query as a where-clause (so callers must pass their OWN copy, not the shared scope
+// arrays, if those need to stay query-free — see computeSearchCoverage).
+function runSearchQuery(
+  db: DB,
+  meta: StoreMeta,
+  conds: string[],
+  params: any[],
+  limit: number,
+  query: string | undefined,
+): { rows: any[]; order: string } {
+  const match = query && String(query).trim() ? ftsMatch(String(query)) : null;
   if (match && meta.ftsEnabled) {
-    order = 'relevance';
-    rows = db
+    const rows = db
       .prepare(
         `select m.*, snippet(messages_fts,0,'[',']','…',10) snip
       from messages_fts f join messages m on m.conv_id=f.conv_id and m.id=f.id
@@ -371,19 +459,24 @@ export function search(
       order by bm25(messages_fts) limit ?`,
       )
       .all(match, ...params, limit) as any[];
-  } else {
-    if (args.query && String(args.query).trim()) {
-      conds.push("m.content like ? escape '\\'");
-      params.push(`%${likeEscape(String(args.query))}%`);
-    }
-    order = 'time';
-    rows = db
-      .prepare(
-        `select m.*, substr(m.content,1,120) snip from messages m
-      where ${conds.join(' and ')} order by m.ts desc, m.id desc limit ?`,
-      )
-      .all(...params, limit) as any[];
+    return { rows, order: 'relevance' };
   }
+  if (query && String(query).trim()) {
+    conds.push(String.raw`m.content like ? escape '\'`);
+    params.push(`%${likeEscape(String(query))}%`);
+  }
+  const rows = db
+    .prepare(
+      `select m.*, substr(m.content,1,120) snip from messages m
+      where ${conds.join(' and ')} order by m.ts desc, m.id desc limit ?`,
+    )
+    .all(...params, limit) as any[];
+  return { rows, order: 'time' };
+}
+
+// Build the per-hit lines and the (optional) conversation legend, resolving conv_id → handle
+// once per distinct conversation (memoized).
+function buildSearchResults(db: DB, rows: any[]): { lines: string[]; legend: string } {
   const convH = new Map<string, string>();
   const hn = (cid: string) =>
     convH.get(cid) ??
@@ -407,21 +500,64 @@ export function search(
     (r) =>
       `${hn(r.conv_id)} ${fmtTs(r.ts)} m:${r.id} ${r.is_mine ? 'ME' : r.sender_name}> ${clip(r.snip, 140)}`,
   );
+  return { lines, legend };
+}
 
-  // Cache-horizon note: on empty results, or when a `since` filter starts after the newest
-  // cached message in scope (window entirely uncovered), tell the reader what the cache holds.
+// Cache-horizon note: on empty results, or when a `since` filter starts after the newest cached
+// message in scope (window entirely uncovered), tell the reader what the cache holds.
+function computeSearchCoverage(
+  db: DB,
+  scopeConds: string[],
+  scopeParams: any[],
+  rows: any[],
+  since: number | undefined,
+): string {
   const scopeSql = scopeConds.join(' and ');
-  let coverage = '';
-  if (rows.length === 0) coverage = coverageNote(db, scopeSql, scopeParams);
-  else if (since) {
+  if (rows.length === 0) return coverageNote(db, scopeSql, scopeParams);
+  if (since) {
     const hi =
       (
         db
           .prepare(`select max(m.ts) hi from messages m where ${scopeSql}`)
           .get(...scopeParams) as any
       )?.hi ?? 0;
-    if (since > hi) coverage = coverageNote(db, scopeSql, scopeParams);
+    if (since > hi) return coverageNote(db, scopeSql, scopeParams);
   }
+  return '';
+}
+
+export function search(
+  store: ChatStore,
+  meta: StoreMeta,
+  deferred: boolean,
+  args: SearchArgs = {},
+): string {
+  const db = store.db;
+  const bt = badTime(args, ['since', 'until']);
+  if (bt) return bt;
+  const limit = Math.min(Number(args.limit) || 20, 60);
+  // scopeConds/scopeParams = who/where/kind + excludes (NOT time, NOT the query term) — used for
+  // the coverage note so "newest cached" means "in this scope", not "newest matching the query".
+  const scope = buildSearchScope(db, args);
+  if ('miss' in scope) return scope.miss;
+  const { conds: scopeConds, params: scopeParams, notes } = scope;
+
+  const conds = [...scopeConds];
+  const params = [...scopeParams];
+  const since = parseTime(args.since);
+  if (since) {
+    conds.push('m.ts>=?');
+    params.push(since);
+  }
+  const until = parseTime(args.until);
+  if (until) {
+    conds.push('m.ts<?');
+    params.push(until);
+  }
+
+  const { rows, order } = runSearchQuery(db, meta, conds, params, limit, args.query);
+  const { lines, legend } = buildSearchResults(db, rows);
+  const coverage = computeSearchCoverage(db, scopeConds, scopeParams, rows, since);
 
   const head = [
     envelope(meta, deferred, `order:${order} · ${rows.length} hits`),
@@ -434,19 +570,16 @@ export function search(
   return `${head}\n${lines.join('\n') || '(no matches)'}`;
 }
 
-export function topTopics(
+// Build the (cached) per-message phrase extractor: name tokens are excluded from phrase
+// candidates, tokenization is cached per content string (the expensive part) on the store
+// (persists across calls / incremental refreshes, invalidated when the name-token set changes),
+// and per-call `exclude` words are applied by FILTERING the cached array after retrieval — never
+// threaded into the extractor, so one call's excludes can't contaminate another's cached phrases.
+function buildPhraseExtractor(
   store: ChatStore,
-  meta: StoreMeta,
-  deferred: boolean,
-  args: TopTopicsArgs = {},
-): string {
-  const db = store.db;
-  const bt = badTime(args, ['since', 'until']);
-  if (bt) return bt;
-  const n = Math.min(Number(args.n) || 8, 15);
-  const notes: string[] = [];
-
-  // name tokens (exclude people names from topics)
+  db: DB,
+  excludeWords: Set<string>,
+): (content: string) => string[] {
   const nameTokens = new Set<string>();
   for (const r of db.prepare('select name from people').all() as any[])
     for (const w of String(r.name || '')
@@ -455,19 +588,13 @@ export function topTopics(
       nameTokens.add(w);
   const { phrases: extract } = makeExtractor(nameTokens); // en+de merged (default)
 
-  // Cache tokenization per message content (the expensive part). Per-call word excludes are
-  // applied by FILTERING the cached array after retrieval — never threaded into `extract`, so
-  // one call's excludes can't contaminate another's cached phrases.
   const sig = `${nameTokens.size}:${[...nameTokens].sort(byCodeUnit).join(',').length}`;
   if (store.phraseCacheSig !== sig) {
     store.phraseCache.clear();
     store.phraseCacheSig = sig;
   }
   const cache = store.phraseCache;
-  const ex = resolveExcludes(db, args.exclude);
-  if (ex.miss) return ex.miss;
-  const excludeWords = new Set(ex.words);
-  const phrases = (content: string): string[] => {
+  return (content: string): string[] => {
     let p = cache.get(content);
     if (!p) {
       p = extract(content);
@@ -477,24 +604,32 @@ export function topTopics(
       ? p.filter((ph) => !ph.split(' ').some((w) => excludeWords.has(w)))
       : p;
   };
+}
 
-  // scope. A person/1:1 scope inherently has one speaker per phrase, so the ≥2-sender anti-spam
-  // gate relaxes to ≥1 there. A conversation scope matching NOTHING must error, not silently
-  // fall through to whole-DB topics (P4).
+// Restrict top_topics to a conversation or a person, plus always-applied excludes. A person/1:1
+// scope inherently has one speaker per phrase, so the ≥2-sender anti-spam gate relaxes to ≥1
+// there. A conversation/person scope matching NOTHING must error, not silently fall through to
+// whole-DB topics (P4).
+function buildTopicsScope(
+  db: DB,
+  scope: string | undefined,
+  ex: { convIds: string[]; mris: string[] },
+): { conds: string[]; params: any[]; notes: string[]; minSenders: number } | { miss: string } {
   const conds = ['is_system=0', "content<>''"];
   const params: any[] = [];
+  const notes: string[] = [];
   let personScope = false;
-  if (args.scope && String(args.scope).startsWith('conversation:')) {
-    const term = String(args.scope).slice(13);
+  if (scope && scope.startsWith('conversation:')) {
+    const term = scope.slice(13);
     const ids = convIdsFor(db, term);
-    if (!ids.length) return `no conversation matches "${term}"`;
+    if (!ids.length) return { miss: `no conversation matches "${term}"` };
     conds.push(`conv_id in (${ids.map(() => '?').join(',')})`);
     params.push(...ids);
     const amb = convAmbiguityNote(db, term, ids);
     if (amb) notes.push(amb.replace('in:', 'scope conversation:'));
-  } else if (args.scope && String(args.scope).startsWith('person:')) {
-    const f = senderFilter(db, String(args.scope).slice(7));
-    if (f.miss) return f.miss;
+  } else if (scope && scope.startsWith('person:')) {
+    const f = senderFilter(db, scope.slice(7));
+    if (f.miss) return { miss: f.miss };
     conds.push(f.sql.replace('m.', ''));
     params.push(...f.params);
     personScope = true;
@@ -507,24 +642,38 @@ export function topTopics(
     conds.push(`sender_mri not in (${ex.mris.map(() => '?').join(',')})`);
     params.push(...ex.mris);
   }
-  const minSenders = personScope ? 1 : 2;
+  return { conds, params, notes, minSenders: personScope ? 1 : 2 };
+}
 
+// Load the in-scope messages and (by default) drop bot/app senders (28: MRI) — automated
+// "updated/status" chatter isn't a topic you discussed. Excluded from BOTH window and baseline
+// so lift isn't skewed.
+function loadTopicsMessages(
+  db: DB,
+  conds: string[],
+  params: any[],
+  includeBots: boolean | undefined,
+): { all: any[]; botExcluded: number } {
   let all = db
     .prepare(`select ts, sender_mri, content from messages where ${conds.join(' and ')}`)
     .all(...params) as any[];
-  // Bots/apps (28: MRI) are excluded by default — automated "updated/status" chatter isn't a
-  // topic you discussed. Excluded from BOTH window and baseline so lift isn't skewed.
   let botExcluded = 0;
-  if (!args.include_bots) {
+  if (!includeBots) {
     const before = all.length;
     all = all.filter((m) => !isBotMri(m.sender_mri));
     botExcluded = before - all.length;
   }
-  if (!all.length) return `${envelope(meta, deferred)}\n(no messages in scope)`;
+  return { all, botExcluded };
+}
 
-  // Window: explicit since/until (arbitrary range) overrides the enum. Baseline is always the
-  // messages BEFORE the window ("new vs history") — never after — so a topic that persists past
-  // the window isn't penalised.
+// Window: explicit since/until (arbitrary range) overrides the enum window. Baseline is always
+// the messages BEFORE the window ("new vs history") — never after — so a topic that persists
+// past the window isn't penalised. The default window anchors to the newest message actually IN
+// SCOPE (`all`), not wall-clock "now".
+function computeTopicsWindow(
+  all: any[],
+  args: TopTopicsArgs,
+): { sinceTs: number; untilTs: number; explicit: boolean } {
   const explicit = args.since != null || args.until != null;
   let maxTs = 0;
   for (const m of all) if (m.ts > maxTs) maxTs = m.ts;
@@ -534,7 +683,23 @@ export function topTopics(
   const untilTs = explicit
     ? (parseTime(args.until) ?? Number.MAX_SAFE_INTEGER)
     : Number.MAX_SAFE_INTEGER;
+  return { sinceTs, untilTs, explicit };
+}
 
+// Score each candidate phrase by lift (window rate ÷ Laplace-smoothed baseline rate) weighted by
+// log-frequency, requiring ≥3 window mentions and ≥minSenders distinct senders (anti-spam gate).
+function computeTopicRows(
+  all: any[],
+  phrases: (content: string) => string[],
+  sinceTs: number,
+  untilTs: number,
+  minSenders: number,
+  n: number,
+): {
+  rows: { ph: string; c: number; ns: number; lift: number; ex: any }[];
+  baseTotal: number;
+  win: any[];
+} {
   const baseDf = new Map<string, number>();
   let baseTotal = 0;
   for (const m of all)
@@ -569,17 +734,51 @@ export function topTopics(
     .filter((r) => r.c >= 3 && r.ns >= minSenders)
     .sort((a, b) => b.lift * Math.log2(1 + b.c) - a.lift * Math.log2(1 + a.c))
     .slice(0, n);
+  return { rows, baseTotal, win };
+}
+
+function renderTopicRows(
+  rows: { ph: string; c: number; ns: number; lift: number; ex: any }[],
+): string[] {
+  return rows.map(
+    (r, i) =>
+      `${i + 1}. "${r.ph}" ×${r.c} (${r.lift.toFixed(1)}× baseline) · ${r.ns} people\n   e.g. ${fmtTs(r.ex.ts)}: ${clip(r.ex.content, 90)}`,
+  );
+}
+
+export function topTopics(
+  store: ChatStore,
+  meta: StoreMeta,
+  deferred: boolean,
+  args: TopTopicsArgs = {},
+): string {
+  const db = store.db;
+  const bt = badTime(args, ['since', 'until']);
+  if (bt) return bt;
+  const n = Math.min(Number(args.n) || 8, 15);
+
+  const ex = resolveExcludes(db, args.exclude);
+  if (ex.miss) return ex.miss;
+  const phrases = buildPhraseExtractor(store, db, new Set(ex.words));
+
+  const scoped = buildTopicsScope(db, args.scope ? String(args.scope) : undefined, ex);
+  if ('miss' in scoped) return scoped.miss;
+  const { conds, params, notes, minSenders } = scoped;
+
+  const { all, botExcluded } = loadTopicsMessages(db, conds, params, args.include_bots);
+  if (!all.length) return `${envelope(meta, deferred)}\n(no messages in scope)`;
+
+  const { sinceTs, untilTs, explicit } = computeTopicsWindow(all, args);
+  const { rows, baseTotal, win } = computeTopicRows(all, phrases, sinceTs, untilTs, minSenders, n);
 
   if (botExcluded)
     notes.push(`excluded ${botExcluded} bot/app msgs · include_bots:true to include`);
   if (baseTotal < 30) notes.push(`baseline sparse (${baseTotal} msgs) — ×baseline is approximate`);
+  const untilLabel = untilTs === Number.MAX_SAFE_INTEGER ? 'now' : fmtTs(untilTs);
   const windowLabel = explicit
-    ? `range ${fmtTs(sinceTs)}..${untilTs === Number.MAX_SAFE_INTEGER ? 'now' : fmtTs(untilTs)}`
+    ? `range ${fmtTs(sinceTs)}..${untilLabel}`
     : `window ${args.window || '7d'}`;
-  const lines = rows.map(
-    (r, i) =>
-      `${i + 1}. "${r.ph}" ×${r.c} (${r.lift.toFixed(1)}× baseline) · ${r.ns} people\n   e.g. ${fmtTs(r.ex.ts)}: ${clip(r.ex.content, 90)}`,
-  );
+  const lines = renderTopicRows(rows);
   const head = [envelope(meta, deferred, `${windowLabel} · ${win.length} msgs`), ...notes].join(
     '\n',
   );
@@ -606,7 +805,7 @@ export function findPerson(
   } else if (q) {
     rows = db
       .prepare(
-        "select handle,mri,name,msg_count,last_ts from people where name like ? escape '\\' order by msg_count desc limit ?",
+        String.raw`select handle,mri,name,msg_count,last_ts from people where name like ? escape '\' order by msg_count desc limit ?`,
       )
       .all(`%${likeEscape(q)}%`, n) as any[];
     if (!rows.length)
