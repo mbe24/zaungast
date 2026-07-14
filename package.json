@@ -23,6 +23,7 @@
     "tsx": "node --experimental-sqlite --import tsx",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-sqlite --import tsx test/unit.ts",
+    "test:fixture": "node --experimental-sqlite --import tsx test/fixture/verify.ts",
     "test:integration": "node --experimental-sqlite --import tsx test/_inctest.ts && node --experimental-sqlite --import tsx test/_reusetest.ts && node --experimental-sqlite --import tsx test/_fbtest.ts",
     "assets": "node scripts/render-assets.mjs",
     "prepublishOnly": "npm run build"

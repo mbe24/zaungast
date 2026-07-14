@@ -16,7 +16,8 @@ Requires Node.js ≥ 22.5.
 | `npm run build` | Compile TypeScript to `dist/` and copy schema mappings. |
 | `npm run typecheck` | `tsc --noEmit`. |
 | `npm test` | Data-free unit tests (`test/unit.ts`) — run in CI. |
-| `npm run test:integration` | Full suite against a real local Teams cache (see below). |
+| `npm run test:fixture` | Generate a synthetic leveldb cache and drive the full read → ingest → tools pipeline against it — no real data; run in CI. |
+| `npm run test:integration` | Mutation/equivalence suite against a real local Teams cache (see below). |
 | `npm run dev` | Run the server from source via `tsx` (no build step). |
 | `npm run assets` | Re-render the SVG brand assets in `assets/` and `.github/` to PNG. |
 
@@ -25,12 +26,19 @@ Requires Node.js ≥ 22.5.
 - **Unit** (`npm test`) exercise the pure layers — Snappy, structured-clone decode, CRC32C,
   key coding, HTML→text, handles, topic extraction — with synthetic inputs and **no Teams
   data**. These run in CI.
-- **Integration** (`npm run test:integration`, backed by `test/_inctest.ts`, `test/_reusetest.ts`,
-  and `test/_fbtest.ts`) drive ingest, the tools, and the refresh lifecycle against a real
-  on-disk Teams cache. They can't run in CI (shipping a real cache would leak PII), so they run
-  locally. Point them at a copy of your leveldb dir: pass it as `argv[2]` to each harness, or
-  set `ZAUNGAST_TEST_DIR` (used by `npm run test:integration`, since the npm script can't take
-  a positional argument per harness).
+- **Fixture integration** (`npm run test:fixture`) generates a **synthetic** leveldb cache
+  (`test/fixture/`) — a group of CS students chatting, entirely fake and PII-free — and drives
+  the real read → ingest → tools pipeline against it, asserting the decoded content matches what
+  was generated. This is the reader's *inverse*: `test/fixture/encode.ts` writes the same byte
+  formats `src/format/chromium/*` reads (WAL, IndexedDB key coding, V8 structured-clone). It
+  runs in CI because it needs no real cache. Note: WAL-only — it doesn't emit `.ldb` SSTables,
+  so it can't yet exercise the copy-reuse/compaction paths (that needs an SSTable writer).
+- **Mutation/equivalence integration** (`npm run test:integration`, backed by `test/_inctest.ts`,
+  `test/_reusetest.ts`, `test/_fbtest.ts`) drive the refresh lifecycle — including `.ldb`
+  truncation and compaction — against a real on-disk Teams cache. They can't run in CI (shipping
+  a real cache would leak PII), so they run locally. Point them at a copy of your leveldb dir:
+  pass it as `argv[2]` to each harness, or set `ZAUNGAST_TEST_DIR` (used by `npm run
+  test:integration`, since the npm script can't take a positional argument per harness).
 
 The integration suite's backbone is an **equivalence invariant**: an incrementally-refreshed
 store must be byte-identical to a full rebuild of the same on-disk state — which keeps the

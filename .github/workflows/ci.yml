@@ -30,5 +30,9 @@ jobs:
 
       - name: Unit tests
         run: npm test
-        # Data-free unit tests only. The integration suites (npm run test:integration)
-        # need a real local Teams cache and run on a developer machine, not in CI.
+
+      - name: Fixture integration test
+        run: npm run test:fixture
+        # Generates a synthetic leveldb cache (no PII) and drives the full read -> ingest ->
+        # tools pipeline against it. The mutation/equivalence suites (npm run test:integration)
+        # still need a real local Teams cache with .ldb tables and run on a developer machine.
