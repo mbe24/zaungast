@@ -7,54 +7,56 @@
 // Copies may overlap (offset < len) → must copy byte-by-byte.
 
 export function uncompress(input: Buffer): Buffer {
-  let ip = 0
+  let ip = 0;
   // uncompressed length (varint)
-  let outLen = 0, shift = 0
+  let outLen = 0,
+    shift = 0;
   while (true) {
-    const c = input[ip++]
-    outLen += (c & 0x7f) * 2 ** shift
-    if (!(c & 0x80)) break
-    shift += 7
+    const c = input[ip++];
+    outLen += (c & 0x7f) * 2 ** shift;
+    if (!(c & 0x80)) break;
+    shift += 7;
   }
 
-  const out = Buffer.allocUnsafe(outLen)
-  let op = 0
+  const out = Buffer.allocUnsafe(outLen);
+  let op = 0;
 
   while (ip < input.length) {
-    const tag = input[ip++]
-    const type = tag & 0x03
+    const tag = input[ip++];
+    const type = tag & 0x03;
     if (type === 0) {
       // literal
-      let len = tag >> 2
+      let len = tag >> 2;
       if (len < 60) {
-        len += 1
+        len += 1;
       } else {
-        const nbytes = len - 59
-        let l = 0
-        for (let i = 0; i < nbytes; i++) l += input[ip++] * 2 ** (8 * i)
-        len = l + 1
+        const nbytes = len - 59;
+        let l = 0;
+        for (let i = 0; i < nbytes; i++) l += input[ip++] * 2 ** (8 * i);
+        len = l + 1;
       }
-      input.copy(out, op, ip, ip + len)
-      ip += len
-      op += len
+      input.copy(out, op, ip, ip + len);
+      ip += len;
+      op += len;
     } else {
-      let len: number, offset: number
+      let len: number, offset: number;
       if (type === 1) {
-        len = ((tag >> 2) & 0x07) + 4
-        offset = ((tag >> 5) << 8) | input[ip++]
+        len = ((tag >> 2) & 0x07) + 4;
+        offset = ((tag >> 5) << 8) | input[ip++];
       } else if (type === 2) {
-        len = (tag >> 2) + 1
-        offset = input[ip] | (input[ip + 1] << 8)
-        ip += 2
+        len = (tag >> 2) + 1;
+        offset = input[ip] | (input[ip + 1] << 8);
+        ip += 2;
       } else {
-        len = (tag >> 2) + 1
-        offset = (input[ip] | (input[ip + 1] << 8) | (input[ip + 2] << 16) | (input[ip + 3] << 24)) >>> 0
-        ip += 4
+        len = (tag >> 2) + 1;
+        offset =
+          (input[ip] | (input[ip + 1] << 8) | (input[ip + 2] << 16) | (input[ip + 3] << 24)) >>> 0;
+        ip += 4;
       }
-      let src = op - offset
-      for (let i = 0; i < len; i++) out[op++] = out[src++] // byte-by-byte (handles overlap)
+      let src = op - offset;
+      for (let i = 0; i < len; i++) out[op++] = out[src++]; // byte-by-byte (handles overlap)
     }
   }
-  if (op !== outLen) throw new Error(`snappy: produced ${op} bytes, expected ${outLen}`)
-  return out
+  if (op !== outLen) throw new Error(`snappy: produced ${op} bytes, expected ${outLen}`);
+  return out;
 }

@@ -1,5 +1,5 @@
 // German stopwords: function words + chat/greeting/boilerplate noise for topic extraction.
-export const code = 'de'
+export const code = 'de';
 export const stopwords = `aber alle allem allen aller alles als also am an ander andere anderem anderen anderer anderes
 anderm andern anderr anders auch auf aus bei bin bis bist da damit dann der den des dem die das dass derselbe
 derselben denselben desselben demselben dieselbe dieselben dasselbe dazu dein deine deinem deinen deiner deines
@@ -14,4 +14,4 @@ und uns unse unsem unsen unser unses unter viel vom von vor während war waren w
 welchem welchen welcher welches wenn werde werden wie wieder will wir wird wirst wo wollen wollte würde würden
 zu zum zur zwar zwischen
 hallo hi servus moin tschüss danke bitte gerne genau eben halt schon mal ja nein ok okay klar super passt gut
-gemacht machen schauen kurz frage fragen heute morgen gestern woche team meeting nachricht senden`
+gemacht machen schauen kurz frage fragen heute morgen gestern woche team meeting nachricht senden`;

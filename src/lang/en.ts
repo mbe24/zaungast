@@ -1,5 +1,5 @@
 // English stopwords: function words + chat/greeting/boilerplate noise for topic extraction.
-export const code = 'en'
+export const code = 'en';
 export const stopwords = `a about above after again against all am an and any are aren't as at be because been
 before being below between both but by can can't cannot could couldn't did didn't do does doesn't doing don't
 down during each few for from further had hadn't has hasn't have haven't having he he'd he'll he's her here
@@ -17,4 +17,4 @@ much many lot bit way sorry there wait ping quick question questions feel free b
 sort stuff etc via per still even though around already always never every fine works work working worked point
 points case cases part parts end start first last next true false null undefined nan com org net www http https
 jpg png html json xml src href div span updated created status assigned comment commented removed changed set
-value key type name id`
+value key type name id`;
