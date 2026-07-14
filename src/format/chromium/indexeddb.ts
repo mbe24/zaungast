@@ -5,6 +5,7 @@ import { readTable } from './sstable.js';
 import { parseWriteAheadLog } from './write-ahead-log.js';
 import { deserialize } from './structured-clone.js';
 import * as Snappy from './snappy.js';
+import { byCodeUnit } from '../../util/sort.js';
 import type {
   DecodedPrefix,
   DeserializeOptions,
@@ -46,6 +47,54 @@ function foldBatch(batch: WalBatch, consider: Consider): void {
   );
 }
 
+// Read each `.ldb` file and fold its entries into `consider`. When `cache` is given (the
+// copy-reuse path), a cache hit skips reading the file from disk entirely, and a clean
+// (non-lossy) parse is stored for next time — H-B: a partial parse must NEVER be cached, or
+// copy-reuse would pin itself in a permanent lossy/stale state. Returns true if any file failed
+// to read or read lossily (caller marks the whole load lossy).
+function readTablesInto(
+  dir: string,
+  files: string[],
+  consider: Consider,
+  cache?: LdbCache,
+): boolean {
+  let lossy = false;
+  for (const f of files) {
+    let res = cache?.get(f);
+    if (!res) {
+      try {
+        res = readTable(path.join(dir, f));
+      } catch (e) {
+        console.error(`skip ${f}: ${(e as Error).message}`);
+        lossy = true;
+        continue;
+      }
+      if (cache && !res.lossy) cache.set(f, res);
+    }
+    if (res.lossy) lossy = true;
+    if (foldTable(res, consider)) lossy = true;
+  }
+  return lossy;
+}
+
+// Parse each `.log` file and fold its batches into `consider`. Returns true if any log failed to
+// parse (caller marks the whole load lossy).
+function readLogsInto(dir: string, logFiles: string[], consider: Consider): boolean {
+  let lossy = false;
+  for (const lf of logFiles) {
+    let batches: WalBatch[];
+    try {
+      batches = parseWriteAheadLog(path.join(dir, lf));
+    } catch (e) {
+      console.error(`skip log ${lf}: ${(e as Error).message}`);
+      lossy = true;
+      continue;
+    }
+    for (const b of batches) foldBatch(b, consider);
+  }
+  return lossy;
+}
+
 // Collect the surviving (non-tombstone) entries plus the global high-water sequence.
 function collectLive(map: Map<string, Entry>): { live: Entry[]; maxSeq: bigint } {
   const live: Entry[] = [];
@@ -71,7 +120,7 @@ export function loadEntries(
   const files = fs
     .readdirSync(dir)
     .filter((f) => f.endsWith('.ldb'))
-    .sort();
+    .sort(byCodeUnit);
   const map = new Map<string, Entry>(); // userKeyHex -> { seq, type, key, value }
   let raw = 0,
     lossy = false;
@@ -90,18 +139,7 @@ export function loadEntries(
       });
   };
 
-  for (const f of files) {
-    let res: TableReadResult;
-    try {
-      res = readTable(path.join(dir, f));
-    } catch (e) {
-      console.error(`skip ${f}: ${(e as Error).message}`);
-      lossy = true;
-      continue;
-    }
-    if (res.lossy) lossy = true;
-    if (foldTable(res, consider)) lossy = true;
-  }
+  if (readTablesInto(dir, files, consider)) lossy = true;
 
   if (includeLog) {
     // Always read the WAL — a freshly-compacted or young DB can hold all its data in the
@@ -109,18 +147,8 @@ export function loadEntries(
     const logFiles = fs
       .readdirSync(dir)
       .filter((f) => f.endsWith('.log'))
-      .sort();
-    for (const lf of logFiles) {
-      let batches: WalBatch[];
-      try {
-        batches = parseWriteAheadLog(path.join(dir, lf));
-      } catch (e) {
-        console.error(`skip log ${lf}: ${(e as Error).message}`);
-        lossy = true;
-        continue;
-      }
-      for (const b of batches) foldBatch(b, consider);
-    }
+      .sort(byCodeUnit);
+    if (readLogsInto(dir, logFiles, consider)) lossy = true;
   }
 
   const { live, maxSeq } = collectLive(map);
@@ -136,7 +164,7 @@ export function loadEntries(
 export function loadEntriesReuse(dir: string, ldbCache: LdbCache): LoadEntriesReuseResult {
   const all = fs.readdirSync(dir);
   const ldbNow = new Set(all.filter((f) => f.endsWith('.ldb')));
-  const logNow = all.filter((f) => f.endsWith('.log')).sort();
+  const logNow = all.filter((f) => f.endsWith('.log')).sort(byCodeUnit);
 
   // compaction: any previously-cached .ldb file is gone
   let compacted = false;
@@ -162,38 +190,15 @@ export function loadEntriesReuse(dir: string, ldbCache: LdbCache): LoadEntriesRe
       });
   };
 
-  for (const f of [...ldbNow].sort()) {
-    let res = ldbCache.get(f);
-    if (!res) {
-      try {
-        res = readTable(path.join(dir, f));
-      } catch (e) {
-        console.error(`skip ${f}: ${(e as Error).message}`);
-        lossy = true;
-        continue;
-      }
-      // H-B: only cache a CLEAN parse — a partial (res.lossy) parse must be retried next refresh,
-      // not frozen in the cache (which would pin copy-reuse in a permanent lossy/stale state).
-      if (!res.lossy) ldbCache.set(f, res);
-    }
-    if (res.lossy) lossy = true;
-    if (foldTable(res, consider)) lossy = true;
-  }
+  // H-B: only cache a CLEAN parse — a partial (res.lossy) parse must be retried next refresh, not
+  // frozen in the cache (which would pin copy-reuse in a permanent lossy/stale state). Handled
+  // inside readTablesInto, which also serves cache hits without touching disk.
+  if (readTablesInto(dir, [...ldbNow].sort(byCodeUnit), consider, ldbCache)) lossy = true;
   // Prune cache entries for .ldb files no longer present (freed after compaction full-rebuild).
   // Snapshot the keys first: we delete from the map inside the loop.
   for (const f of [...ldbCache.keys()]) if (!ldbNow.has(f)) ldbCache.delete(f);
 
-  for (const lf of logNow) {
-    let batches: WalBatch[];
-    try {
-      batches = parseWriteAheadLog(path.join(dir, lf));
-    } catch (e) {
-      console.error(`skip log ${lf}: ${(e as Error).message}`);
-      lossy = true;
-      continue;
-    }
-    for (const b of batches) foldBatch(b, consider);
-  }
+  if (readLogsInto(dir, logNow, consider)) lossy = true;
 
   const { live, maxSeq } = collectLive(map);
   return { live, maxSeq, lossy, compacted };

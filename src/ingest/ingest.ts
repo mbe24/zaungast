@@ -259,6 +259,7 @@ export function applyIncremental(
     } catch {
       /* already rolled back / already committed */
     }
+    console.error(`incremental apply failed, forcing full rebuild: ${(e as Error).message}`);
     return { needFullRebuild: true, newMaxSeq: state.maxSeq, skipped: false };
   }
 

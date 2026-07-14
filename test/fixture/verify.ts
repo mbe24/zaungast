@@ -16,7 +16,6 @@ import {
   selectMapping,
   extractEntity,
   decodePrefix,
-  readStringWithLength,
   readVarint,
   utf16be,
   decodeValue,
@@ -108,7 +107,9 @@ ok(
   typeof mentionRow?.mentions === 'string' &&
     (mentionRow!.mentions as string).includes('a1000000-0000-4000-8000-000000000001'),
 );
-const systemRows = msgRows.filter((r) => String(r.messageType).startsWith('ThreadActivity/'));
+const systemRows = msgRows.filter(
+  (r) => typeof r.messageType === 'string' && r.messageType.startsWith('ThreadActivity/'),
+);
 eq('system (ThreadActivity) message count', systemRows.length, 2); // AddMember + TopicUpdate
 const selfRows = msgRows.filter((r) => r.isSentByCurrentUser === true);
 eq(
@@ -122,7 +123,6 @@ eq(
 // from src/format/index.ts) rather than via extractEntity(mapping, 'profiles').
 console.log('\n=== profiles (direct extraction — no mapping entity) ===');
 function extractProfiles(entries: Entry[]): Record<string, unknown>[] {
-  const dbNames = new Map<number, string>();
   const storeNames = new Map<string, string>();
   for (const { key, value } of entries) {
     if (key.length < 1) continue;
@@ -132,22 +132,7 @@ function extractProfiles(entries: Entry[]): Record<string, unknown>[] {
     } catch {
       continue;
     }
-    if (
-      p.databaseId === 0 &&
-      p.objectStoreId === 0 &&
-      p.indexId === 0 &&
-      key[p.headerLen] === 0xc9
-    ) {
-      const [, p2] = readStringWithLength(key, p.headerLen + 1);
-      const [name] = readStringWithLength(key, p2);
-      const [id] = readVarint(value, 0);
-      dbNames.set(id, name);
-    } else if (
-      p.databaseId > 0 &&
-      p.objectStoreId === 0 &&
-      p.indexId === 0 &&
-      key[p.headerLen] === 0x32
-    ) {
+    if (p.databaseId > 0 && p.objectStoreId === 0 && p.indexId === 0 && key[p.headerLen] === 0x32) {
       const [osId, pp] = readVarint(key, p.headerLen + 1);
       if (key[pp] === 0) storeNames.set(`${p.databaseId}:${osId}`, utf16be(value));
     }

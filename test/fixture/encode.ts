@@ -188,7 +188,7 @@ function encodeBatch(sequence: number, ops: WalOpIn[]): Buffer {
 // full WriteBatch (one per op in this fixture, so `left` is tiny) — the fragmentation loop is
 // still implemented in full for correctness/robustness if the dataset grows past one block.
 class LogWriter {
-  private chunks: Buffer[] = [];
+  private readonly chunks: Buffer[] = [];
   private blockOffset = 0;
 
   private emitPhysicalRecord(type: number, data: Buffer): void {

@@ -48,6 +48,27 @@ function isLevelDb(dir: string): boolean {
   }
 }
 
+// Collect candidate leveldb stores under one profile dir (WV2Profile_tfw, WV2Profile_*, "Default",
+// …) — the innermost step of the discovery walk, pulled out to keep discoverTeamsDbs flat.
+function candidatesInProfile(pkg: string, profile: string): DiscoverCandidate[] {
+  const idbRoot = path.join(profile, 'IndexedDB');
+  if (!existsDir(idbRoot)) return [];
+  const found: DiscoverCandidate[] = [];
+  for (const store of children(idbRoot, (n) => /^https_teams\..*\.indexeddb\.leveldb$/i.test(n))) {
+    if (isLevelDb(store)) {
+      found.push({
+        dir: store,
+        source: 'auto',
+        package: path.basename(pkg),
+        profile: path.basename(profile),
+        origin: path.basename(store).replace(/\.indexeddb\.leveldb$/i, ''),
+        mtime: mtime(store),
+      });
+    }
+  }
+  return found;
+}
+
 export function discoverTeamsDbs({ override }: DiscoverOptions = {}): DiscoverCandidate[] {
   if (override)
     return [
@@ -62,24 +83,8 @@ export function discoverTeamsDbs({ override }: DiscoverOptions = {}): DiscoverCa
     const ebweb = path.join(pkg, 'LocalCache', 'Microsoft', 'MSTeams', 'EBWebView');
     if (!existsDir(ebweb)) continue;
     // profile dirs (WV2Profile_tfw, WV2Profile_*, "Default", …)
-    for (const profile of children(ebweb, (n) => !n.startsWith('.'))) {
-      const idbRoot = path.join(profile, 'IndexedDB');
-      if (!existsDir(idbRoot)) continue;
-      for (const store of children(idbRoot, (n) =>
-        /^https_teams\..*\.indexeddb\.leveldb$/i.test(n),
-      )) {
-        if (isLevelDb(store)) {
-          candidates.push({
-            dir: store,
-            source: 'auto',
-            package: path.basename(pkg),
-            profile: path.basename(profile),
-            origin: path.basename(store).replace(/\.indexeddb\.leveldb$/i, ''),
-            mtime: mtime(store),
-          });
-        }
-      }
-    }
+    for (const profile of children(ebweb, (n) => !n.startsWith('.')))
+      candidates.push(...candidatesInProfile(pkg, profile));
   }
   candidates.sort((a, b) => b.mtime - a.mtime); // most-recently-active first
   return candidates;

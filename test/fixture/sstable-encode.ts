@@ -94,7 +94,7 @@ export function encodeTable(entries: TableEntryIn[]): Buffer {
   // Index block: one entry pointing at the sole data block. The index KEY is a separator the
   // reader never inspects during a full scan (see parseBlock's usage in readTable — only the
   // VALUE, a BlockHandle, is read) — the last user ikey in the table is as good as any.
-  const indexKey = sorted.length ? sorted[sorted.length - 1].key : Buffer.alloc(0);
+  const indexKey = sorted.length ? sorted.at(-1)!.key : Buffer.alloc(0);
   const indexContents = buildBlockContents([
     { key: indexKey, value: blockHandleBytes(dataHandle) },
   ]);

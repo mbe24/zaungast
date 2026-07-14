@@ -201,15 +201,16 @@ export function describeSchema(dir: string, args: any = {}): string {
 
   const lines: string[] = [];
   lines.push(`fingerprint ${fp.hash} · ${dbNames.size} databases · ${all.length} data stores`);
-  lines.push('');
-  lines.push('Top data stores (by record count):');
+  lines.push('', 'Top data stores (by record count):');
   for (const s of all.slice(0, Number(args.limit) || 20)) {
     lines.push(`  ${s.store} (${s.dbNorm})  ${s.count} recs`);
     if (s.nestedUnder) {
       // Show BOTH levels, labeled — the proposal's iterate/keep reference the record level while
       // content/sender/time live in the nested entries; a verifier needs to see where each lives.
-      lines.push(`     record fields: ${showFields(s.fields)}`);
-      lines.push(`     per ${s.nestedUnder}.* entry: ${showFields(s.nested!)}`);
+      lines.push(
+        `     record fields: ${showFields(s.fields)}`,
+        `     per ${s.nestedUnder}.* entry: ${showFields(s.nested!)}`,
+      );
     } else {
       lines.push(`     fields: ${showFields(s.fields)}`);
     }
@@ -243,11 +244,11 @@ export function describeSchema(dir: string, args: any = {}): string {
     proposal.match.requireStores.push(convCand[0].s.store);
   }
 
-  lines.push('');
-  lines.push('PROPOSED mapping (VERIFY before saving to src/schema/versions/teams-<ver>.json):');
-  lines.push(JSON.stringify(proposal, null, 2));
-  lines.push('');
   lines.push(
+    '',
+    'PROPOSED mapping (VERIFY before saving to src/schema/versions/teams-<ver>.json):',
+    JSON.stringify(proposal, null, 2),
+    '',
     'This is a proposal only — nothing was applied. Confirm the field paths against real records, then add the file and restart.',
   );
   return lines.join('\n');

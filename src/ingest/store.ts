@@ -24,8 +24,8 @@ export function isBotMri(mri: string | null | undefined): boolean {
 export class ChatStore {
   db: DatabaseSync;
   ftsEnabled = false;
-  private handleByFull = new Map<string, string>();
-  private usedHandles = new Set<string>();
+  private readonly handleByFull = new Map<string, string>();
+  private readonly usedHandles = new Set<string>();
 
   // Phrase-extraction cache for top_topics: content string → extracted phrases. Persists across
   // tool calls and (for unchanged content) across incremental refreshes. Invalidated when the
@@ -104,7 +104,7 @@ export class ChatStore {
     return fb;
   }
 
-  private stmt = new Map<string, ReturnType<DatabaseSync['prepare']>>();
+  private readonly stmt = new Map<string, ReturnType<DatabaseSync['prepare']>>();
   private q(sql: string) {
     let s = this.stmt.get(sql);
     if (!s) {

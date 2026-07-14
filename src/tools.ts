@@ -1,7 +1,6 @@
-import type { ChatStore } from './ingest/store.js';
-import type { StoreMeta } from './ingest/store.js';
-import { isBotMri } from './ingest/store.js';
+import { isBotMri, type ChatStore, type StoreMeta } from './ingest/store.js';
 import { makeExtractor } from './util/topics.js';
+import { byCodeUnit } from './util/sort.js';
 import type {
   ListConversationsArgs,
   ReadMessagesArgs,
@@ -459,7 +458,7 @@ export function topTopics(
   // Cache tokenization per message content (the expensive part). Per-call word excludes are
   // applied by FILTERING the cached array after retrieval — never threaded into `extract`, so
   // one call's excludes can't contaminate another's cached phrases.
-  const sig = `${nameTokens.size}:${[...nameTokens].sort().join(',').length}`;
+  const sig = `${nameTokens.size}:${[...nameTokens].sort(byCodeUnit).join(',').length}`;
   if (store.phraseCacheSig !== sig) {
     store.phraseCache.clear();
     store.phraseCacheSig = sig;

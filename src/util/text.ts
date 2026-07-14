@@ -44,7 +44,7 @@ export function htmlToText(html: string | undefined | null): string {
     .replace(/<div[^>]*>/gi, '\n')
     .replace(/<\/p>|<br\s*\/?>/gi, '\n')
     .replace(/<[^>]+>/g, '')
-    .replace(/&#x([0-9a-f]+);/gi, (_, h) => codePoint(parseInt(h, 16)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => codePoint(Number.parseInt(h, 16)))
     .replace(/&#(\d+);/g, (_, n) => codePoint(Number(n)))
     .replace(/&\w+;/g, (m) => ENTITIES[m] ?? ENTITIES[m.toLowerCase()] ?? ' ')
     .replace(/[ \t]+/g, ' ')

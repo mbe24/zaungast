@@ -131,13 +131,17 @@ function buildReplychainRecord(conv: ConversationDef): Record<string, unknown> {
 function buildOps(): { key: Buffer; value: Buffer }[] {
   const ops: { key: Buffer; value: Buffer }[] = [];
 
-  ops.push(dbNameRow(DB_CONVERSATIONS.id, DB_CONVERSATIONS.name));
-  ops.push(dbNameRow(DB_REPLYCHAINS.id, DB_REPLYCHAINS.name));
-  ops.push(dbNameRow(DB_PROFILES.id, DB_PROFILES.name));
+  ops.push(
+    dbNameRow(DB_CONVERSATIONS.id, DB_CONVERSATIONS.name),
+    dbNameRow(DB_REPLYCHAINS.id, DB_REPLYCHAINS.name),
+    dbNameRow(DB_PROFILES.id, DB_PROFILES.name),
+  );
 
-  ops.push(storeNameRow(DB_CONVERSATIONS.id, DB_CONVERSATIONS.osId, DB_CONVERSATIONS.store));
-  ops.push(storeNameRow(DB_REPLYCHAINS.id, DB_REPLYCHAINS.osId, DB_REPLYCHAINS.store));
-  ops.push(storeNameRow(DB_PROFILES.id, DB_PROFILES.osId, DB_PROFILES.store));
+  ops.push(
+    storeNameRow(DB_CONVERSATIONS.id, DB_CONVERSATIONS.osId, DB_CONVERSATIONS.store),
+    storeNameRow(DB_REPLYCHAINS.id, DB_REPLYCHAINS.osId, DB_REPLYCHAINS.store),
+    storeNameRow(DB_PROFILES.id, DB_PROFILES.osId, DB_PROFILES.store),
+  );
 
   for (const conv of CONVERSATIONS) {
     ops.push(
@@ -286,7 +290,7 @@ export function removeLdb(dir: string, filename: string): void {
 // (readTable) so this stays a faithful "recompact" rather than a hand-rolled parse.
 export function rewriteLdbDropping(dir: string, filename: string, dropUserKey: Buffer): void {
   const { entries } = readTable(path.join(dir, filename));
-  const kept = entries.filter(([ikey]) => !ikey.subarray(0, ikey.length - 8).equals(dropUserKey));
+  const kept = entries.filter(([ikey]) => !ikey.subarray(0, -8).equals(dropUserKey));
   fs.writeFileSync(
     path.join(dir, filename),
     encodeTable(kept.map(([key, value]) => ({ key, value }))),

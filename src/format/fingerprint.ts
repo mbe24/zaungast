@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 // records. See ./index.ts for the wider picture.
 import { decodePrefix, readStringWithLength, readVarint, utf16be } from './chromium/indexeddb.js';
 import { deserialize } from './chromium/structured-clone.js';
+import { byCodeUnit } from '../util/sort.js';
 import type { DecodedPrefix, Entry, FingerprintResult, FingerprintStore } from './types.js';
 
 // Build a stable, PII-free fingerprint of the Teams IndexedDB schema:
@@ -19,12 +20,6 @@ function normalizeDbName(name: string): string {
     .replace(/:\d+:/g, ':<n>:')
     .replace(/_\d+_/g, '_<n>_');
 }
-
-// Deterministic, locale-independent string order (UTF-16 code-unit order — what the default
-// Array.prototype.sort already gives, made explicit). The fingerprint hash is derived from
-// sorted store/field names, so this MUST NOT be localeCompare: locale collation would make the
-// same schema hash differently on a differently-configured machine.
-const byCodeUnit = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 // Chromium keeps its IndexedDB schema catalog as metadata rows: database names in the (0,0,0)
 // keyspace under marker 0xc9, store names in the (db,0,0) keyspace under 0x32; object data
@@ -49,6 +44,29 @@ function readStoreNameRow(
   const [osId, pp] = readVarint(key, p.headerLen + 1);
   if (key[pp] !== 0) return null;
   return { sk: `${p.databaseId}:${osId}`, name: utf16be(value) };
+}
+
+// Build normalized, sorted store descriptors from the raw db-name / store-name / sampled-field
+// maps the scan below collects. Normalizing (stripping GUIDs/locale/build tokens) and sorting
+// happen here so the fingerprint hash only ever depends on stable content, never scan order.
+function buildStores(
+  dbNames: Map<number, string>,
+  storeNames: Map<string, string>,
+  sampleKeys: Map<string, Set<string>>,
+): FingerprintStore[] {
+  const stores: FingerprintStore[] = [];
+  for (const [sk, storeName] of storeNames) {
+    const dbId = Number(sk.split(':')[0]);
+    const dbName = dbNames.get(dbId);
+    if (!dbName) continue;
+    stores.push({
+      db: normalizeDbName(dbName),
+      store: storeName,
+      fields: [...(sampleKeys.get(sk) || [])].sort(byCodeUnit),
+    });
+  }
+  stores.sort((a, b) => byCodeUnit(a.db + a.store, b.db + b.store));
+  return stores;
 }
 
 export function fingerprint(
@@ -98,18 +116,7 @@ export function fingerprint(
   }
 
   // Assemble normalized store descriptors.
-  const stores: FingerprintStore[] = [];
-  for (const [sk, storeName] of storeNames) {
-    const dbId = Number(sk.split(':')[0]);
-    const dbName = dbNames.get(dbId);
-    if (!dbName) continue;
-    stores.push({
-      db: normalizeDbName(dbName),
-      store: storeName,
-      fields: [...(sampleKeys.get(sk) || [])].sort(byCodeUnit),
-    });
-  }
-  stores.sort((a, b) => byCodeUnit(a.db + a.store, b.db + b.store));
+  const stores = buildStores(dbNames, storeNames, sampleKeys);
 
   const canonical = JSON.stringify(stores.map((s) => [s.db, s.store, s.fields]));
   const hash = crypto.createHash('sha256').update(canonical).digest('hex').slice(0, 16);

@@ -4,7 +4,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ingest, applyIncremental } from '../src/ingest/ingest.js';
-import { loadEntries, loadEntriesReuse } from '../src/format/index.js';
+import {
+  loadEntries,
+  loadEntriesReuse,
+  decodePrefix,
+  entityTargets,
+  loadMapping,
+  selectMapping,
+  fingerprint,
+} from '../src/format/index.js';
+import { byCodeUnit } from '../src/util/sort.js';
 
 const DIR = process.argv[2] ?? process.env.ZAUNGAST_TEST_DIR;
 if (!DIR) {
@@ -26,7 +35,7 @@ const ok = (n: string, c: boolean, d = '') => {
 function liveSig(live: any[]): string {
   return live
     .map((e) => `${e.key.toString('latin1')}#${e.seq}#${e.type}`)
-    .sort()
+    .sort(byCodeUnit)
     .join('|');
 }
 function copyDir(src: string): string {
@@ -149,13 +158,6 @@ console.log('\n=== F. truncated (lossy) new .ldb → lossy, not cached (so it re
 }
 
 // ---- Session-level: copy-reuse mode must equal reparse mode after identical mutations ----
-import {
-  decodePrefix,
-  entityTargets,
-  loadMapping,
-  selectMapping,
-  fingerprint,
-} from '../src/format/index.js';
 import { crc32c } from '../src/format/chromium/sstable.js';
 import { fileURLToPath } from 'node:url';
 
