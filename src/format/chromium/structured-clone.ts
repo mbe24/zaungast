@@ -67,6 +67,14 @@ class Reader {
   }
 
   varint(): number {
+    // Fast path: single-byte varint (high bit clear) — the common case. `this.buf[pos]` is
+    // `undefined` when past end; `undefined < 0x80` is false, so we correctly fall into the
+    // loop below which throws 'varint ran off end' (error behavior preserved).
+    const c0 = this.buf[this.pos];
+    if (c0 < 0x80) {
+      this.pos++;
+      return c0;
+    }
     let v = 0,
       shift = 0;
     while (true) {
@@ -148,57 +156,59 @@ class Reader {
   }
 
   value(): unknown {
+    // Hoist trace once: the per-case log-string arguments are only built when tracing is on.
+    const trace = this.trace;
     this.skipPadding();
     if (this.pos >= this.buf.length) throw this.err('value() past end');
     const tag = this.buf[this.pos++];
     switch (tag) {
       case 0x5f:
-        this.log('undefined');
+        if (trace) this.log('undefined');
         return undefined;
       case 0x30:
-        this.log('null');
+        if (trace) this.log('null');
         return null;
       case 0x54:
-        this.log('true');
+        if (trace) this.log('true');
         return true;
       case 0x46:
-        this.log('false');
+        if (trace) this.log('false');
         return false;
       case 0x49: {
         const v = this.zigzag();
-        this.log(`int32 ${v}`);
+        if (trace) this.log(`int32 ${v}`);
         return v;
       }
       case 0x55: {
         const v = this.varint();
-        this.log(`uint32 ${v}`);
+        if (trace) this.log(`uint32 ${v}`);
         return v;
       }
       case 0x4e: {
         const d = this.double();
-        this.log(`double ${d}`);
+        if (trace) this.log(`double ${d}`);
         return d;
       }
       case 0x44: {
         const d = this.double();
-        this.log(`date ${d}`);
+        if (trace) this.log(`date ${d}`);
         return new Date(d);
       }
       case 0x5a:
         return this.bigint(); // 'Z' bigint
       case 0x6e: {
         const d = this.double();
-        this.log(`NumberObj ${d}`);
+        if (trace) this.log(`NumberObj ${d}`);
         return d;
       } // 'n' Number object
       case 0x79:
-        this.log('BoolObj');
+        if (trace) this.log('BoolObj');
         return true; // 'y' true object
       case 0x78:
-        this.log('BoolObj');
+        if (trace) this.log('BoolObj');
         return false; // 'x' false object
       case 0x73:
-        this.log('StringObj');
+        if (trace) this.log('StringObj');
         return this.value(); // 's' String object → wraps a string value
       case 0x7a:
         return this.bigint(); // 'z' BigInt object
@@ -210,42 +220,46 @@ class Reader {
         return this.arrayBufferView(); // 'V' ArrayBufferView
       case 0x22: {
         const n = this.varint();
-        const s = this.bytes(n).toString('latin1');
-        this.log(`str1(${n}) ${JSON.stringify(s.slice(0, 24))}`);
+        // Decode straight from the backing buffer (no intermediate subarray alloc).
+        const s = this.buf.toString('latin1', this.pos, this.pos + n);
+        this.pos += n;
+        if (trace) this.log(`str1(${n}) ${JSON.stringify(s.slice(0, 24))}`);
         return s;
       }
       case 0x63: {
         const n = this.varint();
-        const s = this.bytes(n).toString('utf16le');
-        this.log(`str2(${n})`);
+        const s = this.buf.toString('utf16le', this.pos, this.pos + n);
+        this.pos += n;
+        if (trace) this.log(`str2(${n})`);
         return s;
       }
       case 0x53: {
         const n = this.varint();
-        const s = this.bytes(n).toString('utf8');
-        this.log(`utf8(${n})`);
+        const s = this.buf.toString('utf8', this.pos, this.pos + n);
+        this.pos += n;
+        if (trace) this.log(`utf8(${n})`);
         return s;
       }
       case 0x6f:
-        this.log('BEGIN_OBJ');
+        if (trace) this.log('BEGIN_OBJ');
         return this.object();
       case 0x41:
-        this.log('BEGIN_DENSE');
+        if (trace) this.log('BEGIN_DENSE');
         return this.denseArray();
       case 0x61:
-        this.log('BEGIN_SPARSE');
+        if (trace) this.log('BEGIN_SPARSE');
         return this.sparseArray();
       case 0x3b:
-        this.log('BEGIN_MAP');
+        if (trace) this.log('BEGIN_MAP');
         return this.map();
       case 0x27:
-        this.log('BEGIN_SET');
+        if (trace) this.log('BEGIN_SET');
         return this.set();
       case 0x52:
         return this.regexp();
       case 0x5e: {
         const id = this.varint();
-        this.log(`objref #${id}`);
+        if (trace) this.log(`objref #${id}`);
         return this.objects[id];
       } // '^'
       default:
@@ -259,7 +273,7 @@ class Reader {
     const bitfield = this.varint();
     const byteLength = bitfield >> 1;
     this.pos += byteLength; // skip digits (we don't need exact bigint value)
-    this.log(`bigint ${byteLength}B`);
+    if (this.trace) this.log(`bigint ${byteLength}B`);
     return 0n;
   }
 
@@ -269,7 +283,7 @@ class Reader {
     const bytes = this.bytes(byteLength);
     const buf = Buffer.from(bytes);
     this.objects.push(buf); // ArrayBuffers get an object id
-    this.log(`arrayBuffer ${byteLength}B`);
+    if (this.trace) this.log(`arrayBuffer ${byteLength}B`);
     return buf;
   }
 
@@ -280,7 +294,7 @@ class Reader {
     this.varint(); // byteOffset
     const len = this.varint(); // byteLength
     this.varint(); // flags (tracking / length-tracking)
-    this.log(`arrayBufferView ${len}B`);
+    if (this.trace) this.log(`arrayBufferView ${len}B`);
     return { __arrayBufferView: len };
   }
 
@@ -297,7 +311,7 @@ class Reader {
     }
     this.pos++; // consume '{'
     this.varint(); // property count
-    this.log('END_OBJ');
+    if (this.trace) this.log('END_OBJ');
     return obj;
   }
 
@@ -317,7 +331,7 @@ class Reader {
     this.pos++;
     this.varint();
     this.varint();
-    this.log(`END_DENSE len=${len}`);
+    if (this.trace) this.log(`END_DENSE len=${len}`);
     return arr;
   }
 
@@ -335,7 +349,7 @@ class Reader {
     this.pos++;
     this.varint();
     this.varint();
-    this.log(`END_SPARSE len=${len}`);
+    if (this.trace) this.log(`END_SPARSE len=${len}`);
     return arr;
   }
 
@@ -351,7 +365,7 @@ class Reader {
     }
     this.pos++;
     this.varint();
-    this.log('END_MAP');
+    if (this.trace) this.log('END_MAP');
     return m;
   }
 
@@ -365,7 +379,7 @@ class Reader {
     }
     this.pos++;
     this.varint();
-    this.log('END_SET');
+    if (this.trace) this.log('END_SET');
     return s;
   }
 
