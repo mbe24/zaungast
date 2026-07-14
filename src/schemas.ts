@@ -28,6 +28,10 @@ export const readMessagesShape = {
     .string()
     .optional()
     .describe('a message id (the m:… value from a search hit) to center a window on'),
+  reactions: z
+    .enum(['full'])
+    .optional()
+    .describe('"full" lists every reactor by name (default shows a capped summary)'),
 };
 
 export const searchShape = {

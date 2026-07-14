@@ -50,11 +50,16 @@ export class ChatStore {
         mri text primary key, handle text unique, name text,
         msg_count integer default 0, last_ts integer default 0
       );
+      -- Name source from the Teams profiles store, independent of who posted. recomputeDerived
+      -- rebuilds people from message senders only, so a reactor/mention who never posted has no
+      -- people row — profiles fills that gap (26% of reactors in real data). Never cleared by the
+      -- derived recompute; reconciled directly by the ingest profiles pass.
+      create table profiles(mri text primary key, name text);
       create table messages(
         conv_id text, id text, chain_key text, version integer default 0, ts integer,
         sender_mri text, sender_name text, kind text, is_mine integer default 0,
         is_system integer default 0, has_attach integer default 0, mentions_me integer default 0,
-        content text,
+        content text, reactions text,
         primary key(conv_id, id)
       );
       create index msg_conv_ts on messages(conv_id, ts);
@@ -141,18 +146,21 @@ export class ChatStore {
     hasAttach: number;
     mentionsMe: number;
     content: string;
+    reactions?: string | null;
   }) {
     // H3: the conflict path must update is_system/is_mine/kind too — soft-deletes are edits
-    // that clear content and flip these flags. Version guard keeps newest-wins.
+    // that clear content and flip these flags. Version guard keeps newest-wins. Reactions ride the
+    // same record (a reaction change rewrites the reply-chain record with a fresh seq), so the
+    // >= guard lets an equal-version rewrite refresh them.
     this.q(
       `insert into messages
-      (conv_id,id,chain_key,version,ts,sender_mri,sender_name,kind,is_mine,is_system,has_attach,mentions_me,content)
-      values (?,?,?,?,?,?,?,?,?,?,?,?,?)
+      (conv_id,id,chain_key,version,ts,sender_mri,sender_name,kind,is_mine,is_system,has_attach,mentions_me,content,reactions)
+      values (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       on conflict(conv_id,id) do update set
         chain_key=excluded.chain_key, version=excluded.version, ts=excluded.ts,
         sender_mri=excluded.sender_mri, sender_name=excluded.sender_name, kind=excluded.kind,
         is_mine=excluded.is_mine, is_system=excluded.is_system, has_attach=excluded.has_attach,
-        mentions_me=excluded.mentions_me, content=excluded.content
+        mentions_me=excluded.mentions_me, content=excluded.content, reactions=excluded.reactions
       where excluded.version >= messages.version`,
     ).run(
       m.convId,
@@ -168,7 +176,28 @@ export class ChatStore {
       m.hasAttach,
       m.mentionsMe,
       m.content,
+      m.reactions ?? null,
     );
+  }
+
+  // Reconcile the profiles name-source: replace-all from the current live profiles rows. Cheap
+  // (hundreds of rows) and idempotent, so both full and incremental paths just call it.
+  replaceProfiles(rows: { mri: string; name: string }[]) {
+    this.db.exec('delete from profiles');
+    const ins = this.q('insert or replace into profiles(mri,name) values(?,?)');
+    for (const r of rows) if (r.mri && r.name) ins.run(r.mri, r.name);
+  }
+
+  // Best display name for an MRI: message-sender name first (canonical, most-recent), then the
+  // profiles store, else null. Used to resolve reactors — who may never have posted.
+  nameForMri(mri: string): string | null {
+    const r = this.q(
+      `select coalesce(nullif(pe.name,''), nullif(pr.name,'')) name
+       from (select ? mri) x
+       left join people pe on pe.mri=x.mri
+       left join profiles pr on pr.mri=x.mri`,
+    ).get(mri) as any;
+    return r?.name ?? null;
   }
 
   deleteMessagesByChain(chainKey: string) {

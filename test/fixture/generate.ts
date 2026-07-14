@@ -82,6 +82,7 @@ function messageId(m: MessageDef): string {
 function buildMessageRecord(m: MessageDef, conv: ConversationDef): Record<string, unknown> {
   const hasMentions = !!m.mentions;
   const hasFiles = !!m.files;
+  const hasReactions = !!m.reactions;
   return {
     id: messageId(m),
     type: 'Message', // the mapping's `keep` filter requires this literal value
@@ -98,10 +99,13 @@ function buildMessageRecord(m: MessageDef, conv: ConversationDef): Record<string
     content: m.content,
     isSentByCurrentUser: !!m.isSentByCurrentUser,
     properties:
-      hasMentions || hasFiles
+      hasMentions || hasFiles || hasReactions
         ? {
             mentions: hasMentions ? JSON.stringify(m.mentions) : undefined,
             files: hasFiles ? m.files : undefined,
+            // Real shape: an array of { key, users: [ { mri, time } ] }, stored as-is (not
+            // stringified) — encodeValue already recurses through nested arrays/objects.
+            emotions: hasReactions ? m.reactions : undefined,
           }
         : undefined,
   };

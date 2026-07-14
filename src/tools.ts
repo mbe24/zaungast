@@ -1,6 +1,7 @@
 import { isBotMri, type ChatStore, type StoreMeta } from './ingest/store.js';
 import { makeExtractor } from './util/topics.js';
 import { byCodeUnit } from './util/sort.js';
+import { reactionGlyph } from './util/emoji.js';
 import type {
   ListConversationsArgs,
   ReadMessagesArgs,
@@ -247,7 +248,69 @@ function fetchMessageRows(
 
 // Render message rows oldest→newest, collapsing consecutive same-sender runs (by MRI, not
 // display name) unless more than 15 minutes have passed since the previous message.
-function renderMessageLines(rows: any[]): string[] {
+// Reaction summary for one message. Two-level cap, tuned against real data (see plan/vision.md
+// #6): emoji groups sorted by reactor-count desc; groups 1–3 are NAMED (≤3 names, you-first then
+// most-recent, per-group `+K` overflow), groups 4–5 show glyph+count only, group 6+ collapses to
+// `+N more` (N = remaining reactor count, so the histogram total stays honest). `full` drops all
+// caps and names everyone — for "did person X react?". Returns '' when there are no reactions.
+function renderReactions(
+  reactionsJson: string | null | undefined,
+  store: ChatStore,
+  selfMri: string | null,
+  full: boolean,
+): string {
+  if (!reactionsJson) return '';
+  let groups: { k: string; u: [string, number][] }[];
+  try {
+    groups = JSON.parse(reactionsJson);
+  } catch {
+    return '';
+  }
+  if (!Array.isArray(groups) || groups.length === 0) return '';
+  const nameOf = (mri: string): string =>
+    mri === selfMri ? 'you' : store.nameForMri(mri) || '(unknown)';
+  // Order reactors within a group: you first, then most-recent by reaction time.
+  const orderedNames = (u: [string, number][]): string[] => {
+    const sorted = u.slice().sort((a, b) => {
+      const aSelf = a[0] === selfMri,
+        bSelf = b[0] === selfMri;
+      if (aSelf !== bSelf) return aSelf ? -1 : 1;
+      return b[1] - a[1];
+    });
+    return sorted.map((x) => nameOf(x[0]));
+  };
+  // Order emoji groups: most reactors first; ties broken by earliest reaction, then key.
+  const ranked = groups
+    .map((g) => ({ g, count: g.u.length, min: Math.min(...g.u.map((x) => x[1] || Infinity)) }))
+    .sort((a, b) => b.count - a.count || a.min - b.min || byCodeUnit(a.g.k, b.g.k));
+
+  const parts: string[] = [];
+  let tail = 0;
+  ranked.forEach(({ g, count }, i) => {
+    const glyph = reactionGlyph(g.k);
+    if (full) {
+      parts.push(`${glyph} ${count} · ${orderedNames(g.u).join(', ')}`);
+    } else if (i < 3) {
+      const names = orderedNames(g.u).slice(0, 3);
+      const extra = count - names.length;
+      parts.push(`${glyph} ${count} · ${names.join(', ')}${extra > 0 ? ` +${extra}` : ''}`);
+    } else if (i < 5) {
+      parts.push(`${glyph} ${count}`);
+    } else {
+      tail += count;
+    }
+  });
+  if (tail > 0) parts.push(`+${tail} more`);
+  return parts.join('   ');
+}
+
+interface ReactionCtx {
+  store: ChatStore;
+  selfMri: string | null;
+  full: boolean;
+}
+
+function renderMessageLines(rows: any[], rx?: ReactionCtx): string[] {
   let lastMri: string | null = null;
   let lastTs = 0;
   return rows.map((r) => {
@@ -257,7 +320,9 @@ function renderMessageLines(rows: any[]): string[] {
     const senderLabel = r.is_mine ? 'ME' : r.sender_name || '(unknown)';
     const who = collapsed ? '  ↳' : senderLabel;
     const marks = (r.has_attach ? ' [attachment]' : '') + (r.mentions_me ? ' [@me]' : '');
-    return `${fmtTs(r.ts)} ${who}> ${clip(r.content, 280)}${marks}`;
+    const line = `${fmtTs(r.ts)} ${who}> ${clip(r.content, 280)}${marks}`;
+    const rxLine = rx ? renderReactions(r.reactions, rx.store, rx.selfMri, rx.full) : '';
+    return rxLine ? `${line}\n      ${rxLine}` : line;
   });
 }
 
@@ -335,7 +400,11 @@ export function readMessages(
   const oldest = rows[0];
   const olderCursor = oldest && oldest.ts > earliest ? `older:${oldest.ts}:${oldest.id}` : '';
   const head = buildReadMessagesHead(conv, rows.length, total, earliest, newest, olderCursor);
-  const lines = renderMessageLines(rows);
+  const lines = renderMessageLines(rows, {
+    store,
+    selfMri: (meta as any).selfMri as string | null,
+    full: String(args.reactions) === 'full',
+  });
   return `${envelope(meta, deferred)}\n${head}\n${lines.join('\n') || '(no messages)'}`;
 }
 

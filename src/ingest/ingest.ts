@@ -48,6 +48,29 @@ function loadMappings() {
     .map((f) => loadMapping(path.join(VERSIONS_DIR, f)));
 }
 
+// Compact `properties.emotions` to the minimum the renderer needs and a stable JSON string:
+// per emoji key, the reactor MRIs with their reaction times. Order-normalized (key asc, then
+// mri asc) so an unchanged reaction set serializes identically across refreshes. Returns null
+// when there are no reactions, so the column stays empty for the ~84% of messages without any.
+export function compactReactions(emotions: any): string | null {
+  if (!Array.isArray(emotions) || emotions.length === 0) return null;
+  const groups: { k: string; u: [string, number][] }[] = [];
+  for (const e of emotions) {
+    if (!e || typeof e.key !== 'string' || !Array.isArray(e.users) || e.users.length === 0)
+      continue;
+    const u: [string, number][] = [];
+    for (const usr of e.users) {
+      if (usr && usr.mri) u.push([String(usr.mri), Number(usr.time) || 0]);
+    }
+    if (u.length === 0) continue;
+    u.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    groups.push({ k: e.key, u });
+  }
+  if (groups.length === 0) return null;
+  groups.sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : 0));
+  return JSON.stringify(groups);
+}
+
 // Insert message rows (each carries __key = its reply-chain record key → chain_key).
 function applyMessages(store: ChatStore, msgRows: any[], selfMri: string | null): Set<string> {
   const changedIds = new Set<string>();
@@ -73,10 +96,20 @@ function applyMessages(store: ChatStore, msgRows: any[], selfMri: string | null)
       hasAttach: hasAttachment(m, rawHtml) ? 1 : 0,
       mentionsMe,
       content: htmlToText(rawHtml),
+      reactions: compactReactions(m.reactions),
     });
     changedIds.add(String(m.id));
   }
   return changedIds;
+}
+
+// Populate the profiles name-source (mri → display name). Whole-store replace each ingest.
+function applyProfiles(store: ChatStore, live: any[], mapping: any) {
+  const rows = extractEntity(live, mapping, 'profile').map((r: any) => ({
+    mri: String(r.mri ?? ''),
+    name: String(r.name ?? ''),
+  }));
+  store.replaceProfiles(rows);
 }
 
 function applyConversationMeta(store: ChatStore, convRows: any[]) {
@@ -162,6 +195,7 @@ export function ingest(dir: string, opts: { seqCap?: bigint } = {}): Ingested {
   store.db.exec('BEGIN');
   applyConversationMeta(store, convRows);
   applyMessages(store, msgRows, selfMri);
+  applyProfiles(store, live, mapping);
   store.db.exec('COMMIT');
   store.recomputeDerived(selfMri);
   store.refreshFts(null);
@@ -234,6 +268,8 @@ export function applyIncremental(
     for (const ck of changedChainKeys) store.deleteMessagesByChain(ck);
     const newMsgRows = extractEntity(newLive, state.mapping, 'message', state.msgTargets);
     applyMessages(store, newMsgRows, state.selfMri);
+    // profiles are cheap (hundreds of rows) → whole-store replace from full live each refresh.
+    applyProfiles(store, live, state.mapping);
 
     // conversations are cheap → fully reconcile each refresh: re-apply live meta, drop orphans.
     const convRows = extractEntity(live, state.mapping, 'conversation', state.convTargets);

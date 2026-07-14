@@ -34,9 +34,35 @@ cache span and an `older:` cursor for paging.
 | `since` / `until` | Time window (ISO or relative). |
 | `cursor` | The `older:…` value from a previous result, to page back. |
 | `around` | A message id (`m:…` from a search hit) to center a window on. |
+| `reactions` | `full` to list every reactor by name (default shows a capped summary). |
 
 Consecutive messages from the same sender are collapsed with `↳`. Markers: `[@me]`,
 `[attachment]`.
+
+### Reactions
+
+Messages that were reacted to get a reaction line underneath, e.g.:
+
+```
+14:32 Ada> Ship it 🚀
+      👍 4 · Grace, Bob, Carol +1   ❤️ 2 · Dave, Eve
+```
+
+How it's rendered (tuned against real data, where 16% of messages carry reactions):
+
+- **Emoji, not shortcodes.** Teams stores reactions as internal keys (`like`, `1f389_partypopper`,
+  `plusone;0-weu-…`). We render the actual glyph — a codepoint is read straight from the key when
+  present, otherwise a shortcode table maps it (`fire`→🔥, `party`→🎉); an unmappable org-custom
+  key falls back to a cleaned name.
+- **Names come from your local cache only** (message authors + the local `profiles` store) — no
+  lookups leave the machine. `(you)` is listed first when you reacted.
+- **Capped for token economy, ordered by popularity.** Each emoji shows a count and up to 3
+  names (you first, then most recent); extra reactors on that emoji show as `+K`. A message rarely
+  has more than one emoji — but when it does, the emojis are sorted most-reacted first, the top 3
+  are named, the next 2 show count-only, and any beyond that collapse into `+N more`. On real data
+  this fully renders 99.9% of reacted messages without a `+N more`.
+- `reactions: full` drops the caps and lists every reactor for every emoji — for when you need to
+  know whether a *specific* person reacted.
 
 ## `search`
 

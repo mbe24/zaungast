@@ -69,7 +69,17 @@ export const COURSE_BOT: Profile = {
   jobTitle: 'Bot',
   department: 'Computer Science',
 };
-export const ALL_PROFILES: Profile[] = [...STUDENTS, COURSE_BOT];
+// Margaret Hamilton has a profile in ALL_PROFILES but never authors a message anywhere in this
+// fixture — this proves reactor display names can resolve via the profiles store alone, not just
+// via message senders. She only ever appears as a reactor (see the study-group welcome message).
+export const SILENT_PROFILE: Profile = {
+  mri: '8:orgid:a1000000-0000-4000-8000-000000000007',
+  displayName: 'Margaret Hamilton',
+  email: 'margaret.hamilton@example.edu',
+  jobTitle: 'Student',
+  department: 'Computer Science',
+};
+export const ALL_PROFILES: Profile[] = [...STUDENTS, COURSE_BOT, SILENT_PROFILE];
 
 const [ada, alan, grace, barbara, edsger, radia] = STUDENTS;
 export const SELF = ada; // the fixture models Ada Lovelace's own Teams cache
@@ -93,6 +103,9 @@ export interface MessageDef {
   mentions?: { mri: string; displayName: string }[];
   files?: string[];
   systemType?: string; // when set, messageType becomes `ThreadActivity/${systemType}` and content is a control blob
+  // Real shape: message.properties.emotions = [ { key, users: [ { mri, time } ] } ]. `key` is a
+  // Teams reaction shortcode (e.g. 'like', 'heart', '1f389_partypopper'); `users` is per-reactor.
+  reactions?: { key: string; users: { mri: string; time: number }[] }[];
 }
 
 let t = BASE_TS;
@@ -101,6 +114,18 @@ const next = (): number => {
   t += 5 * MIN;
   return v;
 }; // 5-minute cadence, strictly increasing
+
+// Separate counter for reaction timestamps, deliberately offset well past every message ts this
+// fixture can produce (a handful of messages at a 5-minute cadence never reach 200 * MIN past
+// BASE_TS), so every reaction decodes as happening after its message was sent. Each call yields a
+// distinct, strictly increasing time — used only to make reactor recency-ordering testable; the
+// exact values carry no other meaning.
+let rt = BASE_TS + 200 * MIN;
+const nextReactionTime = (): number => {
+  const v = rt;
+  rt += MIN;
+  return v;
+};
 
 export const CONVERSATIONS: ConversationDef[] = [
   {
@@ -125,6 +150,8 @@ export const CONVERSATIONS: ConversationDef[] = [
         content: "Haha fitting given the professor's name. Let's meet before class.",
         ts: next(),
         isSentByCurrentUser: true,
+        // Single emoji, single reactor.
+        reactions: [{ key: 'like', users: [{ mri: alan.mri, time: nextReactionTime() }] }],
       },
     ],
   },
@@ -147,6 +174,20 @@ export const CONVERSATIONS: ConversationDef[] = [
         content: '<p>Welcome to the <b>CS101</b> study group!</p>',
         ts: next(),
         files: ['https://example.invalid/files/syllabus.pdf'],
+        // Multiple distinct emojis (3), per-emoji grouping. The 'surprised' group's only reactor
+        // is SILENT_PROFILE (Margaret Hamilton), who never authors a message in this fixture —
+        // see SILENT_PROFILE's declaration above for why that matters.
+        reactions: [
+          { key: 'heart', users: [{ mri: radia.mri, time: nextReactionTime() }] },
+          {
+            key: '1f389_partypopper',
+            users: [
+              { mri: edsger.mri, time: nextReactionTime() },
+              { mri: barbara.mri, time: nextReactionTime() }, // author reacting to own message
+            ],
+          },
+          { key: 'surprised', users: [{ mri: SILENT_PROFILE.mri, time: nextReactionTime() }] },
+        ],
       },
       {
         sender: edsger,
@@ -157,6 +198,20 @@ export const CONVERSATIONS: ConversationDef[] = [
         sender: COURSE_BOT,
         content: 'Reminder: Assignment 4 is due Friday at 11:59pm.',
         ts: next(),
+        // Single emoji, several (5) reactors — exercises a name-cap-of-3 + "+2" overflow. One
+        // reactor (ada) is SELF/the current user reacting to someone else's message.
+        reactions: [
+          {
+            key: 'laugh',
+            users: [
+              { mri: alan.mri, time: nextReactionTime() },
+              { mri: grace.mri, time: nextReactionTime() },
+              { mri: barbara.mri, time: nextReactionTime() },
+              { mri: edsger.mri, time: nextReactionTime() },
+              { mri: ada.mri, time: nextReactionTime() }, // ada === SELF (current user)
+            ],
+          },
+        ],
       },
       {
         sender: radia,

@@ -23,10 +23,10 @@ import {
 } from '../../src/format/index.js';
 import type { Entry } from '../../src/format/types.js';
 import { ingest } from '../../src/ingest/ingest.js';
-import { search, listConversations, topTopics, findPerson } from '../../src/tools.js';
+import { search, listConversations, topTopics, findPerson, readMessages } from '../../src/tools.js';
 import { generateFixture } from './generate.js';
 import { stringWithLength, utf16beBytes, idbValue, blobIndexHost, blobHost } from './encode.js';
-import { ALL_PROFILES, CONVERSATIONS, STUDENTS } from './data.js';
+import { ALL_PROFILES, CONVERSATIONS, STUDENTS, SILENT_PROFILE } from './data.js';
 
 let pass = 0,
   fail = 0;
@@ -166,9 +166,73 @@ eq(
   CONVERSATIONS.flatMap((c) => c.messages).filter((m) => m.isSentByCurrentUser).length,
 );
 
-// ---- 4. profiles: no mapping entity exists for this store yet, so extract it directly using
-// the same primitives resolver.ts's schemaTables/entityTargets use under the hood (all exported
-// from src/format/index.ts) rather than via extractEntity(mapping, 'profiles').
+// ---- 3b. reactions (decode round-trip): message.properties.emotions, mapped by the
+// 'reactions' field ("properties.emotions") in teams-2026-07.json, must decode back out of the
+// generated leveldb bytes exactly as declared in data.ts — keys, reactor MRIs, per-reactor
+// counts, and times. This is decode-level only: no tool-rendering assertions here.
+console.log('\n=== reactions (decode round-trip) ===');
+type DecodedReactions = { key: string; users: { mri: string; time: number }[] }[];
+const [ada] = STUDENTS; // ada === SELF, the current user, per data.ts
+const reactedMessages = CONVERSATIONS.flatMap((c) => c.messages).filter((m) => m.reactions);
+eq('reacted message count seeded', reactedMessages.length, 3);
+for (const m of reactedMessages) {
+  const row = msgRows.find((r) => r.id === String(m.ts));
+  eq(`reactions decode round-trip: "${m.content.slice(0, 40)}..."`, row?.reactions, m.reactions);
+}
+
+const oneReactorRow = msgRows.find(
+  (r) => r.content === "Haha fitting given the professor's name. Let's meet before class.",
+);
+const oneReactorReactions = oneReactorRow?.reactions as DecodedReactions | undefined;
+eq('single emoji / single reactor: key', oneReactorReactions?.[0]?.key, 'like');
+eq(
+  'single emoji / single reactor: exactly one reactor',
+  oneReactorReactions?.[0]?.users?.length,
+  1,
+);
+
+const manyReactorsRow = msgRows.find(
+  (r) => r.content === 'Reminder: Assignment 4 is due Friday at 11:59pm.',
+);
+const manyReactorsReactions = manyReactorsRow?.reactions as DecodedReactions | undefined;
+const manyReactorsUsers = manyReactorsReactions?.[0]?.users ?? [];
+eq('single emoji / several reactors: reactor count >= 4', manyReactorsUsers.length >= 4, true);
+ok(
+  'single emoji / several reactors: self (ada) is a reactor',
+  manyReactorsUsers.some((u) => u.mri === ada.mri),
+);
+ok(
+  'single emoji / several reactors: all reactor times distinct',
+  new Set(manyReactorsUsers.map((u) => u.time)).size === manyReactorsUsers.length,
+);
+
+const multiEmojiRow = msgRows.find(
+  (r) => r.content === '<p>Welcome to the <b>CS101</b> study group!</p>',
+);
+const multiEmojiReactions = (multiEmojiRow?.reactions as DecodedReactions | undefined) ?? [];
+eq('multiple distinct emojis: emoji-group count', multiEmojiReactions.length, 3);
+eq(
+  'multiple distinct emojis: emoji keys',
+  multiEmojiReactions.map((g) => g.key).sort(),
+  ['1f389_partypopper', 'heart', 'surprised'].sort(),
+);
+const nonAuthorGroup = multiEmojiReactions.find((g) => g.key === 'surprised');
+ok(
+  'non-authoring profile (SILENT_PROFILE) resolves as a reactor',
+  nonAuthorGroup?.users?.length === 1 && nonAuthorGroup.users[0].mri === SILENT_PROFILE.mri,
+);
+ok(
+  'SILENT_PROFILE never authors a message in this fixture',
+  !CONVERSATIONS.flatMap((c) => c.messages).some((m) => m.sender.mri === SILENT_PROFILE.mri),
+);
+ok(
+  'SILENT_PROFILE has a profile in ALL_PROFILES',
+  ALL_PROFILES.some((p) => p.mri === SILENT_PROFILE.mri),
+);
+// ---- 4. profiles: cross-check the store the hard way — extract it directly using the same
+// primitives resolver.ts's schemaTables/entityTargets use under the hood (all exported from
+// src/format/index.ts). This is an independent check of the raw store; ingest itself now reads
+// it via the 'profile' mapping entity (used above for reactor-name resolution).
 console.log('\n=== profiles (direct extraction — no mapping entity) ===');
 function extractProfiles(entries: Entry[]): Record<string, unknown>[] {
   const storeNames = new Map<string, string>();
@@ -232,6 +296,46 @@ const topics = topTopics(store, meta, false, {});
 ok('top_topics returns non-empty output', topics.trim().length > 0);
 const person = findPerson(store, meta, false, { query: 'Ada Lovelace' });
 ok('find_person resolves a seeded student', /Ada Lovelace/i.test(person), person.slice(0, 200));
+
+// ---- 7. reactions RENDERED by read_messages: glyph mapping, two-level cap, you-first, and the
+// crucial end-to-end guarantee — a profiles-only reactor (never posted) resolves to a NAME in the
+// actual tool output, not just in the decoded record.
+console.log('\n=== reactions (read_messages rendering) ===');
+const renderConv = (contentLike: string, opts: Record<string, unknown> = {}): string => {
+  const row = store.db
+    .prepare(`select conv_id from messages where content like ? limit 1`)
+    .get(`%${contentLike}%`) as any;
+  const c = store.db.prepare('select handle from conversations where id=?').get(row.conv_id) as any;
+  return readMessages(store, meta, false, { conversation: c.handle, limit: 60, ...opts });
+};
+
+const single = renderConv('Haha fitting');
+ok('single reactor renders glyph + name (like → 👍)', /👍 1 · Alan Turing/.test(single), single);
+
+const multi = renderConv('study group');
+ok('multi-emoji: heart glyph rendered', /❤️/.test(multi));
+ok('multi-emoji: codepoint key 1f389_partypopper → 🎉', /🎉/.test(multi));
+ok('multi-emoji: surprised → 😮', /😮/.test(multi));
+ok(
+  'profiles-only reactor resolves to a NAME in rendered output (Margaret Hamilton)',
+  /Margaret Hamilton/.test(multi),
+  multi,
+);
+
+const many = renderConv('Assignment 4 is due');
+ok('capped: 5 reactors show count + you-first (😂 5 · you)', /😂 5 · you/.test(many), many);
+ok('capped: overflow beyond 3 names shows +2', /😂 5 · you[^\n]*\+2/.test(many), many);
+
+const full = renderConv('Assignment 4 is due', { reactions: 'full' });
+ok(
+  'full mode: every reactor named, no +N overflow',
+  /😂 5 · you/.test(full) &&
+    /Edsger Dijkstra/.test(full) &&
+    /Alan Turing/.test(full) &&
+    !/😂 5[^\n]*\+\d/.test(full), // no overflow on the reaction line (tz offset in header also has +N)
+  full,
+);
+
 store.close();
 
 fs.rmSync(dir, { recursive: true, force: true });

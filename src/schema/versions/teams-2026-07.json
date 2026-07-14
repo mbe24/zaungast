@@ -36,7 +36,16 @@
         "content": "content",
         "isSentByCurrentUser": "isSentByCurrentUser",
         "mentions": "properties.mentions",
-        "files": "properties.files"
+        "files": "properties.files",
+        "reactions": "properties.emotions"
+      }
+    },
+    "profile": {
+      "db": "*profile*",
+      "store": "profiles",
+      "fields": {
+        "mri": "mri",
+        "name": "displayName"
       }
     }
   }
