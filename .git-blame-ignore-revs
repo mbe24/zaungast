@@ -1,0 +1,7 @@
+# Revisions git blame should skip, so lines are attributed to their real author
+# rather than a mechanical reformat. Enable locally with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# (GitHub applies it automatically.)
+
+# style: format src/ and test/ with Prettier — the first Prettier pass (whitespace only)
+9a0023e9b4c9f5cadd95672887123ac64c63f237
