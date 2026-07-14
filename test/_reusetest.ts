@@ -255,8 +255,8 @@ console.log(
     seqC = loadEntries(dC).maxSeq;
   fs.writeFileSync(path.join(dR, 'zz9.log'), craftDeletionLog(msgStoreKey(dR)!, seqR + 1000n));
   fs.writeFileSync(path.join(dC, 'zz9.log'), craftDeletionLog(msgStoreKey(dC)!, seqC + 1000n));
-  const mR = sR.refreshNow(false),
-    mC = sC.refreshNow(false);
+  sR.refreshNow(false);
+  const mC = sC.refreshNow(false);
   ok('copy-reuse refresh is incremental', mC.refreshMode === 'incremental');
   ok(
     'copy-reuse store == reparse store after deletion',
@@ -330,8 +330,8 @@ console.log(
       .sort();
     fs.rmSync(path.join(d, ldbs[0])); // "compaction" removes an input; data genuinely gone
   }
-  const mC = sC.refreshNow(false),
-    mR = sR.refreshNow(false);
+  sC.refreshNow(false);
+  sR.refreshNow(false);
   const dump = (s: any) =>
     JSON.stringify(s.db.prepare('select conv_id,id from messages order by conv_id,id').all());
   // both may go degraded (removing an .ldb can break the schema mapping) OR match — the invariant
@@ -392,7 +392,7 @@ console.log(
   const good = fs.readFileSync(path.join(snapDir, victim));
   fs.writeFileSync(path.join(snapDir, victim), good.subarray(0, Math.floor(good.length / 2)));
   s.cur.state.maxSeq = 0n; // force re-derivation so a wedge would show as missing data
-  const m = s.refreshNow(false);
+  s.refreshNow(false);
   const n = (s.getStore().db.prepare('select count(*) n from messages').get() as any).n;
   const full = ingest(d);
   ok(

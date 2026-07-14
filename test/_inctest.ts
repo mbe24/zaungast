@@ -416,7 +416,6 @@ console.log(
     craftDeletionLog(msgStoreKey(loadEntries(copy).live)!, maxSeq + 1000n),
   );
   const orig = s.store.recomputeDerived.bind(s.store);
-  let thrown = false;
   (s.store as any).recomputeDerived = () => {
     throw new Error('boom (simulated post-commit failure)');
   };
@@ -457,7 +456,6 @@ console.log(
   } catch {
     threw = true;
   }
-  const after = fs.readdirSync(os.tmpdir()).filter((d) => d.startsWith('zaungast-')).length;
   ok('refresh threw on a vanished source', threw);
   s.dispose();
   const final = fs.readdirSync(os.tmpdir()).filter((d) => d.startsWith('zaungast-')).length;

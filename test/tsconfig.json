@@ -1,0 +1,13 @@
+// Type-checking config for the tests. The root tsconfig only includes src/ (with rootDir: src),
+// so test/ files fall outside the project and don't get Node's ambient types (Buffer, process, …)
+// in the editor. This extends the base config, widens rootDir to the repo root, and includes the
+// tests — so editors and `tsc -p test` type-check them with the same strictness as src/.
+// noEmit: these are run via tsx, never compiled to dist.
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "..",
+    "noEmit": true
+  },
+  "include": ["**/*.ts"]
+}

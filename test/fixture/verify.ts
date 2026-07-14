@@ -197,7 +197,7 @@ ok(
 );
 const topics = topTopics(store, meta, false, {});
 ok('top_topics returns non-empty output', topics.trim().length > 0);
-const person = findPerson(store, meta, false, { name: 'Ada Lovelace' });
+const person = findPerson(store, meta, false, { query: 'Ada Lovelace' });
 ok('find_person resolves a seeded student', /Ada Lovelace/i.test(person), person.slice(0, 200));
 store.close();
 

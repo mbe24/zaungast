@@ -14,7 +14,8 @@ Requires Node.js ≥ 22.5.
 | Script | Description |
 |--------|-------------|
 | `npm run build` | Compile TypeScript to `dist/` and copy schema mappings. |
-| `npm run typecheck` | `tsc --noEmit`. |
+| `npm run typecheck` | `tsc --noEmit` over `src/`. |
+| `npm run typecheck:test` | Type-check `test/` (via `test/tsconfig.json`; run in CI). |
 | `npm run format` | Format `src/` + `test/` with Prettier. |
 | `npm run format:check` | Verify formatting (run in CI). |
 | `npm test` | Data-free unit tests (`test/unit.ts`) — run in CI. |

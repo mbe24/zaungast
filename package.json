@@ -22,6 +22,7 @@
     "dev": "node --experimental-sqlite --import tsx src/index.ts",
     "tsx": "node --experimental-sqlite --import tsx",
     "typecheck": "tsc --noEmit",
+    "typecheck:test": "tsc -p test/tsconfig.json",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
     "test": "node --experimental-sqlite --import tsx test/unit.ts",
