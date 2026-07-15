@@ -1,6 +1,14 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Session } from './session.js';
-import { listConversations, readMessages, search, topTopics, findPerson } from './tools.js';
+import {
+  listConversations,
+  readMessages,
+  search,
+  topTopics,
+  findPerson,
+  listEvents,
+  listCalls,
+} from './tools.js';
 import { describeSchema } from './tools/describeSchema.js';
 import {
   listConversationsShape,
@@ -8,6 +16,8 @@ import {
   searchShape,
   topTopicsShape,
   findPersonShape,
+  listEventsShape,
+  listCallsShape,
   describeSchemaShape,
 } from './schemas.js';
 
@@ -94,6 +104,26 @@ export function buildServer(session: Session): McpServer {
       inputSchema: findPersonShape,
     },
     async (args) => run(findPerson, args),
+  );
+
+  server.registerTool(
+    'list_events',
+    {
+      title: 'List calendar events',
+      description: `Your calendar: meetings and appointments, defaulting to a FORWARD window (today..+7d — pass since/until to look elsewhere). type:meeting|appointment|all; query/attendee filter by substring. Metadata by default (attendee names/response tallies, no join URLs — those are never stored); include_body only works on a single narrowed-down event and stays off for [confidential] events regardless. ${HISTORY_NOTE}`,
+      inputSchema: listEventsShape,
+    },
+    async (args) => run(listEvents, args),
+  );
+
+  server.registerTool(
+    'list_calls',
+    {
+      title: 'List call history',
+      description: `Your call log: who called whom, when, and for how long. direction:Outgoing|Incoming, missed:true for the callState=Missed subset, participant filters by resolved counterpart/group name. Deleted calls are filtered out. Tags recorded/voicemail/spam calls and pivots a recording to the chat message that announced it (read_messages around:) when cached. ${HISTORY_NOTE}`,
+      inputSchema: listCallsShape,
+    },
+    async (args) => run(listCalls, args),
   );
 
   server.registerTool(

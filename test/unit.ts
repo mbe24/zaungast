@@ -8,6 +8,7 @@ import { htmlToText, isSystemMessage, mentionedMris } from '../src/util/text.js'
 import { makeHandle } from '../src/util/handles.js';
 import { makeExtractor } from '../src/util/topics.js';
 import { isBotMri } from '../src/ingest/store.js';
+import { parseTime } from '../src/tools.js';
 
 let pass = 0,
   fail = 0;
@@ -95,6 +96,19 @@ console.log('=== topic extraction ===');
   ok('drops stopwords', !p.includes('the') && !p.includes('is'));
   const de = makeExtractor(new Set()).phrases('das seminar ist abgesagt');
   ok('drops German stopwords (das/ist)', !de.includes('das') && !de.includes('ist'));
+}
+
+console.log('=== parseTime future/past relatives ===');
+{
+  const now = Date.UTC(2026, 6, 15, 12, 0, 0); // 2026-07-15T12:00:00Z, fixed
+  eq('+7d is 7 days in the future', parseTime('+7d', now), now + 7 * 864e5);
+  eq('-7d is 7 days in the past', parseTime('-7d', now), now - 7 * 864e5);
+  eq('+24h is 24 hours in the future', parseTime('+24h', now), now + 24 * 36e5);
+  eq('-24h is 24 hours in the past', parseTime('-24h', now), now - 24 * 36e5);
+  eq('+30m is 30 minutes in the future', parseTime('+30m', now), now + 30 * 6e4);
+  ok('ISO date still parses', parseTime('2026-07-01') === Date.parse('2026-07-01'));
+  ok('bare epoch number still parses', parseTime(12345) === 12345);
+  ok('garbage is undefined', parseTime('not-a-date') === undefined);
 }
 
 console.log(`\n==== ${pass} passed, ${fail} failed ====`);

@@ -66,6 +66,47 @@ export class ChatStore {
       create index msg_sender_ts on messages(sender_mri, ts);
       create index msg_ts on messages(ts);
       create index msg_chain on messages(chain_key);
+      create table events(
+        id text primary key,
+        series_id text,              -- seriesMasterId; groups a recurring series (one c: handle + run-collapse)
+        kind text,                   -- 'meeting' | 'appointment' (cid-first, computed at ingest)
+        subject text,
+        start_ts integer default 0,
+        end_ts integer default 0,
+        is_all_day integer default 0,
+        location text,
+        organizer_name text,
+        organizer_email text,
+        cid text,                    -- 19:meeting_ thread id (meetings only) for chat pivot; null otherwise
+        my_response text,            -- Accepted/Tentative/Declined/None
+        show_as text,                -- Busy/Free/Tentative/OOF
+        is_cancelled integer default 0,
+        is_confidential integer default 0,  -- sensitivityLabelId truthy OR doNotForward
+        has_attach integer default 0,
+        attendees text,              -- compact JSON [{n,e,r}] = name,email,response; capped at render
+        body_html text               -- raw bodyContent; used ONLY behind include_body
+      );
+      create index events_start on events(start_ts);
+      create index events_series on events(series_id);
+      create table calls(
+        id text primary key,         -- callId
+        call_type text,              -- TwoParty/MultiParty/… (verbatim; no fixed enum)
+        direction text,              -- Outgoing/Incoming
+        state text,                  -- callState verbatim
+        is_missed integer default 0, -- derived from callState (Missed only; see applyCalls)
+        start_ts integer default 0,
+        duration_ms integer default 0,
+        counterpart_mri text,        -- TwoParty other party: target if Outgoing else originator (its .id)
+        participants text,           -- compact JSON [{mri,name}] for MultiParty
+        group_thread_id text,        -- groupChatThreadId (19:…@thread.v2) for MultiParty chat pivot
+        has_recording integer default 0,
+        recording_link text,         -- JSON {conversationId, linkedMessageId} for read_messages pivot
+        has_voicemail integer default 0,
+        spam_level text,             -- spamRiskLevel; render [spam?] only when risky (non-null/none)
+        is_current_user_part integer default 1,
+        is_deleted integer default 0 -- filtered by default
+      );
+      create index calls_start on calls(start_ts);
     `);
     if (this.ftsEnabled) {
       this.db.exec(`create virtual table messages_fts using fts5(
@@ -186,6 +227,110 @@ export class ChatStore {
     this.db.exec('delete from profiles');
     const ins = this.q('insert or replace into profiles(mri,name) values(?,?)');
     for (const r of rows) if (r.mri && r.name) ins.run(r.mri, r.name);
+  }
+
+  // Whole-store replace for the calendar → events table, every ingest (full and incremental
+  // alike — see replaceProfiles's comment: cheap (hundreds of rows), idempotent, and makes the
+  // incremental==full-rebuild invariant trivially hold).
+  replaceEvents(
+    rows: {
+      id: string;
+      seriesId: string | null;
+      kind: string;
+      subject: string | null;
+      startTs: number;
+      endTs: number;
+      isAllDay: number;
+      location: string | null;
+      organizerName: string | null;
+      organizerEmail: string | null;
+      cid: string | null;
+      myResponse: string | null;
+      showAs: string | null;
+      isCancelled: number;
+      isConfidential: number;
+      hasAttach: number;
+      attendees: string | null;
+      bodyHtml: string | null;
+    }[],
+  ) {
+    this.db.exec('delete from events');
+    const ins = this.q(
+      `insert or replace into events(
+        id,series_id,kind,subject,start_ts,end_ts,is_all_day,location,organizer_name,organizer_email,
+        cid,my_response,show_as,is_cancelled,is_confidential,has_attach,attendees,body_html)
+      values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    );
+    for (const r of rows)
+      ins.run(
+        r.id,
+        r.seriesId,
+        r.kind,
+        r.subject,
+        r.startTs,
+        r.endTs,
+        r.isAllDay,
+        r.location,
+        r.organizerName,
+        r.organizerEmail,
+        r.cid,
+        r.myResponse,
+        r.showAs,
+        r.isCancelled,
+        r.isConfidential,
+        r.hasAttach,
+        r.attendees,
+        r.bodyHtml,
+      );
+  }
+
+  // Whole-store replace for call-history → calls table. Same rationale as replaceEvents/replaceProfiles.
+  replaceCalls(
+    rows: {
+      id: string;
+      callType: string | null;
+      direction: string | null;
+      state: string | null;
+      isMissed: number;
+      startTs: number;
+      durationMs: number;
+      counterpartMri: string | null;
+      participants: string | null;
+      groupThreadId: string | null;
+      hasRecording: number;
+      recordingLink: string | null;
+      hasVoicemail: number;
+      spamLevel: string | null;
+      isCurrentUserPart: number;
+      isDeleted: number;
+    }[],
+  ) {
+    this.db.exec('delete from calls');
+    const ins = this.q(
+      `insert or replace into calls(
+        id,call_type,direction,state,is_missed,start_ts,duration_ms,counterpart_mri,participants,
+        group_thread_id,has_recording,recording_link,has_voicemail,spam_level,is_current_user_part,is_deleted)
+      values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    );
+    for (const r of rows)
+      ins.run(
+        r.id,
+        r.callType,
+        r.direction,
+        r.state,
+        r.isMissed,
+        r.startTs,
+        r.durationMs,
+        r.counterpartMri,
+        r.participants,
+        r.groupThreadId,
+        r.hasRecording,
+        r.recordingLink,
+        r.hasVoicemail,
+        r.spamLevel,
+        r.isCurrentUserPart,
+        r.isDeleted,
+      );
   }
 
   // Best display name for an MRI: message-sender name first (canonical, most-recent), then the

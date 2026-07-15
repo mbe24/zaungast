@@ -112,6 +112,142 @@ function applyProfiles(store: ChatStore, live: any[], mapping: any) {
   store.replaceProfiles(rows);
 }
 
+// startTime/endTime decode as a real JS Date (structured-clone tag 0x44) in production Teams
+// data, but the fixture encoder (test/fixture/encode.ts) has no Date case and emits a plain ISO
+// string instead — accept both, plus a raw epoch number for good measure.
+function toEpochMs(v: unknown): number {
+  if (v instanceof Date) return v.getTime();
+  if (typeof v === 'string') {
+    const t = Date.parse(v);
+    return Number.isNaN(t) ? 0 : t;
+  }
+  if (typeof v === 'number') return v;
+  return 0;
+}
+
+// Compact an event's attendees[] ({name,address,role,status.response}) to JSON [{n,e,r}]
+// (name, email, response), order-normalized (name then email) so an unchanged attendee list
+// serializes identically across refreshes. Returns null when there are no named attendees.
+function compactAttendees(attendees: unknown): string | null {
+  if (!Array.isArray(attendees) || attendees.length === 0) return null;
+  const out = attendees
+    // Drop room/equipment resources — Teams lists them as attendees (with `type: "Resource"`;
+    // `role` is uniformly "User" and doesn't distinguish them), but they're not people and would
+    // otherwise inflate the attendee count/tally. The room itself is carried in `location`.
+    .filter((a: any) => String(a?.type ?? '').toLowerCase() !== 'resource')
+    .map((a: any) => ({
+      n: String(a?.name ?? ''),
+      e: String(a?.address ?? ''),
+      r: String(a?.status?.response ?? ''),
+    }))
+    .filter((x) => x.n || x.e);
+  if (!out.length) return null;
+  out.sort((a, b) => (a.n === b.n ? (a.e < b.e ? -1 : a.e > b.e ? 1 : 0) : a.n < b.n ? -1 : 1));
+  return JSON.stringify(out);
+}
+
+// Populate the events table (calendar) — whole-store replace each ingest, exactly like
+// applyProfiles (see store.ts's replaceEvents doc). `RecurringMaster` rows are series templates,
+// never rendered as an event, so they're dropped here rather than inserted and filtered later.
+function applyEvents(store: ChatStore, live: any[], mapping: any) {
+  const rows = extractEntity(live, mapping, 'event');
+  const out = [];
+  for (const r of rows as any[]) {
+    if (r.eventType === 'RecurringMaster') continue;
+    // objectId verified unique+present across all 407 real rows (0 missing, 0 duplicates) — see
+    // the spec's ingest report. Per-row fallback to the leveldb record key (__key, the same
+    // mechanism extractEntity attaches for messages) stays as defensive belt-and-braces in case a
+    // future/odd row ever lacks one.
+    const id = r.id ? String(r.id) : String(r.__key);
+    const cidRaw = typeof r.cid === 'string' ? r.cid : null;
+    const cid = cidRaw && cidRaw.includes('19:meeting_') ? cidRaw : null;
+    const isMeeting = !!cid || r.isOnlineMeeting === true;
+    const isConfidential = !!r.sensitivityLabelId || r.doNotForward === true;
+    out.push({
+      id,
+      seriesId: r.seriesId != null ? String(r.seriesId) : null,
+      kind: isMeeting ? 'meeting' : 'appointment',
+      subject: r.subject != null ? String(r.subject) : null,
+      startTs: toEpochMs(r.startTime),
+      endTs: toEpochMs(r.endTime),
+      isAllDay: r.isAllDay === true ? 1 : 0,
+      location: r.location != null ? String(r.location) : null,
+      organizerName: r.organizerName != null ? String(r.organizerName) : null,
+      organizerEmail: r.organizerEmail != null ? String(r.organizerEmail) : null,
+      cid,
+      myResponse: r.myResponse != null ? String(r.myResponse) : null,
+      showAs: r.showAs != null ? String(r.showAs) : null,
+      isCancelled: r.isCancelled === true ? 1 : 0,
+      isConfidential: isConfidential ? 1 : 0,
+      hasAttach: r.hasAttachments === true ? 1 : 0,
+      attendees: compactAttendees(r.attendees),
+      bodyHtml: r.bodyContent != null ? String(r.bodyContent) : null,
+    });
+  }
+  store.replaceEvents(out);
+}
+
+// Compact a MultiParty call's participantList[] ({id,displayName,…}) to JSON [{mri,name}],
+// order-normalized by mri. Returns null when empty (TwoParty calls don't carry this).
+function compactParticipants(list: unknown): string | null {
+  if (!Array.isArray(list) || list.length === 0) return null;
+  const out = list
+    .map((p: any) => ({
+      mri: String(p?.id ?? ''),
+      name: p?.displayName != null ? String(p.displayName) : null,
+    }))
+    .filter((x) => x.mri);
+  if (!out.length) return null;
+  out.sort((a, b) => (a.mri < b.mri ? -1 : a.mri > b.mri ? 1 : 0));
+  return JSON.stringify(out);
+}
+
+// A recording/transcript's pointer to the chat message that announced it — never the media
+// itself (cloud-only, out of scope; see plan/feature.calendar-meeting.md). Prefers the recording
+// link, falls back to the transcript's.
+function recordingLinkOf(r: any): string | null {
+  const lm = r.recordings?.[0]?.linkedMessage ?? r.transcript?.linkedMessage;
+  if (!lm?.conversationId || !lm?.linkedMessageId) return null;
+  return JSON.stringify({
+    conversationId: String(lm.conversationId),
+    linkedMessageId: String(lm.linkedMessageId),
+  });
+}
+
+// Populate the calls table (call-history) — whole-store replace each ingest, like applyEvents.
+// `is_missed` maps ONLY callState==='Missed' (the real data's other observed value, 'Declined',
+// is a deliberate reject — not a miss — see the ingest report for the full enumeration).
+function applyCalls(store: ChatStore, live: any[], mapping: any) {
+  const rows = extractEntity(live, mapping, 'call');
+  const out = [];
+  for (const r of rows as any[]) {
+    const direction = r.callDirection != null ? String(r.callDirection) : null;
+    const counterpart = direction === 'Outgoing' ? r.target : r.originator;
+    const counterpartMri = counterpart?.id != null ? String(counterpart.id) : null;
+    const state = r.callState != null ? String(r.callState) : null;
+    const callType = r.callType != null ? String(r.callType) : null;
+    out.push({
+      id: r.id ? String(r.id) : String(r.__key),
+      callType,
+      direction,
+      state,
+      isMissed: state === 'Missed' ? 1 : 0,
+      startTs: toEpochMs(r.startTime),
+      durationMs: Number(r.durationInMs) || 0,
+      counterpartMri,
+      participants: callType === 'MultiParty' ? compactParticipants(r.participantList) : null,
+      groupThreadId: r.groupChatThreadId != null ? String(r.groupChatThreadId) : null,
+      hasRecording: Array.isArray(r.recordings) && r.recordings.length > 0 ? 1 : 0,
+      recordingLink: recordingLinkOf(r),
+      hasVoicemail: r.voicemailMetadata ? 1 : 0,
+      spamLevel: r.spamRiskLevel != null ? String(r.spamRiskLevel) : null,
+      isCurrentUserPart: r.isCurrentUserPartOfCall === false ? 0 : 1,
+      isDeleted: r.isDeleted === true ? 1 : 0,
+    });
+  }
+  store.replaceCalls(out);
+}
+
 function applyConversationMeta(store: ChatStore, convRows: any[]) {
   for (const c of convRows) {
     if (!c.id) continue;
@@ -196,6 +332,8 @@ export function ingest(dir: string, opts: { seqCap?: bigint } = {}): Ingested {
   applyConversationMeta(store, convRows);
   applyMessages(store, msgRows, selfMri);
   applyProfiles(store, live, mapping);
+  applyEvents(store, live, mapping);
+  applyCalls(store, live, mapping);
   store.db.exec('COMMIT');
   store.recomputeDerived(selfMri);
   store.refreshFts(null);
@@ -268,8 +406,12 @@ export function applyIncremental(
     for (const ck of changedChainKeys) store.deleteMessagesByChain(ck);
     const newMsgRows = extractEntity(newLive, state.mapping, 'message', state.msgTargets);
     applyMessages(store, newMsgRows, state.selfMri);
-    // profiles are cheap (hundreds of rows) → whole-store replace from full live each refresh.
+    // profiles/events/calls are all cheap (hundreds of rows) → whole-store replace from the
+    // full live set each refresh, exactly like profiles — this is what keeps the
+    // incremental==full-rebuild invariant trivially true for them.
     applyProfiles(store, live, state.mapping);
+    applyEvents(store, live, state.mapping);
+    applyCalls(store, live, state.mapping);
 
     // conversations are cheap → fully reconcile each refresh: re-apply live meta, drop orphans.
     const convRows = extractEntity(live, state.mapping, 'conversation', state.convTargets);

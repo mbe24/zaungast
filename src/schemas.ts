@@ -71,6 +71,34 @@ export const findPersonShape = {
   n: z.number().int().min(1).max(25).optional().describe('default 8'),
 };
 
+export const listEventsShape = {
+  type: z.enum(['meeting', 'appointment', 'all']).optional().describe('default all'),
+  query: z.string().optional().describe('subject substring'),
+  attendee: z.string().optional().describe('attendee name/email substring'),
+  since: z.string().optional().describe('ISO date or relative like -7d/+7d/-24h'),
+  until: z.string().optional().describe('ISO date or relative; default window is today..+7d'),
+  limit: z.number().int().min(1).max(100).optional().describe('default 30'),
+  include_body: z
+    .boolean()
+    .optional()
+    .describe(
+      'include the event body (htmlToText, URLs elided to hostnames); suppressed for [confidential] events regardless',
+    ),
+  hide_cancelled: z
+    .boolean()
+    .optional()
+    .describe('filter out [cancelled] events; shown by default'),
+};
+
+export const listCallsShape = {
+  direction: z.enum(['Outgoing', 'Incoming']).optional(),
+  missed: z.boolean().optional().describe('only calls with callState=Missed'),
+  participant: z.string().optional().describe('counterpart/participant name substring'),
+  since: z.string().optional().describe('ISO date or relative like -7d/-24h'),
+  until: z.string().optional(),
+  limit: z.number().int().min(1).max(100).optional().describe('default 30'),
+};
+
 export const describeSchemaShape = {
   limit: z.number().int().min(1).max(60).optional().describe('max stores to list (default 20)'),
 };
@@ -80,4 +108,6 @@ export type ReadMessagesArgs = z.infer<z.ZodObject<typeof readMessagesShape>>;
 export type SearchArgs = z.infer<z.ZodObject<typeof searchShape>>;
 export type TopTopicsArgs = z.infer<z.ZodObject<typeof topTopicsShape>>;
 export type FindPersonArgs = z.infer<z.ZodObject<typeof findPersonShape>>;
+export type ListEventsArgs = z.infer<z.ZodObject<typeof listEventsShape>>;
+export type ListCallsArgs = z.infer<z.ZodObject<typeof listCallsShape>>;
 export type DescribeSchemaArgs = z.infer<z.ZodObject<typeof describeSchemaShape>>;

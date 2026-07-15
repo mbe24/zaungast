@@ -23,10 +23,18 @@ import {
 } from '../../src/format/index.js';
 import type { Entry } from '../../src/format/types.js';
 import { ingest } from '../../src/ingest/ingest.js';
-import { search, listConversations, topTopics, findPerson, readMessages } from '../../src/tools.js';
+import {
+  search,
+  listConversations,
+  topTopics,
+  findPerson,
+  readMessages,
+  listEvents,
+  listCalls,
+} from '../../src/tools.js';
 import { generateFixture } from './generate.js';
 import { stringWithLength, utf16beBytes, idbValue, blobIndexHost, blobHost } from './encode.js';
-import { ALL_PROFILES, CONVERSATIONS, STUDENTS, SILENT_PROFILE } from './data.js';
+import { ALL_PROFILES, CONVERSATIONS, STUDENTS, SILENT_PROFILE, EVENTS, CALLS } from './data.js';
 
 let pass = 0,
   fail = 0;
@@ -274,12 +282,85 @@ const adaProfile = profileRows.find((r) => r.mri === STUDENTS[0].mri);
 eq('profile displayName matches', adaProfile?.displayName, 'Ada Lovelace');
 eq('profile email matches', adaProfile?.email, 'ada.lovelace@example.edu');
 
+// ---- 4b. extractEntity: event (calendar) — decode round-trip against test/fixture/data.ts ----
+console.log('\n=== extractEntity: event ===');
+const eventRows = extractEntity(live, mapping, 'event');
+eq('event row count (raw, incl. RecurringMaster)', eventRows.length, EVENTS.length);
+const cachedMeetingRow = eventRows.find((r) => r.id === 'evt-meeting-cached');
+eq('cached-meeting subject decodes', cachedMeetingRow?.subject, 'CS101 Midterm Review Session');
+eq(
+  'cached-meeting cid decodes via skypeTeamsDataObject.cid',
+  cachedMeetingRow?.cid,
+  '19:meeting_998877@thread.v2',
+);
+ok(
+  'cached-meeting attendees array decodes raw (4: 3 people + 1 Resource room)',
+  Array.isArray(cachedMeetingRow?.attendees) && (cachedMeetingRow!.attendees as any[]).length === 4,
+);
+const masterRow = eventRows.find((r) => r.id === 'evt-series-master');
+eq(
+  'RecurringMaster eventType decodes (still present at extraction level)',
+  masterRow?.eventType,
+  'RecurringMaster',
+);
+const confRow = eventRows.find((r) => r.id === 'evt-confidential-1on1');
+eq('confidential event doNotForward decodes', confRow?.doNotForward, true);
+ok(
+  'confidential event bodyContent decodes (raw)',
+  typeof confRow?.bodyContent === 'string' &&
+    (confRow!.bodyContent as string).includes('secret-doc'),
+);
+
+// ---- 4c. extractEntity: call (call-history) — decode round-trip ----
+console.log('\n=== extractEntity: call ===');
+const callRows = extractEntity(live, mapping, 'call');
+eq('call row count (raw, incl. deleted)', callRows.length, CALLS.length);
+const recordedCallRow = callRows.find((r) => r.id === 'call-4-recorded');
+const recordings = recordedCallRow?.recordings as any[] | undefined;
+eq(
+  'recorded call linkedMessage.conversationId decodes',
+  recordings?.[0]?.linkedMessage?.conversationId,
+  '19:f1e2d3c4b5a6@thread.v2',
+);
+eq(
+  'recorded call linkedMessage.linkedMessageId decodes',
+  recordings?.[0]?.linkedMessage?.linkedMessageId,
+  String(CONVERSATIONS[1].messages[1].ts),
+);
+const multiPartyRow = callRows.find((r) => r.id === 'call-3-multiparty');
+ok(
+  'MultiParty participantList decodes (3 participants)',
+  Array.isArray(multiPartyRow?.participantList) &&
+    (multiPartyRow!.participantList as any[]).length === 3,
+);
+const deletedCallRow = callRows.find((r) => r.id === 'call-5-deleted');
+eq('deleted call isDeleted decodes', deletedCallRow?.isDeleted, true);
+
 // ---- 5. bonus: end-to-end ingest() + ChatStore + search() ----
 console.log('\n=== end-to-end: ingest() + ChatStore + search ===');
 const { store, meta } = ingest(dir);
 ok('ingest schemaMatched', meta.schemaMatched === true);
 eq('ingest counts.conversations', meta.counts.conversations, CONVERSATIONS.length);
 eq('ingest counts.messages', meta.counts.messages, wantMsgCount);
+const ingestedEventCount = (store.db.prepare('select count(*) n from events').get() as any).n;
+eq('ingested events count excludes the RecurringMaster row', ingestedEventCount, EVENTS.length - 1);
+const ingestedCallCount = (store.db.prepare('select count(*) n from calls').get() as any).n;
+eq(
+  'ingested calls count (deleted call still STORED, only filtered at render)',
+  ingestedCallCount,
+  CALLS.length,
+);
+const kindCounts = store.db
+  .prepare('select kind, count(*) n from events group by kind')
+  .all() as any[];
+const meetingKindCount = kindCounts.find((r) => r.kind === 'meeting')?.n ?? 0;
+const apptKindCount = kindCounts.find((r) => r.kind === 'appointment')?.n ?? 0;
+eq('cid-first classify: meeting count (2 online meetings)', meetingKindCount, 2);
+eq(
+  'cid-first classify: appointment count (everything else, RecurringMaster excluded)',
+  apptKindCount,
+  EVENTS.length - 1 - 2,
+);
 ok('ingest not lossy', meta.lossy === false);
 const results = search(store, meta, false, { query: 'memoization', limit: 5 });
 ok('search finds seeded content', /memoization/i.test(results), results.slice(0, 200));
@@ -356,6 +437,232 @@ ok(
   ownSearch.slice(0, 300),
 );
 ok('no bare "ME>" label remains in search', !/(^|\s)ME>/.test(ownSearch), ownSearch.slice(0, 300));
+
+// ---- 9. list_events / list_calls (tool-render assertions) ----
+// All fixture calendar/call dates live in March 2026 — an explicit since/until window (rather
+// than the tools' own forward-looking default) makes these tests independent of wall-clock "now".
+console.log('\n=== list_events (tool rendering) ===');
+const EV_WINDOW = { since: '2026-03-01', until: '2026-04-01' };
+const studyGroupHandle = (
+  store.db
+    .prepare('select handle from conversations where id=?')
+    .get('19:f1e2d3c4b5a6@thread.v2') as any
+).handle;
+const midtermHandle = (
+  store.db
+    .prepare('select handle from conversations where id=?')
+    .get('19:meeting_998877@thread.v2') as any
+).handle;
+
+const allEvents = listEvents(store, meta, false, { ...EV_WINDOW, limit: 50 });
+ok(
+  'cancelled event shown by default, tagged [cancelled]',
+  /\[cancelled\][^\n]*"Cancelled Study Session"/.test(allEvents),
+  allEvents,
+);
+ok(
+  'confidential event tagged [confidential]',
+  /\[confidential\][^\n]*"Confidential 1:1"/.test(allEvents),
+  allEvents,
+);
+ok(
+  'cached-meeting chat pivot resolves to the real c: handle',
+  new RegExp(`"CS101 Midterm Review Session"[^\\n]*chat ${midtermHandle}\\b`).test(allEvents),
+  allEvents,
+);
+ok(
+  'no-cache meeting renders "(no cached chat)", never a fabricated handle',
+  /"Guest Lecture: Distributed Systems"[^\n]*chat \(no cached chat\)/.test(allEvents),
+  allEvents,
+);
+ok(
+  'recurring run-collapse: only ONE fully-rendered "Daily Standup" line',
+  (allEvents.match(/\[appointment\] "Daily Standup"/g) ?? []).length === 1,
+  allEvents,
+);
+// The overflow count (4) folds in the Exception row too — spec: "expand Occurrence + Exception
+// (a moved instance is exactly where a collapsed series lies)" — the moved instance shares the
+// same series_id, so it collapses into the run just like any other occurrence; it is not
+// rendered as its own separate line, and the "(moved)" subject never leaks into the collapse text.
+ok(
+  'recurring run-collapse: summary line shows the right overflow count (occurrences + exception)',
+  /↻ Daily Standup ×4 more \(next [^)]+\)/.test(allEvents),
+  allEvents,
+);
+ok(
+  'moved Exception instance folds into the collapse, not rendered separately',
+  !/"Daily Standup \(moved\)"/.test(allEvents),
+  allEvents,
+);
+ok(
+  'RecurringMaster template itself never renders as an event',
+  !/evt-series-master/.test(allEvents),
+  allEvents,
+);
+ok(
+  'attendee cap: names capped + accepted tally shown (Resource room excluded → 3 not 4)',
+  /3 attendees \(2 accepted\)/.test(allEvents),
+  allEvents,
+);
+ok(
+  'meeting-room (type:Resource) attendee filtered out of the render',
+  !/Room CS-101/.test(allEvents),
+  allEvents,
+);
+
+const hideCancelled = listEvents(store, meta, false, {
+  ...EV_WINDOW,
+  hide_cancelled: true,
+  limit: 50,
+});
+ok(
+  'hide_cancelled:true filters the cancelled event out',
+  !/Cancelled Study Session/.test(hideCancelled),
+  hideCancelled,
+);
+
+const typeAppt = listEvents(store, meta, false, { ...EV_WINDOW, type: 'appointment', limit: 50 });
+ok(
+  'type:appointment excludes online meetings',
+  !/CS101 Midterm Review Session/.test(typeAppt),
+  typeAppt,
+);
+ok(
+  'type:appointment still includes plain appointments',
+  /Dentist appointment/.test(typeAppt),
+  typeAppt,
+);
+
+const typeMeeting = listEvents(store, meta, false, { ...EV_WINDOW, type: 'meeting', limit: 50 });
+ok(
+  'type:meeting excludes plain appointments',
+  !/Dentist appointment/.test(typeMeeting),
+  typeMeeting,
+);
+ok(
+  'type:meeting includes online meetings',
+  /CS101 Midterm Review Session/.test(typeMeeting),
+  typeMeeting,
+);
+
+const attendeeFilter = listEvents(store, meta, false, {
+  ...EV_WINDOW,
+  attendee: 'Alan Turing',
+  limit: 50,
+});
+ok(
+  'attendee filter matches the meeting Alan attends',
+  /CS101 Midterm Review Session/.test(attendeeFilter),
+  attendeeFilter,
+);
+ok(
+  'attendee filter excludes the meeting Alan does not attend',
+  !/Guest Lecture/.test(attendeeFilter),
+  attendeeFilter,
+);
+
+// include_body: positive (single narrowed result, non-confidential) — body renders, URL elided.
+const bodyPositive = listEvents(store, meta, false, {
+  ...EV_WINDOW,
+  query: 'Room Booking',
+  include_body: true,
+});
+ok(
+  'include_body renders the body text for a single narrowed non-confidential event',
+  /Room booked/.test(bodyPositive),
+  bodyPositive,
+);
+ok(
+  'include_body elides the URL to a bare hostname',
+  /\[link: example\.invalid\]/.test(bodyPositive),
+  bodyPositive,
+);
+ok(
+  'include_body never leaks the raw URL',
+  !/https:\/\/example\.invalid/.test(bodyPositive),
+  bodyPositive,
+);
+
+// include_body: negative (multiple results) — withheld with an explanatory note.
+const bodyMultiResult = listEvents(store, meta, false, {
+  ...EV_WINDOW,
+  include_body: true,
+  limit: 50,
+});
+ok(
+  'include_body ignored (and noted) when the result is not narrowed to one event',
+  /include_body ignored/.test(bodyMultiResult),
+  bodyMultiResult,
+);
+
+// include_body: negative (confidential) — suppressed REGARDLESS of the arg, even narrowed to one.
+const bodyConfidential = listEvents(store, meta, false, {
+  ...EV_WINDOW,
+  query: 'Confidential 1:1',
+  include_body: true,
+});
+ok(
+  'include_body suppressed for a [confidential] event even when narrowed to one',
+  /include_body ignored[^\n]*\[confidential\]/.test(bodyConfidential),
+  bodyConfidential,
+);
+ok(
+  'confidential body text never leaks even with include_body:true',
+  !/secret-doc/.test(bodyConfidential),
+  bodyConfidential,
+);
+
+console.log('\n=== list_calls (tool rendering) ===');
+const allCalls = listCalls(store, meta, false, { limit: 50 });
+ok(
+  'deleted call filtered out by default (its counterpart, Alan Turing, never appears)',
+  !/Alan Turing/.test(allCalls),
+  allCalls,
+);
+ok(
+  'TwoParty incoming accepted: counterpart resolves via PROFILES ONLY (never posted a message)',
+  /← Margaret Hamilton · 5m · accepted/.test(allCalls),
+  allCalls,
+);
+ok(
+  'TwoParty outgoing missed: shows "missed", no duration/state',
+  /→ Grace Hopper · missed/.test(allCalls),
+  allCalls,
+);
+ok(
+  'MultiParty: group name + c: handle chat pivot, seconds-branch duration',
+  new RegExp(`study-group-cs101 ${studyGroupHandle}[^\\n]*· 45s`).test(allCalls),
+  allCalls,
+);
+const welcomeMsgId = String(CONVERSATIONS[1].messages[1].ts);
+ok(
+  'recorded call: [recorded] tag + hours-branch duration + recording pivot to the real message',
+  new RegExp(
+    `Radia Perlman · 1h05m · accepted \\[recorded\\] recorded → ${studyGroupHandle} m:${welcomeMsgId}`,
+  ).test(allCalls),
+  allCalls,
+);
+
+const missedOnly = listCalls(store, meta, false, { missed: true, limit: 50 });
+ok(
+  'missed:true keeps only the missed call',
+  /Grace Hopper/.test(missedOnly) && !/Margaret Hamilton/.test(missedOnly),
+  missedOnly,
+);
+
+const incomingOnly = listCalls(store, meta, false, { direction: 'Incoming', limit: 50 });
+ok(
+  'direction:Incoming excludes outgoing calls',
+  !/Grace Hopper/.test(incomingOnly) && /Margaret Hamilton/.test(incomingOnly),
+  incomingOnly,
+);
+
+const participantFilter = listCalls(store, meta, false, { participant: 'Margaret', limit: 50 });
+ok(
+  'participant filter matches on the resolved (profiles-only) name',
+  /Margaret Hamilton/.test(participantFilter) && !/Grace Hopper/.test(participantFilter),
+  participantFilter,
+);
 
 store.close();
 

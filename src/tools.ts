@@ -2,12 +2,15 @@ import { isBotMri, type ChatStore, type StoreMeta } from './ingest/store.js';
 import { makeExtractor } from './util/topics.js';
 import { byCodeUnit } from './util/sort.js';
 import { reactionGlyph } from './util/emoji.js';
+import { htmlToText } from './util/text.js';
 import type {
   ListConversationsArgs,
   ReadMessagesArgs,
   SearchArgs,
   TopTopicsArgs,
   FindPersonArgs,
+  ListEventsArgs,
+  ListCallsArgs,
 } from './schemas.js';
 
 type DB = ChatStore['db'];
@@ -30,12 +33,15 @@ function envelope(meta: StoreMeta, deferred: boolean, extra = ''): string {
 export function parseTime(s: string | number | undefined, now = Date.now()): number | undefined {
   if (s == null) return undefined;
   if (typeof s === 'number') return s;
-  const rel = /^-(\d+)([dhm])$/.exec(s.trim());
+  // Sign-aware relative offset: '-7d' (past, the original/only direction) or '+7d' (future —
+  // needed for list_events' forward-looking default window). ISO/epoch handling unchanged.
+  const rel = /^([+-])(\d+)([dhm])$/.exec(s.trim());
   if (rel) {
-    const n = +rel[1];
-    const u = rel[2];
+    const sign = rel[1] === '-' ? -1 : 1;
+    const n = +rel[2];
+    const u = rel[3];
     const subDayMs = u === 'h' ? 36e5 : 6e4;
-    return now - n * (u === 'd' ? 864e5 : subDayMs);
+    return now + sign * n * (u === 'd' ? 864e5 : subDayMs);
   }
   const t = Date.parse(s);
   return Number.isNaN(t) ? undefined : t;
@@ -44,7 +50,7 @@ export function parseTime(s: string | number | undefined, now = Date.now()): num
 function badTime(args: any, keys: string[]): string | null {
   for (const k of keys)
     if (args[k] != null && parseTime(args[k]) === undefined)
-      return `error: cannot parse ${k}="${args[k]}" — use ISO (2026-07-01) or relative (-7d / -24h / -30m)`;
+      return `error: cannot parse ${k}="${args[k]}" — use ISO (2026-07-01) or relative (-7d / +7d / -24h / -30m)`;
   return null;
 }
 // Build a safe FTS5 MATCH string: quote each term so user punctuation/operators can't
@@ -933,4 +939,310 @@ export function findPerson(
     return `${r.handle} "${r.name || '(unknown)'}"${tags} · ${r.msg_count} msg · last ${fmtTs(r.last_ts)}`;
   });
   return `${envelope(meta, deferred, header)}\n${lines.join('\n')}`;
+}
+
+// ================= list_events / list_calls =================
+
+// `07-16 10:00` — same MM-DD HH:mm shape as fmtTs but WITHOUT the year prefix (a time range's
+// second half never needs one) and without the seconds; used for the `–HH:mm` end half below.
+function hm(ts: number): string {
+  const d = new Date(ts);
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function eventTimeRange(startTs: number, endTs: number, isAllDay: boolean): string {
+  if (isAllDay) return `${fmtTs(startTs).split(' ')[0]} (all day)`;
+  const startLabel = fmtTs(startTs);
+  return endTs > startTs ? `${startLabel}–${hm(endTs)}` : startLabel;
+}
+
+interface AttendeeRow {
+  n: string;
+  e: string;
+  r: string;
+}
+// Cap attendees exactly like reactions: total + accepted tally, plus ≤3 names + `+K` overflow —
+// large meetings carry 100+ attendees inline and must never be dumped raw.
+function renderAttendees(attendeesJson: string | null | undefined): string {
+  if (!attendeesJson) return 'no attendees';
+  let atts: AttendeeRow[];
+  try {
+    atts = JSON.parse(attendeesJson);
+  } catch {
+    return 'no attendees';
+  }
+  if (!Array.isArray(atts) || atts.length === 0) return 'no attendees';
+  const total = atts.length;
+  const accepted = atts.filter((a) => /^accepted$/i.test(a.r)).length;
+  const names = atts.map((a) => a.n).filter(Boolean);
+  const shown = names.slice(0, 3);
+  const extra = total - shown.length;
+  const namesPart = shown.length ? `: ${shown.join(', ')}${extra > 0 ? ` +${extra}` : ''}` : '';
+  return `${total} attendees (${accepted} accepted)${namesPart}`;
+}
+
+// Privacy: elide every URL in an (opt-in, already-htmlToText'd) event body down to its bare
+// hostname — the full URL can carry tokens and is a prompt-injection surface (see spec §5).
+function elideUrlsToHostnames(text: string): string {
+  return text.replace(/https?:\/\/([^\s/]+)(\/[^\s]*)?/gi, (_m, host) => `[link: ${host}]`);
+}
+
+interface EventRow {
+  id: string;
+  series_id: string | null;
+  kind: string;
+  subject: string | null;
+  start_ts: number;
+  end_ts: number;
+  is_all_day: number;
+  organizer_name: string | null;
+  cid: string | null;
+  my_response: string | null;
+  is_cancelled: number;
+  is_confidential: number;
+  has_attach: number;
+  attendees: string | null;
+  body_html: string | null;
+}
+
+// One event row, fully rendered (subject/org/attendees/response/chat-pivot/tags).
+function renderEventLine(db: DB, r: EventRow): string {
+  const tags =
+    (r.is_cancelled ? ' [cancelled]' : '') +
+    (r.is_confidential ? ' [confidential]' : '') +
+    (r.has_attach ? ' [attachment]' : '');
+  const timeRange = eventTimeRange(r.start_ts, r.end_ts, !!r.is_all_day);
+  const org = r.organizer_name ? `org: ${r.organizer_name}` : 'org: (unknown)';
+  const attendees = renderAttendees(r.attendees);
+  const you = r.my_response ? `you: ${r.my_response}` : '';
+  let chat = '';
+  if (r.kind === 'meeting') {
+    const conv = r.cid
+      ? (db.prepare('select handle from conversations where id=?').get(r.cid) as any)
+      : null;
+    chat = `chat ${conv ? conv.handle : '(no cached chat)'}`;
+  }
+  const parts = [org, attendees, you, chat].filter(Boolean);
+  return `${timeRange} [${r.kind}]${tags} "${r.subject || '(no subject)'}" · ${parts.join(' · ')}`;
+}
+
+// Recurrence run-collapse: rows sharing a series_id, in the window, beyond the first 2 collapse
+// to one summary line (the chat handle prints once — on the fully-rendered first occurrence).
+function renderEventGroups(db: DB, rows: EventRow[]): string[] {
+  // Group by series_id, preserving each row's relative chronological position (rows arrive
+  // pre-sorted by start_ts asc, so a group's array is automatically in series order too).
+  const bySeries = new Map<string, EventRow[]>();
+  for (const r of rows) {
+    if (!r.series_id) continue;
+    const g = bySeries.get(r.series_id);
+    if (g) g.push(r);
+    else bySeries.set(r.series_id, [r]);
+  }
+
+  const collapsedHandled = new Set<string>();
+  const lines: string[] = [];
+  for (const r of rows) {
+    if (r.series_id) {
+      const group = bySeries.get(r.series_id)!;
+      if (group.length > 2) {
+        if (collapsedHandled.has(r.series_id)) continue; // already summarized
+        collapsedHandled.add(r.series_id);
+        lines.push(renderEventLine(db, r));
+        const rest = group.length - 1;
+        const next = group[1];
+        lines.push(
+          `  ↻ ${r.subject || '(no subject)'} ×${rest} more (next ${fmtTs(next.start_ts)})`,
+        );
+        continue;
+      }
+    }
+    lines.push(renderEventLine(db, r));
+  }
+  return lines;
+}
+
+export function listEvents(
+  store: ChatStore,
+  meta: StoreMeta,
+  deferred: boolean,
+  args: ListEventsArgs = {},
+): string {
+  const db = store.db;
+  const bt = badTime(args, ['since', 'until']);
+  if (bt) return bt;
+  const limit = Math.min(Number(args.limit) || 30, 100);
+  const now = Date.now();
+  const sinceArg = parseTime(args.since);
+  const untilArg = parseTime(args.until);
+  const noWindowGiven = sinceArg == null && untilArg == null;
+  // Forward default window: today..+7d — a calendar tool defaults to what's COMING UP, unlike
+  // messages tools which default to recent history.
+  const winSince = sinceArg ?? (noWindowGiven ? now : undefined);
+  const winUntil = untilArg ?? (noWindowGiven ? now + 7 * 864e5 : undefined);
+
+  const where: string[] = [];
+  const params: any[] = [];
+  if (winSince != null) {
+    where.push('start_ts>=?');
+    params.push(winSince);
+  }
+  if (winUntil != null) {
+    where.push('start_ts<?');
+    params.push(winUntil);
+  }
+  if (args.type && args.type !== 'all') {
+    where.push('kind=?');
+    params.push(args.type);
+  }
+  if (args.query) {
+    where.push(String.raw`subject like ? escape '\'`);
+    params.push(`%${likeEscape(String(args.query))}%`);
+  }
+  if (args.attendee) {
+    where.push(String.raw`attendees like ? escape '\'`);
+    params.push(`%${likeEscape(String(args.attendee))}%`);
+  }
+  if (args.hide_cancelled) where.push('is_cancelled=0');
+  const w = where.length ? 'where ' + where.join(' and ') : '';
+  const rows = db
+    .prepare(`select * from events ${w} order by start_ts asc limit ?`)
+    .all(...params, limit) as unknown as EventRow[];
+
+  const notes: string[] = [];
+  // The cache only holds MATERIALIZED occurrences of a recurring series — a far-future window
+  // can under-report even though nothing is actually missing from the source. Compare the
+  // effective window end against the newest occurrence the cache has for ANY event (not just
+  // this query's matches), since that's the honest bound on what could possibly be materialized.
+  if (winUntil != null) {
+    const maxStart = (db.prepare('select max(start_ts) t from events').get() as any)?.t ?? 0;
+    if (winUntil > maxStart)
+      notes.push(
+        `note: window extends past the newest cached occurrence (${fmtTs(maxStart)}) — the cache only holds materialized occurrences; recurring events further out may be under-reported`,
+      );
+  }
+
+  // include_body: opt-in, narrow-result-only, and never for a confidential event (regardless of
+  // the arg) — see spec §5. Rendered as an extra indented line beneath the one matching event.
+  let bodyBlock = '';
+  if (args.include_body) {
+    if (rows.length !== 1)
+      notes.push(
+        `note: include_body ignored — narrow the query to a single event (add query:/since/until) to see its body`,
+      );
+    else if (rows[0].is_confidential)
+      notes.push(`note: include_body ignored — this event is [confidential]`);
+    else if (rows[0].body_html) {
+      const text = elideUrlsToHostnames(htmlToText(rows[0].body_html));
+      bodyBlock = `\n  body: ${clip(text, 1000)}`;
+    }
+  }
+
+  const lines = renderEventGroups(db, rows);
+  const head = [envelope(meta, deferred, `${rows.length} events`), ...notes]
+    .filter(Boolean)
+    .join('\n');
+  return `${head}\n${(lines.join('\n') || '(no events)') + bodyBlock}`;
+}
+
+// `14m`, `1h02m`, `0s` — humanized call duration.
+function humanizeDuration(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return `${h}h${pad(m % 60)}m`;
+}
+
+// The recording/transcript pointer resolved into a `read_messages`-ready pivot: the announcement
+// message's conversation handle + id. Skips gracefully (returns '') if unresolvable — the
+// conversation may not be cached, or the JSON may be malformed.
+function renderRecordingPivot(db: DB, recordingLinkJson: string | null | undefined): string {
+  if (!recordingLinkJson) return '';
+  let link: { conversationId?: string; linkedMessageId?: string };
+  try {
+    link = JSON.parse(recordingLinkJson);
+  } catch {
+    return '';
+  }
+  if (!link.conversationId || !link.linkedMessageId) return '';
+  const conv = db
+    .prepare('select handle from conversations where id=?')
+    .get(link.conversationId) as any;
+  if (!conv) return '';
+  return ` recorded → ${conv.handle} m:${link.linkedMessageId}`;
+}
+
+export function listCalls(
+  store: ChatStore,
+  meta: StoreMeta,
+  deferred: boolean,
+  args: ListCallsArgs = {},
+): string {
+  const db = store.db;
+  const bt = badTime(args, ['since', 'until']);
+  if (bt) return bt;
+  const limit = Math.min(Number(args.limit) || 30, 100);
+
+  const where: string[] = ['is_deleted=0']; // filtered out by default, no flag needed
+  const params: any[] = [];
+  if (args.direction) {
+    where.push('direction=?');
+    params.push(args.direction);
+  }
+  if (args.missed) where.push('is_missed=1');
+  const since = parseTime(args.since);
+  if (since != null) {
+    where.push('start_ts>=?');
+    params.push(since);
+  }
+  const until = parseTime(args.until);
+  if (until != null) {
+    where.push('start_ts<?');
+    params.push(until);
+  }
+  const rowsAll = db
+    .prepare(`select * from calls where ${where.join(' and ')} order by start_ts desc`)
+    .all(...params) as any[];
+
+  // Resolve each call's display label (counterpart name / group name+handle) in JS — the table
+  // is tiny (~100 rows total), so this is far simpler than threading name resolution into SQL,
+  // and it's what lets `participant` filter on the RESOLVED name (TwoParty target.displayName is
+  // often null in the raw data; nameForMri via the profiles table is the actual fix).
+  const resolved = rowsAll.map((r) => {
+    let label: string;
+    if (r.call_type === 'MultiParty') {
+      const conv = r.group_thread_id
+        ? (db
+            .prepare('select handle,topic,participant_names from conversations where id=?')
+            .get(r.group_thread_id) as any)
+        : null;
+      label = conv
+        ? `${conv.topic || conv.participant_names || '(group)'} ${conv.handle}`
+        : '(group call)';
+    } else {
+      label = (r.counterpart_mri && store.nameForMri(r.counterpart_mri)) || '(unknown)';
+    }
+    return { r, label };
+  });
+  const filtered = args.participant
+    ? resolved.filter((x) => x.label.toLowerCase().includes(String(args.participant).toLowerCase()))
+    : resolved;
+  const limited = filtered.slice(0, limit);
+
+  const lines = limited.map(({ r, label }) => {
+    const arrow = r.direction === 'Incoming' ? '←' : r.direction === 'Outgoing' ? '→' : '?';
+    const tail = r.is_missed
+      ? 'missed'
+      : `${humanizeDuration(r.duration_ms)} · ${(r.state || '?').toLowerCase()}`;
+    const tags =
+      (r.has_recording ? ' [recorded]' : '') +
+      (r.has_voicemail ? ' [voicemail]' : '') +
+      (r.spam_level && !/^none$/i.test(r.spam_level) ? ' [spam?]' : '') +
+      (r.is_current_user_part === 0 ? ' [not-you]' : '');
+    const pivot = renderRecordingPivot(db, r.recording_link);
+    return `${fmtTs(r.start_ts)} ${arrow} ${label} · ${tail}${tags}${pivot}`;
+  });
+
+  const head = envelope(meta, deferred, `${limited.length} calls`);
+  return `${head}\n${lines.join('\n') || '(no calls)'}`;
 }

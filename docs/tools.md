@@ -87,6 +87,56 @@ Full-text search (FTS5) with filters. An empty `query` becomes a filtered browse
 On empty results (or a `since` window newer than the cache holds), a coverage note reports
 the newest/oldest cached message in scope — so a quiet result isn't mistaken for a sync gap.
 
+## `list_events`
+
+Your calendar — meetings and appointments from the local Teams calendar cache. Defaults to a
+**forward** window (today → +7d); relative times accept future offsets too (e.g. `+30d`).
+
+| Arg               | Description                                                           |
+| ----------------- | --------------------------------------------------------------------- |
+| `type`            | `meeting` \| `appointment` \| `all` (default `all`).                  |
+| `query`           | Match the event subject.                                              |
+| `attendee`        | Name/email substring of an attendee or the organizer.                 |
+| `since` / `until` | Window (ISO or relative, e.g. `-7d`, `+30d`). Default `today .. +7d`. |
+| `limit`           | Default 30, max 100.                                                  |
+| `hide_cancelled`  | Drop cancelled events (shown by default, tagged `[cancelled]`).       |
+| `include_body`    | Include the event body text on a single narrowed result (see below).  |
+
+Each line gives the date/time, a `[meeting]`/`[appointment]` tag, subject, organizer, an
+attendee summary (organizer + up to 3 names + `+K`, with an accepted tally), your response, and —
+for online meetings — the chat handle (`chat c:…`, or `(no cached chat)` when the meeting's chat
+isn't cached locally). Recurring series collapse: the first occurrence in the window renders
+fully, the rest fold into `↻ <subject> ×N more (next …)`. Tags: `[cancelled]`, `[confidential]`,
+`[attachment]`.
+
+**Privacy.** Metadata only by default. Meeting **join URLs are never returned** (they can carry
+tokens and an agent has no use for them). The event body is withheld unless you pass
+`include_body` on a single-event result — and even then it's HTML-stripped with URLs reduced to
+bare hostnames, and it is **never** returned for a `[confidential]` event. Only materialized
+occurrences are cached, so a far-future window may under-report recurring events — the result
+says so when the window runs past what's cached.
+
+## `list_calls`
+
+Your call history — 1:1 and group calls from the local call log.
+
+| Arg               | Description                              |
+| ----------------- | ---------------------------------------- |
+| `direction`       | `Outgoing` \| `Incoming`.                |
+| `missed`          | Only missed calls.                       |
+| `participant`     | Name/email substring of the other party. |
+| `since` / `until` | Window (ISO or relative).                |
+| `limit`           | Default 30, max 100.                     |
+
+Each line: date/time, a direction arrow (`←` incoming, `→` outgoing), the other party's name
+(resolved from the local profiles cache), duration, and state (`accepted`/`missed`/`declined`).
+Group calls link to their chat thread. A recorded call links to the message that announced it
+(`recorded → c:… m:…`) so you can pivot with `read_messages(around:)`. Tags: `[recorded]`,
+`[voicemail]`, `[spam?]`, `[not-you]`. Deleted entries are filtered out.
+
+Recordings and transcripts themselves live in the cloud behind auth — zaungast surfaces only the
+metadata (that a recording exists) and the pointer, never the media.
+
 ## `top_topics`
 
 Distinctive/trending topics over a window, scored against your own baseline (not raw

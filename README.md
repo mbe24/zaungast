@@ -110,6 +110,8 @@ fails or to pin a specific profile. From-source setup and other clients are cove
 | `list_conversations` | Your Teams sidebar — newest conversations, or filter by kind/participant/title/time. |
 | `read_messages` | One conversation's messages in story order (window / cursor / around a hit). |
 | `search` | Full-text search + filters (from, in, kind, `mentions_me`, has-attachment, date). |
+| `list_events` | Calendar meetings & appointments (forward window by default); metadata-only, join-URLs never exposed. |
+| `list_calls` | Call history — 1:1/group calls with direction, duration, missed, and recording pointers. |
 | `top_topics` | Distinctive/trending topics over a window, vs your baseline, with an example each. |
 | `find_person` | Resolve a name/nickname to a canonical person + handle, with contact stats. |
 | `describe_schema` | Recovery tool: propose a field mapping when a Teams update changes the DB layout. |

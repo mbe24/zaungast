@@ -262,3 +262,309 @@ export const CONVERSATIONS: ConversationDef[] = [
     ],
   },
 ];
+
+// ---- calendar ("event" mapping entity — src/schema/versions/teams-2026-07.json) ----
+// Fixed ISO timestamps (no Date.now()/no-arg new Date()), clustered near BASE_TS's month so a
+// single since:'2026-01-01' window in tests covers everything deterministically.
+const evIso = (day: number, hour: number, minute = 0): string =>
+  new Date(Date.UTC(2026, 2, day, hour, minute, 0)).toISOString();
+
+export interface AttendeeDef {
+  name: string;
+  address: string;
+  role?: string;
+  type?: string; // Organizer | Required | Optional | Resource — real data marks rooms as 'Resource'
+  response?: string; // status.response
+}
+export interface EventDef {
+  objectId: string;
+  seriesMasterId?: string | null;
+  subject: string;
+  startTime: string;
+  endTime: string;
+  isAllDayEvent?: boolean;
+  location?: string;
+  organizerName?: string;
+  organizerAddress?: string;
+  isOnlineMeeting?: boolean;
+  cid?: string | null; // -> skypeTeamsDataObject.cid
+  isAppointment?: boolean;
+  myResponseType?: string;
+  showAs?: string;
+  isCancelled?: boolean;
+  eventType?: string | null; // 'RecurringMaster' | 'Occurrence' | 'Exception' | undefined (single)
+  sensitivityLabelId?: string | null;
+  doNotForward?: boolean;
+  hasAttachments?: boolean;
+  attendees?: AttendeeDef[];
+  bodyContent?: string;
+}
+
+// Shared series id for the recurring-standup group below (run-collapse test).
+const STANDUP_SERIES = 'series-standup-001';
+
+export const EVENTS: EventDef[] = [
+  // Plain appointment: no cid, no attendees — the calendar-only bucket (feature.calendar-meeting.md).
+  {
+    objectId: 'evt-appt-dentist',
+    subject: 'Dentist appointment',
+    startTime: evIso(10, 14, 0),
+    endTime: evIso(10, 14, 30),
+    organizerName: ada.displayName,
+    organizerAddress: ada.email,
+    myResponseType: 'Organizer',
+    showAs: 'Busy',
+  },
+  // Online meeting whose cid MATCHES an existing fixture conversation (chat-pivot resolves).
+  {
+    objectId: 'evt-meeting-cached',
+    subject: 'CS101 Midterm Review Session',
+    startTime: evIso(11, 15, 0),
+    endTime: evIso(11, 15, 30),
+    organizerName: alan.displayName,
+    organizerAddress: alan.email,
+    isOnlineMeeting: true,
+    cid: '19:meeting_998877@thread.v2', // == CONVERSATIONS[3].id above
+    myResponseType: 'Accepted',
+    showAs: 'Busy',
+    attendees: [
+      { name: ada.displayName, address: ada.email, role: 'organizer', response: 'Accepted' },
+      { name: alan.displayName, address: alan.email, role: 'required', response: 'Accepted' },
+      { name: grace.displayName, address: grace.email, role: 'required', response: 'Tentative' },
+      // A meeting room (type:'Resource') — must be filtered out of the attendee list + count.
+      {
+        name: 'Room CS-101',
+        address: 'room-cs101@example.edu',
+        type: 'Resource',
+        response: 'Accepted',
+      },
+    ],
+  },
+  // Online meeting whose cid has NO matching conversation — must render "(no cached chat)".
+  {
+    objectId: 'evt-meeting-nocache',
+    subject: 'Guest Lecture: Distributed Systems',
+    startTime: evIso(12, 10, 0),
+    endTime: evIso(12, 11, 0),
+    organizerName: edsger.displayName,
+    organizerAddress: edsger.email,
+    isOnlineMeeting: true,
+    cid: '19:meeting_nomatch111@thread.v2', // deliberately absent from CONVERSATIONS
+    myResponseType: 'NotResponded',
+    showAs: 'Busy',
+    attendees: [
+      { name: ada.displayName, address: ada.email, role: 'required', response: 'None' },
+      { name: edsger.displayName, address: edsger.email, role: 'organizer', response: 'Accepted' },
+    ],
+  },
+  // [cancelled] event — shown by default, tagged; hide_cancelled:true must filter it out.
+  {
+    objectId: 'evt-cancelled-study',
+    subject: 'Cancelled Study Session',
+    startTime: evIso(13, 9, 0),
+    endTime: evIso(13, 9, 30),
+    organizerName: barbara.displayName,
+    organizerAddress: barbara.email,
+    isCancelled: true,
+    showAs: 'Free',
+  },
+  // Plain appointment WITH a body — positive include_body case (narrowed single-result rendering
+  // + URL-to-hostname elision), contrasted against the confidential event's suppression below.
+  {
+    objectId: 'evt-appt-with-body',
+    subject: 'Room Booking Confirmation',
+    startTime: evIso(15, 11, 0),
+    endTime: evIso(15, 11, 15),
+    organizerName: ada.displayName,
+    organizerAddress: ada.email,
+    myResponseType: 'Organizer',
+    showAs: 'Busy',
+    bodyContent: '<p>Room booked. Floor plan: https://example.invalid/floorplans/room3</p>',
+  },
+  // [confidential] event — body MUST stay suppressed even with include_body:true. Contains a URL
+  // (elision would apply if it were ever rendered — it must not be).
+  {
+    objectId: 'evt-confidential-1on1',
+    subject: 'Confidential 1:1',
+    startTime: evIso(14, 13, 0),
+    endTime: evIso(14, 13, 30),
+    organizerName: ada.displayName,
+    organizerAddress: ada.email,
+    doNotForward: true,
+    myResponseType: 'Organizer',
+    showAs: 'Busy',
+    bodyContent: '<p>Sensitive agenda: see https://example.invalid/secret-doc for details.</p>',
+  },
+  // Recurring series: 1 RecurringMaster (must NOT appear) + 4 Occurrence (run-collapse, >2) +
+  // 1 Exception (a moved instance, same series — joins the same collapsed group).
+  {
+    objectId: 'evt-series-master',
+    seriesMasterId: STANDUP_SERIES,
+    subject: 'Daily Standup',
+    startTime: evIso(16, 9, 15),
+    endTime: evIso(16, 9, 30),
+    organizerName: grace.displayName,
+    organizerAddress: grace.email,
+    eventType: 'RecurringMaster',
+    showAs: 'Busy',
+  },
+  {
+    objectId: 'evt-series-occ-1',
+    seriesMasterId: STANDUP_SERIES,
+    subject: 'Daily Standup',
+    startTime: evIso(16, 9, 15),
+    endTime: evIso(16, 9, 30),
+    organizerName: grace.displayName,
+    organizerAddress: grace.email,
+    eventType: 'Occurrence',
+    myResponseType: 'Accepted',
+    showAs: 'Busy',
+  },
+  {
+    objectId: 'evt-series-occ-2',
+    seriesMasterId: STANDUP_SERIES,
+    subject: 'Daily Standup',
+    startTime: evIso(17, 9, 15),
+    endTime: evIso(17, 9, 30),
+    organizerName: grace.displayName,
+    organizerAddress: grace.email,
+    eventType: 'Occurrence',
+    myResponseType: 'Accepted',
+    showAs: 'Busy',
+  },
+  {
+    objectId: 'evt-series-occ-3',
+    seriesMasterId: STANDUP_SERIES,
+    subject: 'Daily Standup',
+    startTime: evIso(18, 9, 15),
+    endTime: evIso(18, 9, 30),
+    organizerName: grace.displayName,
+    organizerAddress: grace.email,
+    eventType: 'Occurrence',
+    myResponseType: 'Accepted',
+    showAs: 'Busy',
+  },
+  {
+    objectId: 'evt-series-occ-4',
+    seriesMasterId: STANDUP_SERIES,
+    subject: 'Daily Standup',
+    startTime: evIso(19, 9, 15),
+    endTime: evIso(19, 9, 30),
+    organizerName: grace.displayName,
+    organizerAddress: grace.email,
+    eventType: 'Occurrence',
+    myResponseType: 'Accepted',
+    showAs: 'Busy',
+  },
+  {
+    objectId: 'evt-series-exc-1',
+    seriesMasterId: STANDUP_SERIES,
+    subject: 'Daily Standup (moved)',
+    startTime: evIso(20, 10, 0),
+    endTime: evIso(20, 10, 15),
+    organizerName: grace.displayName,
+    organizerAddress: grace.email,
+    eventType: 'Exception',
+    myResponseType: 'Accepted',
+    showAs: 'Busy',
+  },
+];
+
+// ---- call-history ("call" mapping entity) ----
+export interface CallParticipantDef {
+  mri: string;
+  displayName?: string | null;
+}
+export interface RecordingLinkDef {
+  conversationId: string;
+  linkedMessageId: string;
+}
+export interface CallDef {
+  callId: string;
+  callType: 'TwoParty' | 'MultiParty';
+  callDirection: 'Outgoing' | 'Incoming';
+  callState: 'Accepted' | 'Missed' | 'Declined';
+  startTime: string;
+  durationInMs: number;
+  originator: CallParticipantDef;
+  target: CallParticipantDef;
+  participantList?: CallParticipantDef[];
+  groupChatThreadId?: string;
+  recordingLink?: RecordingLinkDef;
+  hasTranscript?: boolean;
+  isDeleted?: boolean;
+}
+
+// The study-group conversation + Barbara's welcome message (test/fixture/data.ts's own
+// CONVERSATIONS[1]) double as the recording-pivot target below — a real cached message.
+const STUDY_GROUP_ID = '19:f1e2d3c4b5a6@thread.v2';
+const STUDY_GROUP_WELCOME_MSG_ID = String(CONVERSATIONS[1].messages[1].ts);
+
+export const CALLS: CallDef[] = [
+  // TwoParty Incoming Accepted — counterpart resolvable ONLY via the profiles table (never
+  // posts a message, so `people` alone would miss her; nameForMri must fall through to profiles).
+  {
+    callId: 'call-1-incoming-accepted',
+    callType: 'TwoParty',
+    callDirection: 'Incoming',
+    callState: 'Accepted',
+    startTime: evIso(9, 8, 0),
+    durationInMs: 300_000, // 5m
+    originator: { mri: SILENT_PROFILE.mri, displayName: null },
+    target: { mri: ada.mri, displayName: null },
+  },
+  // TwoParty Outgoing Missed — target.displayName null (as in real data); counterpart resolves
+  // via the ordinary people/message-sender path (grace has posted messages).
+  {
+    callId: 'call-2-outgoing-missed',
+    callType: 'TwoParty',
+    callDirection: 'Outgoing',
+    callState: 'Missed',
+    startTime: evIso(9, 9, 0),
+    durationInMs: 0,
+    originator: { mri: ada.mri, displayName: null },
+    target: { mri: grace.mri, displayName: null },
+  },
+  // MultiParty — groupChatThreadId IS a fixture group conversation (chat pivot).
+  {
+    callId: 'call-3-multiparty',
+    callType: 'MultiParty',
+    callDirection: 'Outgoing',
+    callState: 'Accepted',
+    startTime: evIso(9, 10, 0),
+    durationInMs: 45_000, // 45s — exercises the humanizeDuration seconds branch
+    originator: { mri: ada.mri, displayName: null },
+    target: { mri: barbara.mri, displayName: null },
+    participantList: [
+      { mri: ada.mri, displayName: null },
+      { mri: barbara.mri, displayName: null },
+      { mri: edsger.mri, displayName: null },
+    ],
+    groupChatThreadId: STUDY_GROUP_ID,
+  },
+  // Recorded call whose linkedMessage points at a real fixture message — recording pivot.
+  {
+    callId: 'call-4-recorded',
+    callType: 'TwoParty',
+    callDirection: 'Incoming',
+    callState: 'Accepted',
+    startTime: evIso(9, 11, 0),
+    durationInMs: 3_900_000, // 1h05m — exercises the humanizeDuration hours branch
+    originator: { mri: radia.mri, displayName: null },
+    target: { mri: ada.mri, displayName: null },
+    recordingLink: { conversationId: STUDY_GROUP_ID, linkedMessageId: STUDY_GROUP_WELCOME_MSG_ID },
+    hasTranscript: true,
+  },
+  // Deleted call — must be filtered out of list_calls by default.
+  {
+    callId: 'call-5-deleted',
+    callType: 'TwoParty',
+    callDirection: 'Outgoing',
+    callState: 'Accepted',
+    startTime: evIso(9, 12, 0),
+    durationInMs: 120_000,
+    originator: { mri: ada.mri, displayName: null },
+    target: { mri: alan.mri, displayName: null },
+    isDeleted: true,
+  },
+];

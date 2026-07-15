@@ -22,7 +22,16 @@ import {
 } from './encode.js';
 import { encodeTable, ldbKey } from './sstable-encode.js';
 import { readTable } from '../../src/format/chromium/sstable.js';
-import { ALL_PROFILES, CONVERSATIONS, type ConversationDef, type MessageDef } from './data.js';
+import {
+  ALL_PROFILES,
+  CONVERSATIONS,
+  EVENTS,
+  CALLS,
+  type ConversationDef,
+  type MessageDef,
+  type EventDef,
+  type CallDef,
+} from './data.js';
 
 const ORIGIN = 'https://teams.microsoft.com';
 
@@ -39,6 +48,14 @@ const DB_CONVERSATIONS = {
 };
 const DB_REPLYCHAINS = { id: 2, name: 'teams-replychain-manager', store: 'replychains', osId: 1 };
 const DB_PROFILES = { id: 3, name: 'teams-profile-manager', store: 'profiles', osId: 1 };
+// Glob-matched by the 'event'/'call' mapping entities: db "*calendar*" / "*call-history-manager*".
+const DB_CALENDAR = { id: 4, name: 'teams-calendar-manager', store: 'calendar', osId: 1 };
+const DB_CALLHISTORY = {
+  id: 5,
+  name: 'teams-call-history-manager',
+  store: 'call-history',
+  osId: 1,
+};
 
 function dbNameRow(dbId: number, dbName: string): { key: Buffer; value: Buffer } {
   const key = Buffer.concat([
@@ -129,6 +146,77 @@ function buildReplychainRecord(conv: ConversationDef): Record<string, unknown> {
   return { id: conv.id, conversationId: conv.id, messageMap };
 }
 
+// Inverse of the 'event' mapping entity (src/schema/versions/teams-2026-07.json): field names
+// here are the RAW Teams calendar record's, not the mapped/derived ones. NOTE: real Teams data
+// decodes startTime/endTime as an actual structured-clone Date (see ingest.ts's toEpochMs doc) —
+// the fixture's encodeValue has no Date case, so these travel as plain ISO strings instead;
+// ingest's toEpochMs accepts both.
+function buildEventRecord(e: EventDef): Record<string, unknown> {
+  return {
+    objectId: e.objectId,
+    seriesMasterId: e.seriesMasterId ?? undefined,
+    subject: e.subject,
+    startTime: e.startTime,
+    endTime: e.endTime,
+    isAllDayEvent: e.isAllDayEvent,
+    location: e.location,
+    organizerName: e.organizerName,
+    organizerAddress: e.organizerAddress,
+    isOnlineMeeting: e.isOnlineMeeting,
+    skypeTeamsDataObject: e.cid ? { cid: e.cid } : undefined,
+    isAppointment: e.isAppointment,
+    myResponseType: e.myResponseType,
+    showAs: e.showAs,
+    isCancelled: e.isCancelled,
+    eventType: e.eventType ?? undefined,
+    sensitivityLabelId: e.sensitivityLabelId ?? undefined,
+    doNotForward: e.doNotForward,
+    hasAttachments: e.hasAttachments,
+    attendees: e.attendees?.map((a) => ({
+      name: a.name,
+      address: a.address,
+      role: a.role ?? 'required',
+      type: a.type ?? 'Required',
+      status: { response: a.response ?? 'None' },
+    })),
+    bodyContent: e.bodyContent,
+  };
+}
+
+// Inverse of the 'call' mapping entity. `conversationId` (48:calllogs, deliberately unmapped —
+// see the spec's privacy rule) is intentionally NOT emitted here: this fixture only ever writes
+// fields the reader is actually meant to touch.
+function buildCallRecord(c: CallDef): Record<string, unknown> {
+  return {
+    callId: c.callId,
+    callType: c.callType,
+    callDirection: c.callDirection,
+    callState: c.callState,
+    startTime: c.startTime,
+    durationInMs: c.durationInMs,
+    originatorParticipant: { id: c.originator.mri, displayName: c.originator.displayName ?? null },
+    targetParticipant: { id: c.target.mri, displayName: c.target.displayName ?? null },
+    participantList: c.participantList?.map((p) => ({
+      id: p.mri,
+      displayName: p.displayName ?? null,
+    })),
+    groupChatThreadId: c.groupChatThreadId,
+    recordings: c.recordingLink
+      ? [
+          {
+            id: `rec-${c.callId}`,
+            contentTypes: c.hasTranscript ? 'Recording+Transcript' : 'Recording',
+            linkedMessage: {
+              conversationId: c.recordingLink.conversationId,
+              linkedMessageId: c.recordingLink.linkedMessageId,
+            },
+          },
+        ]
+      : undefined,
+    isDeleted: c.isDeleted,
+  };
+}
+
 // Assemble every leveldb (key,value) pair the fixture emits, in a fixed, deterministic order:
 // db-name catalog rows, then store-name catalog rows, then data rows (conversations, then
 // replychains, then profiles). Order only affects sequence-number assignment, not correctness.
@@ -139,12 +227,16 @@ function buildOps(): { key: Buffer; value: Buffer }[] {
     dbNameRow(DB_CONVERSATIONS.id, DB_CONVERSATIONS.name),
     dbNameRow(DB_REPLYCHAINS.id, DB_REPLYCHAINS.name),
     dbNameRow(DB_PROFILES.id, DB_PROFILES.name),
+    dbNameRow(DB_CALENDAR.id, DB_CALENDAR.name),
+    dbNameRow(DB_CALLHISTORY.id, DB_CALLHISTORY.name),
   );
 
   ops.push(
     storeNameRow(DB_CONVERSATIONS.id, DB_CONVERSATIONS.osId, DB_CONVERSATIONS.store),
     storeNameRow(DB_REPLYCHAINS.id, DB_REPLYCHAINS.osId, DB_REPLYCHAINS.store),
     storeNameRow(DB_PROFILES.id, DB_PROFILES.osId, DB_PROFILES.store),
+    storeNameRow(DB_CALENDAR.id, DB_CALENDAR.osId, DB_CALENDAR.store),
+    storeNameRow(DB_CALLHISTORY.id, DB_CALLHISTORY.osId, DB_CALLHISTORY.store),
   );
 
   for (const conv of CONVERSATIONS) {
@@ -176,6 +268,16 @@ function buildOps(): { key: Buffer; value: Buffer }[] {
         jobTitle: p.jobTitle,
         department: p.department,
       }),
+    );
+  }
+  for (const e of EVENTS) {
+    ops.push(
+      dataRow(DB_CALENDAR.id, DB_CALENDAR.osId, idbKeyString(e.objectId), buildEventRecord(e)),
+    );
+  }
+  for (const c of CALLS) {
+    ops.push(
+      dataRow(DB_CALLHISTORY.id, DB_CALLHISTORY.osId, idbKeyString(c.callId), buildCallRecord(c)),
     );
   }
 

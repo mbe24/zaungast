@@ -47,6 +47,55 @@
         "mri": "mri",
         "name": "displayName"
       }
+    },
+    "event": {
+      "db": "*calendar*",
+      "store": "calendar",
+      "fields": {
+        "id": "objectId",
+        "seriesId": "seriesMasterId",
+        "subject": "subject",
+        "startTime": "startTime",
+        "endTime": "endTime",
+        "isAllDay": "isAllDayEvent",
+        "location": "location",
+        "organizerName": "organizerName",
+        "organizerEmail": "organizerAddress",
+        "isOnlineMeeting": "isOnlineMeeting",
+        "cid": "skypeTeamsDataObject.cid",
+        "isAppointment": "isAppointment",
+        "myResponse": "myResponseType",
+        "showAs": "showAs",
+        "isCancelled": "isCancelled",
+        "eventType": "eventType",
+        "sensitivityLabelId": "sensitivityLabelId",
+        "doNotForward": "doNotForward",
+        "hasAttachments": "hasAttachments",
+        "attendees": "attendees",
+        "bodyContent": "bodyContent"
+      }
+    },
+    "call": {
+      "db": "*call-history-manager*",
+      "store": "call-history",
+      "fields": {
+        "id": "callId",
+        "callType": "callType",
+        "callDirection": "callDirection",
+        "callState": "callState",
+        "startTime": "startTime",
+        "durationInMs": "durationInMs",
+        "originator": "originatorParticipant",
+        "target": "targetParticipant",
+        "participantList": "participantList",
+        "groupChatThreadId": "groupChatThreadId",
+        "recordings": "recordings",
+        "transcript": "transcript",
+        "voicemailMetadata": "voicemailMetadata",
+        "spamRiskLevel": "spamRiskLevel",
+        "isCurrentUserPartOfCall": "isCurrentUserPartOfCall",
+        "isDeleted": "isDeleted"
+      }
     }
   }
 }
