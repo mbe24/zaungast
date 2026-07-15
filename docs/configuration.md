@@ -19,6 +19,15 @@ claude mcp add zaungast -s user \
   -- npx -y zaungast
 ```
 
+Codex (`~/.codex/config.toml`) — `env` is a TOML inline table:
+
+```toml
+[mcp_servers.zaungast]
+command = "npx"
+args = ["-y", "zaungast"]
+env = { TEAMS_LEVELDB_DIR = "/full/path/to/https_teams.microsoft.com_0.indexeddb.leveldb" }
+```
+
 Generic MCP JSON config:
 
 ```json

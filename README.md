@@ -66,6 +66,9 @@ Add to `~/.codex/config.toml` (or run `codex mcp add zaungast -- npx -y zaungast
 [mcp_servers.zaungast]
 command = "npx"
 args = ["-y", "zaungast"]
+# The Teams database is auto-discovered, so no path is needed. To set or override it,
+# delete the "#" below and point it at your …indexeddb.leveldb folder:
+# env = { TEAMS_LEVELDB_DIR = "/full/path/to/https_teams.microsoft.com_0.indexeddb.leveldb" }
 ```
 
 ### Claude Desktop / other clients
@@ -79,6 +82,25 @@ Add to your client's MCP config (`claude_desktop_config.json`, `.mcp.json`, …)
   }
 }
 ```
+
+If you want to set or override a variable, use this form instead:
+
+```json
+{
+  "mcpServers": {
+    "zaungast": {
+      "command": "npx",
+      "args": ["-y", "zaungast"],
+      "env": {
+        "TEAMS_LEVELDB_DIR": "/full/path/to/https_teams.microsoft.com_0.indexeddb.leveldb"
+      }
+    }
+  }
+}
+```
+
+`TEAMS_LEVELDB_DIR` is optional — the database is auto-discovered. Set it only if discovery
+fails or to pin a specific profile.
 
 From-source setup and other clients are covered in the
 [installation docs](https://zaungast.readthedocs.io/en/latest/installation/).
