@@ -100,9 +100,7 @@ If you want to set or override a variable, use this form instead:
 ```
 
 `TEAMS_LEVELDB_DIR` is optional — the database is auto-discovered. Set it only if discovery
-fails or to pin a specific profile.
-
-From-source setup and other clients are covered in the
+fails or to pin a specific profile. From-source setup and other clients are covered in the
 [installation docs](https://zaungast.readthedocs.io/en/latest/installation/).
 
 ## Tools
