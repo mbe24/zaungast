@@ -336,6 +336,27 @@ ok(
   full,
 );
 
+// ---- 8. identity label: the owner's own messages must render as "<name> (you)", never "ME".
+// A bare first-person token makes an AI reader misattribute the owner's messages to itself.
+// Ada is SELF in this fixture; she authored "Sure, sharing now." in the study-group conversation.
+console.log('\n=== identity label (owner = you) ===');
+ok('owner message labelled by real name + (you)', /Ada Lovelace \(you\)>/.test(multi), multi);
+ok('no bare "ME>" label remains in read_messages', !/(^|\s)ME>/.test(multi), multi);
+ok(
+  'read_messages header carries the (you) viewer legend',
+  /viewer: Ada Lovelace[^\n]*\(you\)/.test(multi),
+  multi,
+);
+
+// search must fix the SECOND 'ME' literal too. "fitting" hits only Ada's own DM line.
+const ownSearch = search(store, meta, false, { query: 'fitting', limit: 5 });
+ok(
+  'search labels an owner-authored hit as "<name> (you)"',
+  /Ada Lovelace \(you\)/.test(ownSearch),
+  ownSearch.slice(0, 300),
+);
+ok('no bare "ME>" label remains in search', !/(^|\s)ME>/.test(ownSearch), ownSearch.slice(0, 300));
+
 store.close();
 
 fs.rmSync(dir, { recursive: true, force: true });

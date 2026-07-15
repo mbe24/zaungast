@@ -14,6 +14,11 @@ import {
 const HISTORY_NOTE =
   'Note: this reads the LOCAL Teams cache — history is the synced slice on this device, not the full server archive.';
 
+// The owner's own messages are labelled `<name> (you)`; that speaker is the human account owner,
+// NOT you the assistant — attribute those lines to the user, never to yourself.
+const YOU_NOTE =
+  'The account owner\'s own messages are labelled "<name> (you)" — that speaker is the user, not you the assistant.';
+
 export function buildServer(session: Session): McpServer {
   const server = new McpServer({ name: 'zaungast', version: '0.1.0' });
 
@@ -55,7 +60,7 @@ export function buildServer(session: Session): McpServer {
     'read_messages',
     {
       title: 'Read a conversation',
-      description: `Read one conversation's messages in STORY ORDER (oldest→newest). Target by handle (c:xxxx) or title/participant substring. Page back with the returned older: cursor, or center on a message with around:. ${HISTORY_NOTE}`,
+      description: `Read one conversation's messages in STORY ORDER (oldest→newest). Target by handle (c:xxxx) or title/participant substring. Page back with the returned older: cursor, or center on a message with around:. ${YOU_NOTE} ${HISTORY_NOTE}`,
       inputSchema: readMessagesShape,
     },
     async (args) => run(readMessages, args),
@@ -65,7 +70,7 @@ export function buildServer(session: Session): McpServer {
     'search',
     {
       title: 'Search messages',
-      description: `Full-text search across all messages with filters. Empty query = filtered browse. from/in accept display-name / title substrings or handles. mentions_me finds messages that @mention you. ${HISTORY_NOTE}`,
+      description: `Full-text search across all messages with filters. Empty query = filtered browse. from/in accept display-name / title substrings or handles. mentions_me finds messages that @mention you. ${YOU_NOTE} ${HISTORY_NOTE}`,
       inputSchema: searchShape,
     },
     async (args) => run(search, args),

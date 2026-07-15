@@ -310,14 +310,40 @@ interface ReactionCtx {
   full: boolean;
 }
 
-function renderMessageLines(rows: any[], rx?: ReactionCtx): string[] {
+// The account owner's own messages must NOT be labelled with a bare first-person token: to an
+// LLM reading the transcript, `ME`/`I` resolves to its OWN voice, so it misattributes the owner's
+// messages to itself. Label the owner by real name + a `(you)` marker instead — a named third
+// party the agent can't confuse with itself, while `(you)` keeps the human's at-a-glance cue and
+// (correctly, for a machine) binds to the agent's human principal, who IS the account owner.
+// `ownerFallback` is only used for the degenerate case of an is_mine row with an empty sender_name.
+function ownerLabel(senderName: string | null | undefined, ownerFallback: string | null): string {
+  const nm = senderName || ownerFallback;
+  return nm ? `${nm} (you)` : '(you)';
+}
+
+// The owner's canonical display name (for the fallback + the header legend), or null if it can't
+// be resolved (owner never posted / no self MRI).
+function ownerDisplayName(store: ChatStore, meta: StoreMeta): string | null {
+  const selfMri = (meta as any).selfMri as string | null;
+  return selfMri ? store.nameForMri(selfMri) : null;
+}
+
+// One-line header note that tells a machine reader what `(you)` means. Emitted only when the
+// result actually contains owner-authored rows; empty when the owner name is unresolved.
+function viewerLegend(name: string | null): string {
+  return name ? `viewer: ${name} — "(you)" marks this account's owner, not the assistant` : '';
+}
+
+function renderMessageLines(rows: any[], ownerFallback: string | null, rx?: ReactionCtx): string[] {
   let lastMri: string | null = null;
   let lastTs = 0;
   return rows.map((r) => {
     const collapsed = r.sender_mri === lastMri && r.ts - lastTs < 15 * 60_000;
     lastMri = r.sender_mri;
     lastTs = r.ts;
-    const senderLabel = r.is_mine ? 'ME' : r.sender_name || '(unknown)';
+    const senderLabel = r.is_mine
+      ? ownerLabel(r.sender_name, ownerFallback)
+      : r.sender_name || '(unknown)';
     const who = collapsed ? '  ↳' : senderLabel;
     const marks = (r.has_attach ? ' [attachment]' : '') + (r.mentions_me ? ' [@me]' : '');
     const line = `${fmtTs(r.ts)} ${who}> ${clip(r.content, 280)}${marks}`;
@@ -400,12 +426,16 @@ export function readMessages(
   const oldest = rows[0];
   const olderCursor = oldest && oldest.ts > earliest ? `older:${oldest.ts}:${oldest.id}` : '';
   const head = buildReadMessagesHead(conv, rows.length, total, earliest, newest, olderCursor);
-  const lines = renderMessageLines(rows, {
+  const ownerNm = ownerDisplayName(store, meta);
+  const lines = renderMessageLines(rows, ownerNm, {
     store,
     selfMri: (meta as any).selfMri as string | null,
     full: String(args.reactions) === 'full',
   });
-  return `${envelope(meta, deferred)}\n${head}\n${lines.join('\n') || '(no messages)'}`;
+  // Emit the (you)-legend only when owner-authored rows are actually shown (else it's dead weight).
+  const legend = rows.some((r: any) => r.is_mine) ? viewerLegend(ownerNm) : '';
+  const out = [envelope(meta, deferred), head, legend].filter(Boolean).join('\n');
+  return `${out}\n${lines.join('\n') || '(no messages)'}`;
 }
 
 // Apply the `from:` filter: resolve to a sender condition, plus (for a name substring, not a
@@ -545,7 +575,11 @@ function runSearchQuery(
 
 // Build the per-hit lines and the (optional) conversation legend, resolving conv_id → handle
 // once per distinct conversation (memoized).
-function buildSearchResults(db: DB, rows: any[]): { lines: string[]; legend: string } {
+function buildSearchResults(
+  db: DB,
+  rows: any[],
+  ownerFallback: string | null,
+): { lines: string[]; legend: string } {
   const convH = new Map<string, string>();
   const hn = (cid: string) =>
     convH.get(cid) ??
@@ -565,10 +599,10 @@ function buildSearchResults(db: DB, rows: any[]): { lines: string[]; legend: str
           )
           .join(' · ')
       : '';
-  const lines = rows.map(
-    (r) =>
-      `${hn(r.conv_id)} ${fmtTs(r.ts)} m:${r.id} ${r.is_mine ? 'ME' : r.sender_name}> ${clip(r.snip, 140)}`,
-  );
+  const lines = rows.map((r) => {
+    const label = r.is_mine ? ownerLabel(r.sender_name, ownerFallback) : r.sender_name;
+    return `${hn(r.conv_id)} ${fmtTs(r.ts)} m:${r.id} ${label}> ${clip(r.snip, 140)}`;
+  });
   return { lines, legend };
 }
 
@@ -625,12 +659,17 @@ export function search(
   }
 
   const { rows, order } = runSearchQuery(db, meta, conds, params, limit, args.query);
-  const { lines, legend } = buildSearchResults(db, rows);
+  const ownerNm = ownerDisplayName(store, meta);
+  const { lines, legend } = buildSearchResults(db, rows, ownerNm);
   const coverage = computeSearchCoverage(db, scopeConds, scopeParams, rows, since);
+  // Owner-label legend, only when a hit is owner-authored (search interleaves conversations, so
+  // the (you) rows can be scattered — the legend matters here at least as much as in read_messages).
+  const vlegend = rows.some((r: any) => r.is_mine) ? viewerLegend(ownerNm) : '';
 
   const head = [
     envelope(meta, deferred, `order:${order} · ${rows.length} hits`),
     ...notes,
+    vlegend,
     legend,
     coverage,
   ]
