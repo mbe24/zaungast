@@ -175,7 +175,7 @@ function buildEventRecord(e: EventDef): Record<string, unknown> {
     attendees: e.attendees?.map((a) => ({
       name: a.name,
       address: a.address,
-      role: a.role ?? 'required',
+      role: 'User', // real Teams: role is uniformly "User"; the distinction is in `type`
       type: a.type ?? 'Required',
       status: { response: a.response ?? 'None' },
     })),

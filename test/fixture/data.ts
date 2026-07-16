@@ -272,8 +272,10 @@ const evIso = (day: number, hour: number, minute = 0): string =>
 export interface AttendeeDef {
   name: string;
   address: string;
-  role?: string;
-  type?: string; // Organizer | Required | Optional | Resource — real data marks rooms as 'Resource'
+  // In real Teams every attendee's `role` is uniformly "User"; the meaningful distinction lives in
+  // `type` (Organizer | Required | Optional | Resource — rooms are 'Resource'). So we don't declare
+  // role per-attendee — the generator emits the constant "User" — and express intent via `type`.
+  type?: string; // default 'Required'
   response?: string; // status.response
 }
 export interface EventDef {
@@ -328,9 +330,9 @@ export const EVENTS: EventDef[] = [
     myResponseType: 'Accepted',
     showAs: 'Busy',
     attendees: [
-      { name: ada.displayName, address: ada.email, role: 'organizer', response: 'Accepted' },
-      { name: alan.displayName, address: alan.email, role: 'required', response: 'Accepted' },
-      { name: grace.displayName, address: grace.email, role: 'required', response: 'Tentative' },
+      { name: ada.displayName, address: ada.email, type: 'Organizer', response: 'Accepted' },
+      { name: alan.displayName, address: alan.email, type: 'Required', response: 'Accepted' },
+      { name: grace.displayName, address: grace.email, type: 'Required', response: 'Tentative' },
       // A meeting room (type:'Resource') — must be filtered out of the attendee list + count.
       {
         name: 'Room CS-101',
@@ -353,8 +355,8 @@ export const EVENTS: EventDef[] = [
     myResponseType: 'NotResponded',
     showAs: 'Busy',
     attendees: [
-      { name: ada.displayName, address: ada.email, role: 'required', response: 'None' },
-      { name: edsger.displayName, address: edsger.email, role: 'organizer', response: 'Accepted' },
+      { name: ada.displayName, address: ada.email, type: 'Required', response: 'None' },
+      { name: edsger.displayName, address: edsger.email, type: 'Organizer', response: 'Accepted' },
     ],
   },
   // [cancelled] event — shown by default, tagged; hide_cancelled:true must filter it out.
