@@ -60,21 +60,36 @@ function firstDefined(obj: unknown, spec: string | string[]): unknown {
   return undefined;
 }
 
-// Build dbId->name and (dbId:osId)->storeName tables from the live entries.
-function schemaTables(live: Entry[]): {
+// Per-`live` memoized index: the prefix decode of every entry (the single biggest ingest waste
+// — a full ingest used to re-run decodePrefix ~11× over all entries, ~1.2M closure+object allocs
+// just to re-derive (dbId,osId,indexId)) plus the db/store-name catalog, computed ONCE and shared
+// across the fingerprint-independent consumers (entityTargets ×N + extractEntity ×N). Keyed on the
+// live array reference (WeakMap → GC'd with it); the incremental path's subset array gets its own.
+interface LiveIndex {
+  prefixes: (DecodedPrefix | null)[]; // parallel to live; null = key too short / undecodable
   dbNames: Map<number, string>;
   storeNames: Map<string, string>;
-} {
-  const dbNames = new Map<number, string>(),
-    storeNames = new Map<string, string>();
-  for (const { key, value } of live) {
-    if (key.length < 1) continue;
-    let p: DecodedPrefix;
-    try {
-      p = decodePrefix(key);
-    } catch {
-      continue;
+}
+const indexCache = new WeakMap<Entry[], LiveIndex>();
+
+function liveIndex(live: Entry[]): LiveIndex {
+  const hit = indexCache.get(live);
+  if (hit) return hit;
+  const prefixes: (DecodedPrefix | null)[] = new Array(live.length);
+  const dbNames = new Map<number, string>();
+  const storeNames = new Map<string, string>();
+  for (let i = 0; i < live.length; i++) {
+    const { key, value } = live[i];
+    let p: DecodedPrefix | null = null;
+    if (key.length >= 1) {
+      try {
+        p = decodePrefix(key);
+      } catch {
+        p = null;
+      }
     }
+    prefixes[i] = p;
+    if (!p) continue;
     const { databaseId, objectStoreId, indexId, headerLen } = p;
     if (databaseId === 0 && objectStoreId === 0 && indexId === 0 && key[headerLen] === 0xc9) {
       const [, p2] = readStringWithLength(key, headerLen + 1);
@@ -87,21 +102,22 @@ function schemaTables(live: Entry[]): {
       if (key[pp] === 0) storeNames.set(`${databaseId}:${osId}`, utf16be(value));
     }
   }
-  return { dbNames, storeNames };
+  const idx: LiveIndex = { prefixes, dbNames, storeNames };
+  indexCache.set(live, idx);
+  return idx;
 }
 
-// The (dbId:osId) keys whose db/store match an entity definition. Computed from the FULL
-// live set (needs db-name metadata); cached and reused for incremental extraction.
-// `mapping` is typed to also accept `null` because callers commonly pass the result of
-// `selectMapping(...).mapping` straight through without a guard, exactly as the untyped
-// original did — a null mapping still throws the same TypeError on first access below.
+// The (dbId:osId) keys whose db/store match an entity definition. Uses the shared per-live catalog
+// (no re-scan). `mapping` is typed to also accept `null` because callers commonly pass the result
+// of `selectMapping(...).mapping` straight through without a guard, exactly as the untyped original
+// did — a null mapping still throws the same TypeError on first access below.
 export function entityTargets(
   live: Entry[],
   mapping: Mapping | null,
   entityName: string,
 ): Set<string> {
   const def = (mapping as Mapping).entities[entityName];
-  const { dbNames, storeNames } = schemaTables(live);
+  const { dbNames, storeNames } = liveIndex(live);
   const targets = new Set<string>();
   for (const [sk, storeName] of storeNames) {
     const dbId = Number(sk.split(':')[0]);
@@ -114,7 +130,8 @@ export function entityTargets(
 // Extract rows for one entity definition. Each row carries __key = the source record's
 // leveldb user-key (latin1) so callers can group messages by their reply-chain record.
 // `targets` (from entityTargets) may be supplied to extract from a subset of `live` that
-// lacks the db-name metadata (incremental path).
+// lacks the db-name metadata (incremental path). Iterates `live` in order (output order
+// preserved) using the shared prefix index — no per-entry re-decode of the key prefix.
 export function extractEntity(
   live: Entry[],
   mapping: Mapping | null,
@@ -123,6 +140,7 @@ export function extractEntity(
 ): ExtractedRow[] {
   const def = (mapping as Mapping).entities[entityName];
   targets ??= entityTargets(live, mapping, entityName);
+  const { prefixes } = liveIndex(live);
 
   const mapFields = (src: unknown, recKey: string): ExtractedRow => {
     const r: ExtractedRow = { __key: recKey };
@@ -149,15 +167,11 @@ export function extractEntity(
   };
 
   const rows: ExtractedRow[] = [];
-  for (const { key, value } of live) {
-    let p: DecodedPrefix;
-    try {
-      p = decodePrefix(key);
-    } catch {
-      continue;
-    }
-    if (p.indexId !== 1) continue;
+  for (let i = 0; i < live.length; i++) {
+    const p = prefixes[i];
+    if (!p || p.indexId !== 1) continue;
     if (!targets.has(`${p.databaseId}:${p.objectStoreId}`)) continue;
+    const { key, value } = live[i];
     let obj: unknown;
     try {
       obj = decodeValue(value);
