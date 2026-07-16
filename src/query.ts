@@ -3,7 +3,9 @@
 // rows over the in-memory ChatStore; the MCP layer (tools.ts) renders them into token-economical
 // text. The split is being done incrementally, one tool at a time, each proven byte-identical by
 // the G2 MCP-output golden. Nothing here knows about MCP, agents, or token budgets.
-import type { ChatStore } from './ingest/store.js';
+import { isBotMri, type ChatStore } from './ingest/store.js';
+
+type DB = ChatStore['db'];
 
 // escape LIKE wildcards in user input (used with `escape '\'`). Query-side helper.
 export function likeEscape(s: string): string {
@@ -281,4 +283,82 @@ export function queryEvents(
 // "recurring events may be under-reported" coverage note.
 export function maxEventStart(store: ChatStore): number {
   return (store.db.prepare('select max(start_ts) t from events').get() as any)?.t ?? 0;
+}
+
+// ---------- topics (analytics core) ----------
+export interface TopicRow {
+  ph: string;
+  c: number;
+  ns: number;
+  lift: number;
+  ex: any;
+}
+
+// Load the in-scope messages and (by default) drop bot/app senders (28: MRI) — automated
+// "updated/status" chatter isn't a topic you discussed. Excluded from BOTH window and baseline
+// so lift isn't skewed. (Scope/exclude conds are built by the MCP layer, which owns the shared
+// conversation/person resolvers.)
+export function loadTopicsMessages(
+  db: DB,
+  conds: string[],
+  params: any[],
+  includeBots: boolean | undefined,
+): { all: any[]; botExcluded: number } {
+  let all = db
+    .prepare(`select ts, sender_mri, content from messages where ${conds.join(' and ')}`)
+    .all(...params) as any[];
+  let botExcluded = 0;
+  if (!includeBots) {
+    const before = all.length;
+    all = all.filter((m) => !isBotMri(m.sender_mri));
+    botExcluded = before - all.length;
+  }
+  return { all, botExcluded };
+}
+
+// Score each candidate phrase by lift (window rate ÷ Laplace-smoothed baseline rate) weighted by
+// log-frequency, requiring ≥3 window mentions and ≥minSenders distinct senders (anti-spam gate).
+export function computeTopicRows(
+  all: any[],
+  phrases: (content: string) => string[],
+  sinceTs: number,
+  untilTs: number,
+  minSenders: number,
+  n: number,
+): { rows: TopicRow[]; baseTotal: number; win: any[] } {
+  const baseDf = new Map<string, number>();
+  let baseTotal = 0;
+  for (const m of all)
+    if (m.ts < sinceTs) {
+      baseTotal++;
+      for (const ph of new Set(phrases(m.content))) baseDf.set(ph, (baseDf.get(ph) || 0) + 1);
+    }
+
+  const count = new Map<string, number>(),
+    df = new Map<string, number>();
+  const senders = new Map<string, Set<string>>(),
+    example = new Map<string, any>();
+  const win = all.filter((m) => m.ts >= sinceTs && m.ts < untilTs);
+  for (const m of win) {
+    const seen = new Set<string>();
+    for (const ph of phrases(m.content)) {
+      count.set(ph, (count.get(ph) || 0) + 1);
+      if (!seen.has(ph)) {
+        df.set(ph, (df.get(ph) || 0) + 1);
+        seen.add(ph);
+      }
+      (senders.get(ph) || senders.set(ph, new Set()).get(ph)!).add(m.sender_mri);
+      if (!example.has(ph)) example.set(ph, m);
+    }
+  }
+  const rows = [...count.entries()]
+    .map(([ph, c]) => {
+      const winRate = df.get(ph)! / Math.max(1, win.length);
+      const baseRate = ((baseDf.get(ph) || 0) + 0.5) / (baseTotal + 1);
+      return { ph, c, ns: senders.get(ph)!.size, lift: winRate / baseRate, ex: example.get(ph) };
+    })
+    .filter((r) => r.c >= 3 && r.ns >= minSenders)
+    .sort((a, b) => b.lift * Math.log2(1 + b.c) - a.lift * Math.log2(1 + a.c))
+    .slice(0, n);
+  return { rows, baseTotal, win };
 }

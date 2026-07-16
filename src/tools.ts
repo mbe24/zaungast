@@ -11,7 +11,8 @@ import {
   queryEvents,
   maxEventStart,
 } from './query.js';
-import type { EventRow } from './query.js';
+import { loadTopicsMessages, computeTopicRows } from './query.js';
+import type { EventRow, TopicRow } from './query.js';
 import type {
   ListConversationsArgs,
   ReadMessagesArgs,
@@ -1037,26 +1038,7 @@ function buildTopicsScope(
   return { conds, params, notes, minSenders: personScope ? 1 : 2 };
 }
 
-// Load the in-scope messages and (by default) drop bot/app senders (28: MRI) — automated
-// "updated/status" chatter isn't a topic you discussed. Excluded from BOTH window and baseline
-// so lift isn't skewed.
-function loadTopicsMessages(
-  db: DB,
-  conds: string[],
-  params: any[],
-  includeBots: boolean | undefined,
-): { all: any[]; botExcluded: number } {
-  let all = db
-    .prepare(`select ts, sender_mri, content from messages where ${conds.join(' and ')}`)
-    .all(...params) as any[];
-  let botExcluded = 0;
-  if (!includeBots) {
-    const before = all.length;
-    all = all.filter((m) => !isBotMri(m.sender_mri));
-    botExcluded = before - all.length;
-  }
-  return { all, botExcluded };
-}
+// loadTopicsMessages + computeTopicRows now live in ./query.js (the topic analytics core).
 
 // Window: explicit since/until (arbitrary range) overrides the enum window. Baseline is always
 // the messages BEFORE the window ("new vs history") — never after — so a topic that persists
@@ -1078,60 +1060,9 @@ function computeTopicsWindow(
   return { sinceTs, untilTs, explicit };
 }
 
-// Score each candidate phrase by lift (window rate ÷ Laplace-smoothed baseline rate) weighted by
-// log-frequency, requiring ≥3 window mentions and ≥minSenders distinct senders (anti-spam gate).
-function computeTopicRows(
-  all: any[],
-  phrases: (content: string) => string[],
-  sinceTs: number,
-  untilTs: number,
-  minSenders: number,
-  n: number,
-): {
-  rows: { ph: string; c: number; ns: number; lift: number; ex: any }[];
-  baseTotal: number;
-  win: any[];
-} {
-  const baseDf = new Map<string, number>();
-  let baseTotal = 0;
-  for (const m of all)
-    if (m.ts < sinceTs) {
-      baseTotal++;
-      for (const ph of new Set(phrases(m.content))) baseDf.set(ph, (baseDf.get(ph) || 0) + 1);
-    }
+// computeTopicRows moved to ./query.js (imported above).
 
-  const count = new Map<string, number>(),
-    df = new Map<string, number>();
-  const senders = new Map<string, Set<string>>(),
-    example = new Map<string, any>();
-  const win = all.filter((m) => m.ts >= sinceTs && m.ts < untilTs);
-  for (const m of win) {
-    const seen = new Set<string>();
-    for (const ph of phrases(m.content)) {
-      count.set(ph, (count.get(ph) || 0) + 1);
-      if (!seen.has(ph)) {
-        df.set(ph, (df.get(ph) || 0) + 1);
-        seen.add(ph);
-      }
-      (senders.get(ph) || senders.set(ph, new Set()).get(ph)!).add(m.sender_mri);
-      if (!example.has(ph)) example.set(ph, m);
-    }
-  }
-  const rows = [...count.entries()]
-    .map(([ph, c]) => {
-      const winRate = df.get(ph)! / Math.max(1, win.length);
-      const baseRate = ((baseDf.get(ph) || 0) + 0.5) / (baseTotal + 1);
-      return { ph, c, ns: senders.get(ph)!.size, lift: winRate / baseRate, ex: example.get(ph) };
-    })
-    .filter((r) => r.c >= 3 && r.ns >= minSenders)
-    .sort((a, b) => b.lift * Math.log2(1 + b.c) - a.lift * Math.log2(1 + a.c))
-    .slice(0, n);
-  return { rows, baseTotal, win };
-}
-
-function renderTopicRows(
-  rows: { ph: string; c: number; ns: number; lift: number; ex: any }[],
-): string[] {
+function renderTopicRows(rows: TopicRow[]): string[] {
   return rows.map(
     (r, i) =>
       `${i + 1}. "${r.ph}" ×${r.c} (${r.lift.toFixed(1)}× baseline) · ${r.ns} people\n   e.g. ${fmtTs(r.ex.ts)}: ${clip(r.ex.content, 90)}`,
