@@ -74,6 +74,31 @@ export interface LoadEntriesReuseResult {
 // the copy-reuse incremental path (loadEntriesReuse).
 export type LdbCache = Map<string, TableReadResult>;
 
+// ---- Snapshot: the engine seam (see plan/b2-decisions.md) ----
+// A `Snapshot` is what a storage engine produces: live records already grouped by object store,
+// with the db/store-name catalog resolved, so the schema/extract layer never touches engine key
+// coding. (Value bytes stay raw — value-decode remains a documented per-engine dependency.)
+
+// One object store's live (indexId===1, post-dedup) records, plus resolved names.
+export interface StoreBucket {
+  dbId: number;
+  osId: number;
+  dbName: string | null; // resolved by the loader from the db-name catalog rows
+  storeName: string | null;
+  records: Entry[]; // dedup-insertion order (fingerprint sampling depends on it)
+  maxSeq: number; // high-water over this store's live records (see api-design §2.6)
+}
+
+export interface Snapshot {
+  buckets: Map<string, StoreBucket>; // key `${dbId}:${osId}`
+  dbNames: Map<number, string>; // dbId -> normalized-free db name (catalog)
+  storeNames: Map<string, string>; // `${dbId}:${osId}` -> store name (catalog)
+  maxSeq: number; // global high-water (INCLUDING tombstones)
+  rawCount: number;
+  uniqueCount: number;
+  lossy: boolean;
+}
+
 // Decoded Chromium IndexedDB key prefix (database/object-store/index ids).
 export interface DecodedPrefix {
   databaseId: number;

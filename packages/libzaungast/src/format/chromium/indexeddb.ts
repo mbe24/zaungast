@@ -15,7 +15,9 @@ import type {
   LoadEntriesOptions,
   LoadEntriesResult,
   LoadEntriesReuseResult,
+  Snapshot,
   SsvValue,
+  StoreBucket,
   TableReadResult,
   WalBatch,
 } from '../types.js';
@@ -108,6 +110,56 @@ function collectLive(map: Map<string, Entry>): { live: Entry[]; maxSeq: number }
   return { live, maxSeq };
 }
 
+// One pass over the deduped map that classifies each record once: decode its key prefix, route
+// db-name / store-name catalog rows into the name maps, and append indexId===1 data records to
+// their object-store bucket (in dedup-insertion order — fingerprint sampling depends on it). This
+// is the engine-seam producer: everything downstream reads `Snapshot`, not raw Chromium keys.
+function collectSnapshot(map: Map<string, Entry>, raw: number, lossy: boolean): Snapshot {
+  const dbNames = new Map<number, string>();
+  const storeNames = new Map<string, string>();
+  const buckets = new Map<string, StoreBucket>();
+  let maxSeq = 0;
+  for (const e of map.values()) {
+    if (e.seq > maxSeq) maxSeq = e.seq; // global high-water (incl. tombstones)
+    if (e.type === 0) continue; // tombstone: bumps maxSeq only, never appears in a bucket
+    const key = e.key;
+    if (key.length < 1) continue;
+    let p: DecodedPrefix;
+    try {
+      p = decodePrefix(key);
+    } catch {
+      continue;
+    }
+    const { databaseId, objectStoreId, indexId, headerLen } = p;
+    if (databaseId === 0 && objectStoreId === 0 && indexId === 0 && key[headerLen] === 0xc9) {
+      // db-name catalog row: origin + db name in the key, dbId as a varint value.
+      const [, p2] = readStringWithLength(key, headerLen + 1);
+      const [name] = readStringWithLength(key, p2);
+      const [id] = readVarint(e.value, 0); // value non-null (non-tombstone)
+      dbNames.set(id, name);
+    } else if (databaseId > 0 && objectStoreId === 0 && indexId === 0 && key[headerLen] === 0x32) {
+      // store-name catalog row: osId varint in the key, store name (utf16be) in the value.
+      const [osId, pp] = readVarint(key, headerLen + 1);
+      if (key[pp] === 0) storeNames.set(`${databaseId}:${osId}`, utf16be(e.value));
+    } else if (indexId === 1) {
+      const bk = `${databaseId}:${objectStoreId}`;
+      let b = buckets.get(bk);
+      if (!b) {
+        b = { dbId: databaseId, osId: objectStoreId, dbName: null, storeName: null, records: [], maxSeq: 0 };
+        buckets.set(bk, b);
+      }
+      b.records.push(e);
+      if (e.seq > b.maxSeq) b.maxSeq = e.seq;
+    }
+  }
+  // back-fill resolved names onto each bucket
+  for (const b of buckets.values()) {
+    b.storeName = storeNames.get(`${b.dbId}:${b.osId}`) ?? null;
+    b.dbName = dbNames.get(b.dbId) ?? null;
+  }
+  return { buckets, dbNames, storeNames, maxSeq, rawCount: raw, uniqueCount: map.size, lossy };
+}
+
 // Load all live entries from a leveldb dir by scanning every .ldb table AND the .log WAL.
 // Dedup by user key keeping the highest sequence number (LevelDB's own precedence rule);
 // drop deletions (type 0). The WAL holds the newest writes (highest sequences), so merging
@@ -115,10 +167,12 @@ function collectLive(map: Map<string, Entry>): { live: Entry[]; maxSeq: number }
 // `seqCap` (tests) ignores entries above a sequence, so the map holds OLDER versions of
 // later-rewritten chains — letting an incremental genuinely exercise edits, not just inserts.
 // `lossy` is true if any table/log failed to read fully (→ callers must not trust deletions).
-export function loadEntries(
+// Build the deduped `userKeyHex -> Entry` map by scanning every .ldb table + the .log WAL.
+// Shared by loadEntries (→ flat live[]) and loadSnapshot (→ grouped buckets).
+function buildDedupMap(
   dir: string,
   { includeLog = true, seqCap }: LoadEntriesOptions = {},
-): LoadEntriesResult {
+): { map: Map<string, Entry>; raw: number; lossy: boolean } {
   const files = fs
     .readdirSync(dir)
     .filter((f) => f.endsWith('.ldb'))
@@ -144,7 +198,6 @@ export function loadEntries(
   };
 
   if (readTablesInto(dir, files, consider)) lossy = true;
-
   if (includeLog) {
     // Always read the WAL — a freshly-compacted or young DB can hold all its data in the
     // .log with no .ldb tables yet; gating on files.length would ingest it as empty.
@@ -154,9 +207,21 @@ export function loadEntries(
       .sort(byCodeUnit);
     if (readLogsInto(dir, logFiles, consider)) lossy = true;
   }
+  return { map, raw, lossy };
+}
 
+export function loadEntries(dir: string, opts: LoadEntriesOptions = {}): LoadEntriesResult {
+  const { map, raw, lossy } = buildDedupMap(dir, opts);
   const { live, maxSeq } = collectLive(map);
   return { live, rawCount: raw, uniqueCount: map.size, maxSeq, lossy };
+}
+
+// Engine-seam loader: same read+dedup as loadEntries, then one grouping pass → a `Snapshot`
+// (buckets + resolved db/store-name catalog). Consumers (fingerprint/entityTargets/extractEntity)
+// read the snapshot, never raw Chromium keys.
+export function loadSnapshot(dir: string, opts: LoadEntriesOptions = {}): Snapshot {
+  const { map, raw, lossy } = buildDedupMap(dir, opts);
+  return collectSnapshot(map, raw, lossy);
 }
 
 // COPY-REUSE loader (stage 2). `.ldb` files are immutable once named, so their parsed entries

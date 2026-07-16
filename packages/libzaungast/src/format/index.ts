@@ -22,6 +22,7 @@
 export {
   loadEntries,
   loadEntriesReuse,
+  loadSnapshot,
   decodePrefix,
   decodeValue,
   readVarint,
