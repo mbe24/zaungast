@@ -30,7 +30,7 @@ export interface IngestState {
   selfMri: string | null;
   msgTargets: Set<string>;
   convTargets: Set<string>;
-  maxSeq: bigint;
+  maxSeq: number;
 }
 const setEq = (a: Set<string>, b: Set<string>) =>
   a.size === b.size && [...a].every((x) => b.has(x));
@@ -307,7 +307,7 @@ function finalMeta(
 
 // FULL rebuild from a fresh snapshot dir. `seqCap` (tests only) builds a PARTIAL store as of
 // an earlier sequence, so a following applyIncremental can be proven to reach a full rebuild.
-export function ingest(dir: string, opts: { seqCap?: bigint } = {}): Ingested {
+export function ingest(dir: string, opts: { seqCap?: number } = {}): Ingested {
   const { live, maxSeq, lossy } = loadEntries(dir, { seqCap: opts.seqCap });
   const fp = fingerprint(live);
   const { mapping } = selectMapping(loadMappings(), fp);
@@ -358,7 +358,7 @@ export function ingest(dir: string, opts: { seqCap?: bigint } = {}): Ingested {
 // = a schema change; either way the caller must not advance state on that basis.
 export interface LoadedEntries {
   live: any[];
-  maxSeq: bigint;
+  maxSeq: number;
   lossy: boolean;
 }
 
@@ -367,7 +367,7 @@ export function applyIncremental(
   store: ChatStore,
   state: IngestState,
   source: string | LoadedEntries,
-): { needFullRebuild: boolean; newMaxSeq: bigint; skipped: boolean } {
+): { needFullRebuild: boolean; newMaxSeq: number; skipped: boolean } {
   const { live, maxSeq: newMax, lossy } = typeof source === 'string' ? loadEntries(source) : source;
   // HOLE 1 fix: a lossy load (a table/log couldn't be fully read) makes chains spuriously
   // absent from `live`, which the deletion reconcile would treat as deletions. Refuse to apply

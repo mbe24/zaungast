@@ -27,11 +27,11 @@ function varint(n: number): Buffer {
   return Buffer.from(b);
 }
 // Craft a leveldb .log holding one WriteBatch that DELETES (tombstones) a user key.
-function craftDeletionLog(userKey: Buffer, seq: bigint): Buffer {
+function craftDeletionLog(userKey: Buffer, seq: number): Buffer {
   const batch = Buffer.concat([
     (() => {
       const s = Buffer.alloc(8);
-      s.writeBigUInt64LE(seq);
+      s.writeBigUInt64LE(BigInt(seq));
       return s;
     })(),
     (() => {
@@ -123,10 +123,10 @@ function msgStoreKey(live: any): Buffer | null {
   return null;
 }
 // median seq among message-store records → guarantees a real delta for the incremental
-function midSeq(dir: string): bigint {
+function midSeq(dir: string): number {
   const { live } = loadEntries(dir);
   const targets: Set<string> = entityTargets(live, getMapping(live), 'message');
-  const seqs: bigint[] = [];
+  const seqs: number[] = [];
   for (const e of live) {
     let p: any;
     try {
@@ -224,7 +224,7 @@ console.log(
   );
   for (const [label, v] of picks) {
     const modified = copyDir(DIR);
-    fs.writeFileSync(path.join(modified, 'zzz999.log'), craftDeletionLog(v.key, maxSeq + 1000n));
+    fs.writeFileSync(path.join(modified, 'zzz999.log'), craftDeletionLog(v.key, maxSeq + 1000));
     const partial = ingest(DIR);
     const before = (partial.store.db.prepare('select count(*) n from messages').get() as any).n;
     applyIncremental(partial.store, partial.state!, modified);
@@ -262,7 +262,7 @@ console.log('\n=== E. Session end-to-end: warm full → mutate → incremental r
   const { live, maxSeq } = loadEntries(copy);
   fs.writeFileSync(
     path.join(copy, 'zz0.log'),
-    craftDeletionLog(msgStoreKey(live)!, maxSeq + 1000n),
+    craftDeletionLog(msgStoreKey(live)!, maxSeq + 1000),
   );
   const m1 = s.refreshNow(false); // incremental
   ok('refresh after mutation is incremental', m1.refreshMode === 'incremental');
@@ -306,7 +306,7 @@ console.log(
   const { live, maxSeq } = loadEntries(copy);
   fs.writeFileSync(
     path.join(copy, 'zzz1.log'),
-    craftDeletionLog(msgStoreKey(live)!, maxSeq + 1000n),
+    craftDeletionLog(msgStoreKey(live)!, maxSeq + 1000),
   ); // step 2: delete
   applyIncremental(s.store, s.state!, copy);
   s.state!.maxSeq = loadEntries(copy).maxSeq;
@@ -447,7 +447,7 @@ console.log(
   const { maxSeq } = loadEntries(copy);
   fs.writeFileSync(
     path.join(copy, 'zzz2.log'),
-    craftDeletionLog(msgStoreKey(loadEntries(copy).live)!, maxSeq + 1000n),
+    craftDeletionLog(msgStoreKey(loadEntries(copy).live)!, maxSeq + 1000),
   );
   const orig = s.store.recomputeDerived.bind(s.store);
   (s.store as any).recomputeDerived = () => {

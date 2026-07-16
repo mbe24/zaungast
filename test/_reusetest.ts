@@ -76,7 +76,7 @@ console.log('\n=== C. spine: partial + applyIncremental(cached load) == full reb
   const cap = (() => {
     const s = loadEntries(DIR)
       .live.map((e: any) => e.seq)
-      .sort((a: bigint, b: bigint) => (a < b ? -1 : 1));
+      .sort((a: number, b: number) => a - b);
     return s[Math.floor(s.length / 2)];
   })();
   const partial = ingest(DIR, { seqCap: cap });
@@ -174,11 +174,11 @@ function varint(n: number): Buffer {
   b.push(n);
   return Buffer.from(b);
 }
-function craftDeletionLog(userKey: Buffer, seq: bigint): Buffer {
+function craftDeletionLog(userKey: Buffer, seq: number): Buffer {
   const batch = Buffer.concat([
     (() => {
       const s = Buffer.alloc(8);
-      s.writeBigUInt64LE(seq);
+      s.writeBigUInt64LE(BigInt(seq));
       return s;
     })(),
     (() => {
@@ -255,8 +255,8 @@ console.log(
   // identical mutation: tombstone a chain in each
   const seqR = loadEntries(dR).maxSeq,
     seqC = loadEntries(dC).maxSeq;
-  fs.writeFileSync(path.join(dR, 'zz9.log'), craftDeletionLog(msgStoreKey(dR)!, seqR + 1000n));
-  fs.writeFileSync(path.join(dC, 'zz9.log'), craftDeletionLog(msgStoreKey(dC)!, seqC + 1000n));
+  fs.writeFileSync(path.join(dR, 'zz9.log'), craftDeletionLog(msgStoreKey(dR)!, seqR + 1000));
+  fs.writeFileSync(path.join(dC, 'zz9.log'), craftDeletionLog(msgStoreKey(dC)!, seqC + 1000));
   sR.refreshNow(false);
   const mC = sC.refreshNow(false);
   ok('copy-reuse refresh is incremental', mC.refreshMode === 'incremental');
@@ -291,8 +291,8 @@ console.log('\n=== H. Session copy-reuse multi-step (add then delete) == reparse
   // step 1: tombstone chain A
   const kR1 = msgStoreKey(dR)!,
     kC1 = msgStoreKey(dC)!;
-  fs.writeFileSync(path.join(dR, 'a.log'), craftDeletionLog(kR1, loadEntries(dR).maxSeq + 1000n));
-  fs.writeFileSync(path.join(dC, 'a.log'), craftDeletionLog(kC1, loadEntries(dC).maxSeq + 1000n));
+  fs.writeFileSync(path.join(dR, 'a.log'), craftDeletionLog(kR1, loadEntries(dR).maxSeq + 1000));
+  fs.writeFileSync(path.join(dC, 'a.log'), craftDeletionLog(kC1, loadEntries(dC).maxSeq + 1000));
   sR.refreshNow(false);
   sC.refreshNow(false);
   ok('multi-step copy-reuse == reparse', storeDump(sR.getStore()) === storeDump(sC.getStore()));
@@ -393,7 +393,7 @@ console.log(
   // corrupt the SNAPSHOT copy (live is intact) → simulates a prior partial copy
   const good = fs.readFileSync(path.join(snapDir, victim));
   fs.writeFileSync(path.join(snapDir, victim), good.subarray(0, Math.floor(good.length / 2)));
-  s.cur.state.maxSeq = 0n; // force re-derivation so a wedge would show as missing data
+  s.cur.state.maxSeq = 0; // force re-derivation so a wedge would show as missing data
   s.refreshNow(false);
   const n = (s.getStore().db.prepare('select count(*) n from messages').get() as any).n;
   const full = ingest(d);

@@ -21,7 +21,7 @@ import type {
 } from '../types.js';
 
 // A sink for candidate records; the loaders below feed one of these while deduping by user key.
-type Consider = (userKey: Buffer, value: Buffer | null, seq: bigint, type: number) => void;
+type Consider = (userKey: Buffer, value: Buffer | null, seq: number, type: number) => void;
 
 // Split each entry's 8-byte LevelDB trailer (seq<<8 | type) and feed it to `consider`. Returns
 // true if any entry was too short to carry a trailer (garbage from a block that parsed but is
@@ -34,17 +34,19 @@ function foldTable(res: TableReadResult, consider: Consider): boolean {
       short = true;
       continue;
     }
-    const tag = ikey.readBigUInt64LE(n - 8); // 8-byte trailer: (seq<<8 | type)
-    consider(ikey.subarray(0, n - 8), value, tag >> 8n, Number(tag & 0xffn));
+    // 8-byte trailer: type | (seq << 8). byte[n-8]=type, bytes[n-7..n-1]=seq (56-bit LE).
+    const type = ikey[n - 8];
+    const seqHi = ikey[n - 1]; // top 8 bits of the 56-bit seq
+    if (seqHi >= 0x20) throw new Error('leveldb seq exceeds 2^53 — widen seq handling'); // 0x20*2^48 == 2^53
+    const seq = seqHi * 0x1000000000000 + ikey.readUIntLE(n - 7, 6); // hi*2^48 + low 48 bits (exact, < 2^53)
+    consider(ikey.subarray(0, n - 8), value, seq, type);
   }
   return short;
 }
 
 // Fold a WAL batch's ops into `consider`; each op's sequence = batch.sequence + opIndex.
 function foldBatch(batch: WalBatch, consider: Consider): void {
-  batch.ops.forEach((op, i) =>
-    consider(op.key, op.value, BigInt(batch.sequence) + BigInt(i), op.type),
-  );
+  batch.ops.forEach((op, i) => consider(op.key, op.value, batch.sequence + i, op.type));
 }
 
 // Read each `.ldb` file and fold its entries into `consider`. When `cache` is given (the
@@ -96,9 +98,9 @@ function readLogsInto(dir: string, logFiles: string[], consider: Consider): bool
 }
 
 // Collect the surviving (non-tombstone) entries plus the global high-water sequence.
-function collectLive(map: Map<string, Entry>): { live: Entry[]; maxSeq: bigint } {
+function collectLive(map: Map<string, Entry>): { live: Entry[]; maxSeq: number } {
   const live: Entry[] = [];
-  let maxSeq = 0n;
+  let maxSeq = 0;
   for (const e of map.values()) {
     if (e.seq > maxSeq) maxSeq = e.seq; // global high-water mark (incl. tombstones)
     if (e.type !== 0) live.push(e);

@@ -44,7 +44,7 @@ export interface WalBatch {
 // A single live (post-dedup) IndexedDB record, keyed by the raw Chromium
 // user-key (WITHOUT the 8-byte seq/type trailer) plus the winning sequence/type.
 export interface Entry {
-  seq: bigint;
+  seq: number;
   type: number;
   key: Buffer;
   value: Buffer | null;
@@ -52,20 +52,20 @@ export interface Entry {
 
 export interface LoadEntriesOptions {
   includeLog?: boolean;
-  seqCap?: bigint;
+  seqCap?: number;
 }
 
 export interface LoadEntriesResult {
   live: Entry[];
   rawCount: number;
   uniqueCount: number;
-  maxSeq: bigint;
+  maxSeq: number;
   lossy: boolean;
 }
 
 export interface LoadEntriesReuseResult {
   live: Entry[];
-  maxSeq: bigint;
+  maxSeq: number;
   lossy: boolean;
   compacted: boolean;
 }
