@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { openStore, openLiveStore, tryOpen, inspect } from 'libzaungast/store-api.js';
+import { openStore, openLiveStore, tryOpen, inspect } from 'libzaungast';
 import { generateFixtureWithTables } from './fixture/generate.js';
 
 let pass = 0,

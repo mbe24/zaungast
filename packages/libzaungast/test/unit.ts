@@ -1,14 +1,14 @@
 // Data-free unit tests for the stable/pure layers — run in CI (no Teams cache needed).
 // The integration suites (src/_inctest, _reusetest, _fbtest) need a real local cache and run
 // locally via `npm run test:integration`.
-import * as Snappy from 'libzaungast/format/chromium/snappy.js';
-import { deserialize } from 'libzaungast/format/chromium/structured-clone.js';
-import { crc32c } from 'libzaungast/format/chromium/sstable.js';
-import { htmlToText, isSystemMessage, mentionedMris } from 'libzaungast/util/text.js';
-import { makeHandle } from 'libzaungast/util/handles.js';
-import { makeExtractor } from 'libzaungast/util/topics.js';
-import { isBotMri } from 'libzaungast/ingest/store.js';
-import { discoverTeamsDbs } from 'libzaungast/format/index.js';
+import * as Snappy from '../src/format/chromium/snappy.js';
+import { deserialize } from '../src/format/chromium/structured-clone.js';
+import { crc32c } from '../src/format/chromium/sstable.js';
+import { htmlToText, isSystemMessage, mentionedMris } from '../src/util/text.js';
+import { makeHandle } from '../src/util/handles.js';
+import { makeExtractor } from '../src/util/topics.js';
+import { isBotMri } from '../src/ingest/store.js';
+import { discoverTeamsDbs } from '../src/format/index.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

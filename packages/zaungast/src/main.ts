@@ -1,6 +1,6 @@
 import './_stdout-guard.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { openLiveStore } from 'libzaungast/store-api.js';
+import { openLiveStore } from 'libzaungast';
 import { buildServer } from './server.js';
 
 // ZAUNGAST_DB_DIR = a static leveldb dir (tests / a manual copy) — skips snapshot+discovery.

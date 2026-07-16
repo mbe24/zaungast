@@ -21,7 +21,7 @@ import {
   type WalOpIn,
 } from './encode.js';
 import { encodeTable, ldbKey } from './sstable-encode.js';
-import { readTable } from 'libzaungast/format/chromium/sstable.js';
+import { readTable } from '../../src/format/chromium/sstable.js';
 import {
   ALL_PROFILES,
   CONVERSATIONS,

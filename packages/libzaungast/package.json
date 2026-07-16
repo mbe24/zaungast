@@ -10,10 +10,15 @@
       "development": "./src/index.ts",
       "default": "./dist/index.js"
     },
-    "./*.js": {
-      "types": "./src/*.ts",
-      "development": "./src/*.ts",
-      "default": "./dist/*.js"
+    "./format": {
+      "types": "./src/format/index.ts",
+      "development": "./src/format/index.ts",
+      "default": "./dist/format/index.js"
+    },
+    "./format/engine": {
+      "types": "./src/format/engine.ts",
+      "development": "./src/format/engine.ts",
+      "default": "./dist/format/engine.js"
     }
   },
   "files": [

@@ -1,7 +1,7 @@
 // Tests for the feedback-driven features, driven through the libzaungast facade (openStore) + the
 // MCP renderers. Real-data smoke test (ZAUNGAST_TEST_DIR).
-import { openStore } from 'libzaungast/store-api.js';
-import { loadSnapshot } from 'libzaungast/format/index.js';
+import { openStore } from 'libzaungast';
+import { loadSnapshot } from 'libzaungast/format';
 import { search, topTopics, findPerson, readMessages } from 'zaungast/tools.js';
 import { describeSchema } from 'zaungast/tools/describeSchema.js';
 

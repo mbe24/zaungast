@@ -44,7 +44,7 @@ class FrozenDate extends RealDate {
 }
 (globalThis as unknown as { Date: typeof Date }).Date = FrozenDate as unknown as typeof Date;
 
-const { openStore } = await import('libzaungast/store-api.js');
+const { openStore } = await import('libzaungast');
 const {
   listConversations,
   readMessages,

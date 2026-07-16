@@ -1,6 +1,6 @@
 import { reactionGlyph } from './util/emoji.js';
 import { byCodeUnit } from './util/sort.js';
-import { htmlToText } from 'libzaungast/util/text.js';
+import { htmlToText } from 'libzaungast';
 import type {
   StoreView,
   StoreMeta,

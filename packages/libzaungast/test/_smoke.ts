@@ -1,4 +1,4 @@
-import { ingest } from 'libzaungast/ingest/ingest.js';
+import { ingest } from '../src/ingest/ingest.js';
 
 const dir = process.argv[2];
 const t0 = Date.now();

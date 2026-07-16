@@ -1,4 +1,4 @@
-import { openStore } from 'libzaungast/store-api.js';
+import { openStore } from 'libzaungast';
 import { listConversations, readMessages, search, topTopics } from 'zaungast/tools.js';
 
 const DIR = process.argv[2] ?? process.env.ZAUNGAST_TEST_DIR;

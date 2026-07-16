@@ -2,17 +2,17 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ingest, applyIncremental } from 'libzaungast/ingest/ingest.js';
-import { ChatStore } from 'libzaungast/ingest/store.js';
+import { ingest, applyIncremental } from '../src/ingest/ingest.js';
+import { ChatStore } from '../src/ingest/store.js';
 import {
-  loadEntries,
   loadSnapshot,
   entityTargets,
   loadMapping,
   selectMapping,
   fingerprint,
-} from 'libzaungast/format/index.js';
-import { crc32c } from 'libzaungast/format/chromium/sstable.js';
+} from '../src/format/index.js';
+import { loadEntries } from '../src/format/chromium/indexeddb.js'; // internal (not public /format)
+import { crc32c } from '../src/format/chromium/sstable.js';
 
 function maskCrc(c: number): number {
   return (((c >>> 15) | (c << 17)) + 0xa282ead8) >>> 0;
@@ -235,7 +235,7 @@ console.log(
 
 console.log('\n=== E. Session end-to-end: warm full → mutate → incremental refresh ===');
 {
-  const { Session } = await import('libzaungast/session.js');
+  const { Session } = await import('../src/session.js');
   const copy = copyDir(DIR);
   const s = new (Session as any)({
     overrideDir: copy,
@@ -261,7 +261,7 @@ console.log('\n=== E. Session end-to-end: warm full → mutate → incremental r
 
 console.log('\n=== F. backstop: full every maxIncrementals refreshes ===');
 {
-  const { Session } = await import('libzaungast/session.js');
+  const { Session } = await import('../src/session.js');
   const copy = copyDir(DIR);
   const s = new (Session as any)({
     overrideDir: copy,
@@ -403,7 +403,7 @@ console.log(
 
 console.log('\n=== K. Session cold-start lossy full is flagged and self-heals ===');
 {
-  const { Session } = await import('libzaungast/session.js');
+  const { Session } = await import('../src/session.js');
   const corrupt = copyDir(DIR);
   const ldb = fs
     .readdirSync(corrupt)
@@ -461,7 +461,7 @@ console.log(
   '\n=== M. hardening: Session leaves no temp snapshot dir behind on a refresh throw ===',
 );
 {
-  const { Session } = await import('libzaungast/session.js');
+  const { Session } = await import('../src/session.js');
   const before = fs.readdirSync(os.tmpdir()).filter((d) => d.startsWith('zaungast-')).length;
   const copy = copyDir(DIR);
   const s = new (Session as any)({

@@ -1,12 +1,63 @@
-// libzaungast public barrel (B0: permissive). B3 narrows this to the intended data API and hides
-// the Chromium byte readers + SQLite handle. For now consumers (incl. the zaungast MCP) mostly
-// import specific subpaths (libzaungast/query.js, libzaungast/session.js, …); this barrel just
-// gathers the main surface for `import { … } from 'libzaungast'`.
-export * from './query.js';
-export * from './store-api.js';
-export * from './format/index.js';
-export { Session } from './session.js';
-export { ingest, applyIncremental } from './ingest/ingest.js';
-export type { IngestState } from './ingest/ingest.js';
-export { ChatStore, isBotMri } from './ingest/store.js';
+// libzaungast public API (B3: narrowed to the intended surface).
+//
+// The root entry is the high-level DATA API (audience #1): open a store, query its orthogonal
+// namespaces (conversations / messages / people / events / calls / topics). The decode/schema layer
+// for power users (audience #2) is at 'libzaungast/format'; the engine-seam types at
+// 'libzaungast/format/engine'. Everything else is INTERNAL and unreachable through the package's
+// exports map: the SQL query layer (query.ts), the SQLite ChatStore + its raw db handle, Session,
+// the ingest internals, and the Chromium byte readers / value decoder.
+//
+// Guarantees (upheld by the API, enforced by the absence of any other surface): read-only (never
+// writes/locks/mmaps the Teams dir — it reads copies), offline (no network, zero runtime deps),
+// metadata-only (media surfaces as markers, never bytes; no credentials). Pre-1.0: the split and the
+// error contract are stable; row-shape/query details may still change.
+
+// Entry points + the lifetime-owning facade.
+export { openStore, openLiveStore, tryOpen, inspect } from './store-api.js';
+export type {
+  TeamsStore,
+  LiveTeamsStore,
+  StoreReading,
+  StoreView,
+  StoreInspection,
+  OpenStoreOptions,
+  LiveOptions,
+  ConversationsApi,
+  MessagesApi,
+  PeopleApi,
+  EventsApi,
+  CallsApi,
+  TopicsApi,
+  MessageSearchOptions,
+  ConversationMessagesOptions,
+  ConversationListOptions,
+  PeopleFindOptions,
+  EventsListOptions,
+  CallsListOptions,
+  TopicsComputeOptions,
+  MessageSearchResult,
+  ConvMessagesResult,
+  TopicsComputeResult,
+} from './store-api.js';
+
+// The typed row/result shapes the query namespaces return (data types only — the query functions
+// themselves are internal).
+export type {
+  ConversationView,
+  MessageView,
+  SearchHit,
+  ThreadSummary,
+  PersonView,
+  PeopleResult,
+  EventView,
+  CallView,
+  TopicView,
+  QueryMiss,
+  ConvMessagesMiss,
+} from './query.js';
+
+// Public helpers + the store-metadata type. htmlToText is Teams-domain functionality (the library
+// hands out raw EventView.bodyHtml on purpose); isBotMri is a documented MRI-namespace fact.
+export { htmlToText } from './util/text.js';
+export { isBotMri } from './ingest/store.js';
 export type { StoreMeta } from './ingest/store.js';

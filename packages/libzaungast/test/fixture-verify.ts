@@ -12,21 +12,19 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadSnapshot, fingerprint, loadMapping, selectMapping, extractEntity } from '../src/format/index.js';
+// Internal Chromium byte readers / value decoder — not on the public /format surface; an in-package
+// test reaches them directly (relative), which is exactly why they can stay hidden from consumers.
 import {
   loadEntries,
-  loadSnapshot,
-  fingerprint,
-  loadMapping,
-  selectMapping,
-  extractEntity,
   decodePrefix,
   readStringWithLength,
   readVarint,
   utf16be,
   decodeValue,
-} from 'libzaungast/format/index.js';
-import type { SnapshotRecord } from 'libzaungast/format/types.js';
-import { ingest } from 'libzaungast/ingest/ingest.js';
+} from '../src/format/chromium/indexeddb.js';
+import type { SnapshotRecord } from '../src/format/types.js';
+import { ingest } from '../src/ingest/ingest.js';
 import { generateFixture } from './fixture/generate.js';
 import { stringWithLength, utf16beBytes, idbValue, blobIndexHost, blobHost } from './fixture/encode.js';
 import { ALL_PROFILES, CONVERSATIONS, STUDENTS, SILENT_PROFILE, EVENTS, CALLS } from './fixture/data.js';

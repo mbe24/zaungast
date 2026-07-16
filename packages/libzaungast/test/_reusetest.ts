@@ -3,19 +3,22 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ingest, applyIncremental } from 'libzaungast/ingest/ingest.js';
+import { ingest, applyIncremental } from '../src/ingest/ingest.js';
 import {
-  loadEntries,
-  loadEntriesReuse,
   loadSnapshot,
-  loadSnapshotReuse,
-  decodePrefix,
   entityTargets,
   loadMapping,
   selectMapping,
   fingerprint,
-} from 'libzaungast/format/index.js';
-import { byCodeUnit } from 'libzaungast/util/sort.js';
+} from '../src/format/index.js';
+// Internal loaders/byte-readers — not public /format; reached relatively by this in-package test.
+import {
+  loadEntries,
+  loadEntriesReuse,
+  loadSnapshotReuse,
+  decodePrefix,
+} from '../src/format/chromium/indexeddb.js';
+import { byCodeUnit } from '../src/util/sort.js';
 
 const DIR = process.argv[2] ?? process.env.ZAUNGAST_TEST_DIR;
 if (!DIR) {
@@ -156,7 +159,7 @@ console.log('\n=== F. truncated (lossy) new .ldb → lossy, not cached (so it re
 }
 
 // ---- Session-level: copy-reuse mode must equal reparse mode after identical mutations ----
-import { crc32c } from 'libzaungast/format/chromium/sstable.js';
+import { crc32c } from '../src/format/chromium/sstable.js';
 import { fileURLToPath } from 'node:url';
 
 const VDIR = fileURLToPath(new URL('../src/schema/versions/', import.meta.url));
@@ -235,7 +238,7 @@ console.log(
   '\n=== G. Session copy-reuse == reparse after the same mutation (mode equivalence) ===',
 );
 {
-  const { Session } = await import('libzaungast/session.js');
+  const { Session } = await import('../src/session.js');
   const dR = copyDir(DIR),
     dC = copyDir(DIR);
   const sR = new (Session as any)({
@@ -271,7 +274,7 @@ console.log(
 
 console.log('\n=== H. Session copy-reuse multi-step (add then delete) == reparse ===');
 {
-  const { Session } = await import('libzaungast/session.js');
+  const { Session } = await import('../src/session.js');
   const dR = copyDir(DIR),
     dC = copyDir(DIR);
   const sR = new (Session as any)({
@@ -305,7 +308,7 @@ console.log(
   '\n=== I. H1 end-to-end: compaction (merge .ldb) → copy-reuse store == reparse, no resurrection ===',
 );
 {
-  const { Session } = await import('libzaungast/session.js');
+  const { Session } = await import('../src/session.js');
   const dC = copyDir(DIR),
     dR = copyDir(DIR);
   const sC = new (Session as any)({
@@ -349,7 +352,7 @@ console.log(
 
 console.log('\n=== J. needFullRebuild in copy-reuse latches a full rebuild (pendingFull) ===');
 {
-  const { Session } = await import('libzaungast/session.js');
+  const { Session } = await import('../src/session.js');
   const d = copyDir(DIR);
   const s = new (Session as any)({
     overrideDir: d,
@@ -375,7 +378,7 @@ console.log(
   '\n=== K. partial-.ldb wedge (H-A/H-B): a truncated snapshot .ldb recovers within one refresh ===',
 );
 {
-  const { Session } = await import('libzaungast/session.js');
+  const { Session } = await import('../src/session.js');
   const d = copyDir(DIR);
   const s = new (Session as any)({
     overrideDir: d,
@@ -407,7 +410,7 @@ console.log(
 
 console.log('\n=== L. backstop fires in copy-reuse mode ===');
 {
-  const { Session } = await import('libzaungast/session.js');
+  const { Session } = await import('../src/session.js');
   const d = copyDir(DIR);
   const s = new (Session as any)({
     overrideDir: d,

@@ -19,8 +19,8 @@ import {
   fingerprint,
   selectMapping,
   loadMapping,
-} from 'libzaungast/format/index.js';
-import { extractEntity } from 'libzaungast/format/index.js';
+} from '../../src/format/index.js';
+import { extractEntity } from '../../src/format/index.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const GOLDEN = path.join(here, 'real-digest.golden.json');

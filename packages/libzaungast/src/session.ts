@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ingest, applyIncremental, type Ingested } from './ingest/ingest.js';
-import { discoverTeamsDbs, loadSnapshotReuse } from './format/index.js';
+import { discoverTeamsDbs } from './format/index.js';
+import { loadSnapshotReuse } from './format/chromium/indexeddb.js';
 
 // Self-heal backstop: force a full rebuild at least this often, so any incremental drift is
 // bounded to minutes. (Correctness doesn't depend on it — incremental reconciles deletions —

@@ -19,17 +19,12 @@
 // engine directory (./webkit) that yields the same record contract from ./types,
 // then selecting between engines here — "add a directory", not a rewrite.
 
-export {
-  loadEntries,
-  loadEntriesReuse,
-  loadSnapshot,
-  loadSnapshotReuse,
-  decodePrefix,
-  decodeValue,
-  readVarint,
-  readStringWithLength,
-  utf16be,
-} from './chromium/indexeddb.js';
+// Public /format surface (audience #2 — decode/schema/power users). The Chromium byte readers
+// (decodePrefix/readVarint/readStringWithLength/utf16be), the raw value decoder (decodeValue), and
+// the legacy/internal loaders (loadEntries/loadEntriesReuse/loadSnapshotReuse) are NOT exported —
+// they are engine-version-specific internals reachable only from within the package (relative
+// imports). Only loadSnapshot (the grouped Snapshot) is public.
+export { loadSnapshot } from './chromium/indexeddb.js';
 export { fingerprint } from './fingerprint.js';
 export { loadMapping, selectMapping, entityTargets, extractEntity, extractRecords } from './resolver.js';
 export { discoverTeamsDbs } from './discover.js';

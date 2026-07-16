@@ -4,7 +4,7 @@
 //
 // Nothing here is imported by production code, and nothing under src/ is modified — this only
 // imports the pure, side-effect-free crc32c helper.
-import { crc32c } from 'libzaungast/format/chromium/sstable.js';
+import { crc32c } from '../../src/format/chromium/sstable.js';
 
 // ---- varint (unsigned LEB128, as read by readVarint in write-ahead-log.ts / indexeddb.ts) ----
 export function varint(n: number): Buffer {

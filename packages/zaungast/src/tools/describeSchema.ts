@@ -1,5 +1,5 @@
-import { fingerprint, sampleStoreFields } from 'libzaungast/format/index.js';
-import type { Snapshot } from 'libzaungast/format/types.js';
+import { fingerprint, sampleStoreFields } from 'libzaungast/format';
+import type { Snapshot } from 'libzaungast/format/engine';
 
 // Propose-only schema recovery: when a Teams update changes the DB layout (unknown
 // fingerprint), sample the raw stores and propose a field mapping for a human to verify and
