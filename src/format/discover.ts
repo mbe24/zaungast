@@ -6,10 +6,12 @@ import type { DiscoverCandidate, DiscoverOptions } from './types.js';
 // Auto-detect the Teams IndexedDB leveldb dir. Returns ranked candidates (newest first).
 // Manual override always wins: env TEAMS_LEVELDB_DIR or config.dir.
 //
-// Layout (new Teams / MSTeams / WebView2):
-//   %LOCALAPPDATA%\Packages\MSTeams_*\LocalCache\Microsoft\MSTeams\EBWebView\<profile>\
-//       IndexedDB\https_teams.*.indexeddb.leveldb
-// <profile> is usually WV2Profile_tfw but varies; there can be several (multi-account).
+// Everything below the `EBWebView` dir is identical across platforms — only its location differs:
+//   Windows: %LOCALAPPDATA%\Packages\MSTeams_*\LocalCache\Microsoft\MSTeams\EBWebView\
+//   macOS:   ~/Library/Containers/com.microsoft.teams2/Data/Library/Application Support/
+//            Microsoft/MSTeams/EBWebView/   (new Teams is a sandboxed app; observed on Teams 2.x)
+// …then \<profile>\IndexedDB\https_teams.*.indexeddb.leveldb. <profile> is usually WV2Profile_tfw
+// but varies, and there can be several (multi-account).
 
 function existsDir(p: string): boolean {
   try {
@@ -69,19 +71,56 @@ function candidatesInProfile(pkg: string, profile: string): DiscoverCandidate[] 
   return found;
 }
 
-export function discoverTeamsDbs({ override }: DiscoverOptions = {}): DiscoverCandidate[] {
+// The EBWebView root(s) holding the WebView2 profiles, per platform. Only this step is
+// OS-specific; the profile→IndexedDB→leveldb walk below is shared. platform/home/localAppData are
+// parameters (not read directly) so discovery can be tested for either OS on any host.
+function ebWebViewRoots(
+  platform: NodeJS.Platform,
+  home: string,
+  localAppData: string,
+): { pkg: string; ebweb: string }[] {
+  const roots: { pkg: string; ebweb: string }[] = [];
+  if (platform === 'darwin') {
+    // new Teams (bundle id com.microsoft.teams2) is sandboxed — its store lives in the container.
+    const ebweb = path.join(
+      home,
+      'Library',
+      'Containers',
+      'com.microsoft.teams2',
+      'Data',
+      'Library',
+      'Application Support',
+      'Microsoft',
+      'MSTeams',
+      'EBWebView',
+    );
+    if (existsDir(ebweb)) roots.push({ pkg: 'com.microsoft.teams2', ebweb });
+  } else {
+    // Windows: one EBWebView per MSTeams_* package under %LOCALAPPDATA%\Packages.
+    for (const pkg of children(path.join(localAppData, 'Packages'), (n) => /^MSTeams_/i.test(n))) {
+      const ebweb = path.join(pkg, 'LocalCache', 'Microsoft', 'MSTeams', 'EBWebView');
+      if (existsDir(ebweb)) roots.push({ pkg, ebweb });
+    }
+  }
+  return roots;
+}
+
+export function discoverTeamsDbs(
+  { override }: DiscoverOptions = {},
+  env: { platform?: NodeJS.Platform; home?: string; localAppData?: string } = {},
+): DiscoverCandidate[] {
   if (override)
     return [
       { dir: override, source: 'override', mtime: mtime(override), valid: isLevelDb(override) },
     ];
 
-  const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
-  const packages = path.join(localAppData, 'Packages');
-  const candidates: DiscoverCandidate[] = [];
+  const home = env.home ?? os.homedir();
+  const platform = env.platform ?? process.platform;
+  const localAppData =
+    env.localAppData ?? process.env.LOCALAPPDATA ?? path.join(home, 'AppData', 'Local');
 
-  for (const pkg of children(packages, (n) => /^MSTeams_/i.test(n))) {
-    const ebweb = path.join(pkg, 'LocalCache', 'Microsoft', 'MSTeams', 'EBWebView');
-    if (!existsDir(ebweb)) continue;
+  const candidates: DiscoverCandidate[] = [];
+  for (const { pkg, ebweb } of ebWebViewRoots(platform, home, localAppData)) {
     // profile dirs (WV2Profile_tfw, WV2Profile_*, "Default", …)
     for (const profile of children(ebweb, (n) => !n.startsWith('.')))
       candidates.push(...candidatesInProfile(pkg, profile));

@@ -9,6 +9,10 @@ import { makeHandle } from '../src/util/handles.js';
 import { makeExtractor } from '../src/util/topics.js';
 import { isBotMri } from '../src/ingest/store.js';
 import { parseTime } from '../src/tools.js';
+import { discoverTeamsDbs } from '../src/format/index.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 let pass = 0,
   fail = 0;
@@ -109,6 +113,61 @@ console.log('=== parseTime future/past relatives ===');
   ok('ISO date still parses', parseTime('2026-07-01') === Date.parse('2026-07-01'));
   ok('bare epoch number still parses', parseTime(12345) === 12345);
   ok('garbage is undefined', parseTime('not-a-date') === undefined);
+}
+
+console.log('\n=== discoverTeamsDbs: platform layouts (Windows + macOS) ===');
+{
+  // Build a fake leveldb store under a given profile path and return the store dir.
+  const makeStore = (profileDir: string): string => {
+    const store = path.join(
+      profileDir,
+      'IndexedDB',
+      'https_teams.microsoft.com_0.indexeddb.leveldb',
+    );
+    fs.mkdirSync(store, { recursive: true });
+    fs.writeFileSync(path.join(store, 'CURRENT'), 'MANIFEST-000001\n');
+    fs.writeFileSync(path.join(store, 'MANIFEST-000001'), 'x');
+    return store;
+  };
+  // macOS: ~/Library/Containers/com.microsoft.teams2/Data/Library/Application Support/Microsoft/
+  //        MSTeams/EBWebView/WV2Profile_tfw/IndexedDB/…leveldb  (the colleague's observed path)
+  const macHome = fs.mkdtempSync(path.join(os.tmpdir(), 'disc-mac-'));
+  const macStore = makeStore(
+    path.join(
+      macHome,
+      'Library/Containers/com.microsoft.teams2/Data/Library/Application Support/Microsoft/MSTeams/EBWebView/WV2Profile_tfw',
+    ),
+  );
+  const mac = discoverTeamsDbs({}, { platform: 'darwin', home: macHome });
+  ok(
+    'macOS: auto-discovers the container leveldb store',
+    mac.length === 1 && mac[0].dir === macStore,
+    JSON.stringify(mac),
+  );
+  ok('macOS: profile parsed', mac[0]?.profile === 'WV2Profile_tfw');
+
+  // Windows: %LOCALAPPDATA%\Packages\MSTeams_*\LocalCache\Microsoft\MSTeams\EBWebView\<profile>\…
+  const winHome = fs.mkdtempSync(path.join(os.tmpdir(), 'disc-win-'));
+  const localAppData = path.join(winHome, 'AppData', 'Local');
+  const winStore = makeStore(
+    path.join(
+      localAppData,
+      'Packages/MSTeams_8wekyb3d8bbwe/LocalCache/Microsoft/MSTeams/EBWebView/WV2Profile_tfw',
+    ),
+  );
+  const win = discoverTeamsDbs({}, { platform: 'win32', home: winHome, localAppData });
+  ok(
+    'Windows: auto-discovers the package leveldb store',
+    win.length === 1 && win[0].dir === winStore,
+    JSON.stringify(win),
+  );
+
+  // negative: wrong platform for the tree finds nothing (no false positives)
+  const none = discoverTeamsDbs({}, { platform: 'darwin', home: winHome });
+  ok('macOS discovery does not match a Windows tree', none.length === 0);
+
+  fs.rmSync(macHome, { recursive: true, force: true });
+  fs.rmSync(winHome, { recursive: true, force: true });
 }
 
 console.log(`\n==== ${pass} passed, ${fail} failed ====`);

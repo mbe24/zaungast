@@ -7,26 +7,27 @@
 [![npm](https://img.shields.io/npm/v/zaungast?color=2C9EC2&label=npm)](https://www.npmjs.com/package/zaungast)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-orange.svg)](https://raw.githubusercontent.com/mbe24/zaungast/main/LICENSE)
 
-**zaungast** *(German: someone who watches over the fence without joining in)* is a
+**zaungast** _(German: someone who watches over the fence without joining in)_ is a
 **read-only, offline** [MCP](https://modelcontextprotocol.io/) server for **Teams** — search
 chats, read conversations, surface trending topics, and find people straight from the **local
 on-disk cache**, with no Graph API, no cloud, and no credentials, and token-economical output
 for coding agents (Claude Code, Claude Desktop, …).
 
 The new Teams client stores your chats in a local on-disk database; zaungast reads a copy of
-it directly and serves it over MCP, so your agent can pull in Teams context — *"what was
+it directly and serves it over MCP, so your agent can pull in Teams context — _"what was
 decided about the release date", "catch me up on a channel I muted", "what's my team been
-discussing this week"* — without you copy-pasting, and without any cloud API.
+discussing this week"_ — without you copy-pasting, and without any cloud API.
 
 - **Local & offline** — reads the on-disk Teams cache. No MS Graph API, no network calls.
 - **No credentials** — nothing to log in to, no tokens, no permissions to grant.
-- **Read-only & safe** — the Teams files are only ever *read/copied*, never written, locked,
+- **Read-only & safe** — the Teams files are only ever _read/copied_, never written, locked,
   or modified. It cannot corrupt your Teams data.
 - **Token-economical** — every tool returns compact, shaped output, never bulk dumps.
 - **Zero-config** — auto-discovers the local Teams database; just register and go.
 
-> ⚠️ **Windows only** (new Teams / WebView2), Node.js ≥ 22.5. Teams on macOS uses a different
-> storage engine and isn't supported yet — see
+> ⚠️ **Windows & macOS** (new Teams / WebView2), Node.js ≥ 22.5. Both use the same
+> Chromium/WebView2 store, so the reader is identical; the local database is auto-discovered on
+> each, or point `TEAMS_LEVELDB_DIR` at it manually — see
 > [requirements](https://zaungast.readthedocs.io/en/latest/installation/#requirements).
 > **Not affiliated with or endorsed by Microsoft.** It reads your own local data on your own
 > machine.
@@ -105,16 +106,16 @@ fails or to pin a specific profile. From-source setup and other clients are cove
 
 ## Tools
 
-| Tool | What it does |
-|------|--------------|
-| `list_conversations` | Your Teams sidebar — newest conversations, or filter by kind/participant/title/time. |
-| `read_messages` | One conversation's messages in story order (window / cursor / around a hit). |
-| `search` | Full-text search + filters (from, in, kind, `mentions_me`, has-attachment, date). |
-| `list_events` | Calendar meetings & appointments (forward window by default); metadata-only, join-URLs never exposed. |
-| `list_calls` | Call history — 1:1/group calls with direction, duration, missed, and recording pointers. |
-| `top_topics` | Distinctive/trending topics over a window, vs your baseline, with an example each. |
-| `find_person` | Resolve a name/nickname to a canonical person + handle, with contact stats. |
-| `describe_schema` | Recovery tool: propose a field mapping when a Teams update changes the DB layout. |
+| Tool                 | What it does                                                                                          |
+| -------------------- | ----------------------------------------------------------------------------------------------------- |
+| `list_conversations` | Your Teams sidebar — newest conversations, or filter by kind/participant/title/time.                  |
+| `read_messages`      | One conversation's messages in story order (window / cursor / around a hit).                          |
+| `search`             | Full-text search + filters (from, in, kind, `mentions_me`, has-attachment, date).                     |
+| `list_events`        | Calendar meetings & appointments (forward window by default); metadata-only, join-URLs never exposed. |
+| `list_calls`         | Call history — 1:1/group calls with direction, duration, missed, and recording pointers.              |
+| `top_topics`         | Distinctive/trending topics over a window, vs your baseline, with an example each.                    |
+| `find_person`        | Resolve a name/nickname to a canonical person + handle, with contact stats.                           |
+| `describe_schema`    | Recovery tool: propose a field mapping when a Teams update changes the DB layout.                     |
 
 Full reference: [tools documentation](https://zaungast.readthedocs.io/en/latest/tools/).
 
@@ -123,11 +124,25 @@ Full reference: [tools documentation](https://zaungast.readthedocs.io/en/latest/
 All optional — zaungast works with no configuration. Pass them via your MCP client's `env`
 block (as above).
 
-| Var | Default | Notes |
-|-----|---------|-------|
-| `TEAMS_LEVELDB_DIR` | auto-discovered | Path to the `…\IndexedDB\https_teams.microsoft.com_0.indexeddb.leveldb` directory. Set only if discovery fails or to pin a profile. |
-| `ZAUNGAST_INCREMENTAL` | `copy-reuse` | Refresh mode: `copy-reuse` (faster) or `reparse` (simpler). |
-| `ZAUNGAST_DB_DIR` | unset | Read a static *copy* of the database directly (offline analysis); skips discovery and live refresh. |
+| Var                    | Default         | Notes                                                                                                                                             |
+| ---------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TEAMS_LEVELDB_DIR`    | auto-discovered | Absolute path to the `…indexeddb.leveldb` folder (examples below). Set only if auto-discovery fails, or to pin one profile when you have several. |
+| `ZAUNGAST_INCREMENTAL` | `copy-reuse`    | Refresh mode: `copy-reuse` (faster) or `reparse` (simpler).                                                                                       |
+| `ZAUNGAST_DB_DIR`      | unset           | Read a static _copy_ of the database directly (offline analysis); skips discovery and live refresh.                                               |
+
+`TEAMS_LEVELDB_DIR` points at the folder ending in **`.indexeddb.leveldb`** (the one holding
+`CURRENT`, `MANIFEST-*`, `*.ldb`/`*.log`) — **not** its parent `IndexedDB` directory:
+
+```
+# Windows
+C:\Users\<you>\AppData\Local\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\EBWebView\<profile>\IndexedDB\https_teams.microsoft.com_0.indexeddb.leveldb
+
+# macOS
+/Users/<you>/Library/Containers/com.microsoft.teams2/Data/Library/Application Support/Microsoft/MSTeams/EBWebView/<profile>/IndexedDB/https_teams.microsoft.com_0.indexeddb.leveldb
+```
+
+`<profile>` is usually `WV2Profile_tfw`. Use the full absolute path in JSON configs (e.g. Claude
+Desktop) — environment placeholders like `~` or `%LOCALAPPDATA%` aren't expanded there.
 
 ## Privacy & safety
 

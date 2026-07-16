@@ -2,9 +2,10 @@
 
 ## Requirements
 
-- **Windows** with the new Teams desktop app (`MSTeams` / WebView2), signed in at
-  least once so a local cache exists. Teams on **macOS** uses a different storage engine
-  (WebKit, SQLite-backed IndexedDB) and is not supported yet.
+- **Windows or macOS** with the new Teams desktop app (`MSTeams` / WebView2), signed in at
+  least once so a local cache exists. Both platforms store chats in the same Chromium/WebView2
+  IndexedDB, so the decode is identical — only the on-disk location differs, and it's
+  auto-discovered on each (or set `TEAMS_LEVELDB_DIR` manually).
 - **Node.js ≥ 22.5** — zaungast uses the built-in `node:sqlite`. On Node 22 the required
   `--experimental-sqlite` flag is enabled automatically (the CLI re-execs itself with it);
   on Node ≥ 24 `node:sqlite` is stable and no flag is involved.
@@ -100,7 +101,7 @@ IndexedDB\
 ```
 
 The folder you want is the one ending **`.leveldb`** — it contains `CURRENT`, `MANIFEST-*`,
-and the `*.ldb` / `*.log` files. Set `TEAMS_LEVELDB_DIR` to *that* folder, **not** its parent
+and the `*.ldb` / `*.log` files. Set `TEAMS_LEVELDB_DIR` to _that_ folder, **not** its parent
 `IndexedDB\` directory (which holds both). The `.blob` sibling (images and large binaries) is
 a handy landmark that you're in the right place — zaungast doesn't read it.
 
@@ -109,6 +110,23 @@ Find the exact path with PowerShell:
 ```powershell
 Get-ChildItem "$env:LOCALAPPDATA\Packages\MSTeams_*\LocalCache\Microsoft\MSTeams\EBWebView\*\IndexedDB\https_teams.microsoft.com_0.indexeddb.leveldb" -Directory | Select-Object -ExpandProperty FullName
 ```
+
+### macOS
+
+New Teams is a sandboxed app, so the same store lives under its container:
+
+```
+~/Library/Containers/com.microsoft.teams2/Data/Library/Application Support/Microsoft/MSTeams/EBWebView/<profile>/IndexedDB/https_teams.microsoft.com_0.indexeddb.leveldb
+```
+
+Find it with:
+
+```sh
+find ~/Library -type d -name "https_teams.microsoft.com_0.indexeddb.leveldb" 2>/dev/null
+```
+
+This is auto-discovered too; you only need `TEAMS_LEVELDB_DIR` if you have multiple profiles or a
+non-standard install.
 
 ## Multiple Teams profiles / accounts
 
