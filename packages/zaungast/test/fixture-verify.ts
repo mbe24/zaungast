@@ -149,7 +149,7 @@ console.log(`  resolved via: ${via}`);
 
 // ---- 3. extractEntity: conversation / message ----
 console.log('\n=== extractEntity: conversation ===');
-const convRows = extractEntity(snap, mapping, 'conversation');
+const convRows = extractEntity(snap, mapping, 'conversation').records;
 eq('conversation row count', convRows.length, CONVERSATIONS.length);
 const channel = convRows.find((r) => r.id === '19:11223344aabb@thread.tacv2');
 eq(
@@ -166,7 +166,7 @@ ok(
 );
 
 console.log('\n=== extractEntity: message ===');
-const msgRows = extractEntity(snap, mapping, 'message');
+const msgRows = extractEntity(snap, mapping, 'message').records;
 const wantMsgCount = CONVERSATIONS.reduce((n, c) => n + c.messages.length, 0);
 eq('message row count', msgRows.length, wantMsgCount);
 const adaFirst = CONVERSATIONS[0].messages[0];
@@ -303,7 +303,7 @@ eq('profile email matches', adaProfile?.email, 'ada.lovelace@example.edu');
 
 // ---- 4b. extractEntity: event (calendar) — decode round-trip against test/fixture/data.ts ----
 console.log('\n=== extractEntity: event ===');
-const eventRows = extractEntity(snap, mapping, 'event');
+const eventRows = extractEntity(snap, mapping, 'event').records;
 eq('event row count (raw, incl. RecurringMaster)', eventRows.length, EVENTS.length);
 const cachedMeetingRow = eventRows.find((r) => r.id === 'evt-meeting-cached');
 eq('cached-meeting subject decodes', cachedMeetingRow?.subject, 'CS101 Midterm Review Session');
@@ -332,7 +332,7 @@ ok(
 
 // ---- 4c. extractEntity: call (call-history) — decode round-trip ----
 console.log('\n=== extractEntity: call ===');
-const callRows = extractEntity(snap, mapping, 'call');
+const callRows = extractEntity(snap, mapping, 'call').records;
 eq('call row count (raw, incl. deleted)', callRows.length, CALLS.length);
 const recordedCallRow = callRows.find((r) => r.id === 'call-4-recorded');
 const recordings = recordedCallRow?.recordings as any[] | undefined;

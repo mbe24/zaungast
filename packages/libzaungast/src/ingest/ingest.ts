@@ -117,7 +117,7 @@ function applyMessages(store: ChatStore, msgRows: any[], selfMri: string | null)
 
 // Populate the profiles name-source (mri → display name). Whole-store replace each ingest.
 function applyProfiles(store: ChatStore, snap: Snapshot, mapping: any) {
-  const rows = extractEntity(snap, mapping, 'profile').map((r: any) => ({
+  const rows = extractEntity(snap, mapping, 'profile').records.map((r: any) => ({
     mri: String(r.mri ?? ''),
     name: String(r.name ?? ''),
   }));
@@ -162,7 +162,7 @@ function compactAttendees(attendees: unknown): string | null {
 // applyProfiles (see store.ts's replaceEvents doc). `RecurringMaster` rows are series templates,
 // never rendered as an event, so they're dropped here rather than inserted and filtered later.
 function applyEvents(store: ChatStore, snap: Snapshot, mapping: any) {
-  const rows = extractEntity(snap, mapping, 'event');
+  const rows = extractEntity(snap, mapping, 'event').records;
   const out = [];
   for (const r of rows as any[]) {
     if (r.eventType === 'RecurringMaster') continue;
@@ -230,7 +230,7 @@ function recordingLinkOf(r: any): string | null {
 // `is_missed` maps ONLY callState==='Missed' (the real data's other observed value, 'Declined',
 // is a deliberate reject — not a miss — see the ingest report for the full enumeration).
 function applyCalls(store: ChatStore, snap: Snapshot, mapping: any) {
-  const rows = extractEntity(snap, mapping, 'call');
+  const rows = extractEntity(snap, mapping, 'call').records;
   const out = [];
   for (const r of rows as any[]) {
     const direction = r.callDirection != null ? String(r.callDirection) : null;
@@ -336,8 +336,8 @@ export function ingest(dir: string, opts: { seqCap?: number } = {}): Ingested {
   }
   const msgTargets: Set<string> = entityTargets(snap, mapping, 'message');
   const convTargets: Set<string> = entityTargets(snap, mapping, 'conversation');
-  const msgRows = extractEntity(snap, mapping, 'message', msgTargets);
-  const convRows = extractEntity(snap, mapping, 'conversation', convTargets);
+  const msgRows = extractEntity(snap, mapping, 'message', msgTargets).records;
+  const convRows = extractEntity(snap, mapping, 'conversation', convTargets).records;
   const selfMri = voteSelfMri(msgRows);
 
   const store = new ChatStore();
@@ -415,7 +415,7 @@ export function applyIncremental(
     // deletions first (whole-chain gone), then delete changed chains before re-inserting them
     store.deleteMessagesForMissingChains(liveChainKeys);
     for (const ck of changedChainKeys) store.deleteMessagesByChain(ck);
-    const newMsgRows = extractRecords(changedMsgRecords, state.mapping, 'message');
+    const newMsgRows = extractRecords(changedMsgRecords, state.mapping, 'message').records;
     applyMessages(store, newMsgRows, state.selfMri);
     // profiles/events/calls are all cheap (hundreds of rows) → whole-store replace from the
     // full snapshot each refresh, exactly like profiles — this is what keeps the
@@ -425,7 +425,7 @@ export function applyIncremental(
     applyCalls(store, snap, state.mapping);
 
     // conversations are cheap → fully reconcile each refresh: re-apply live meta, drop orphans.
-    const convRows = extractEntity(snap, state.mapping, 'conversation', state.convTargets);
+    const convRows = extractEntity(snap, state.mapping, 'conversation', state.convTargets).records;
     const liveConvIds = new Set<string>(convRows.map((c: any) => c.id).filter(Boolean));
     store.db.exec('update conversations set topic=null, team_id=null, meta_last_ts=0');
     applyConversationMeta(store, convRows);

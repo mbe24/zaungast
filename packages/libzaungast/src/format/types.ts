@@ -215,3 +215,12 @@ export interface EntityRecord {
   __key: string;
   [field: string]: unknown;
 }
+
+// The result of extracting one entity from a snapshot (uniform error semantics, Category 3 —
+// partiality). `records` are the extracted rows; `decoded`/`dropped` count source records that
+// decoded vs failed to decode, so a consumer can surface extraction health without inspecting rows.
+export interface EntityExtract {
+  records: EntityRecord[];
+  decoded: number;
+  dropped: number;
+}

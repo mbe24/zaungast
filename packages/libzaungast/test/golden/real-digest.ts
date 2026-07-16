@@ -89,7 +89,7 @@ function digestOf(dir: string) {
   if (!mapping) throw new Error('selectMapping returned no mapping for the real store fingerprint');
   const entities: Record<string, { count: number; sha256: string }> = {};
   for (const name of Object.keys(mapping.entities)) {
-    const rows = extractEntity(snap, mapping, name);
+    const rows = extractEntity(snap, mapping, name).records;
     // sort rows deterministically (by __key, tie-break on canonical JSON) before hashing
     const sorted = [...rows].sort((a, b) => {
       const ka = String((a as any).__key ?? ''),

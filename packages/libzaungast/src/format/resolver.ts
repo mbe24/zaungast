@@ -1,13 +1,13 @@
 import fs from 'node:fs';
-// Engine seam: mapping/extraction is engine-agnostic in intent (a mapped record has the same
-// fields however it was stored), but today it decodes raw Chromium records inline. A second
-// engine would hand this module already-decoded records. See ./index.ts.
-// Only Chromium dependency left after the Snapshot migration: value decoding (keys/grouping/catalog
-// are resolved by the loader into the Snapshot). This is the documented, deferred value-decode seam.
+// Mapping/extraction reads decoded structured-clone values from the snapshot's records. Keys,
+// grouping, and the catalog are already resolved by the loader into the Snapshot; the only Chromium
+// call left here is value decoding (decodeValue), which is fine — macOS Teams uses the same Chromium
+// store, so there is no second value format to abstract for.
 import { decodeValue } from './chromium/indexeddb.js';
 import type {
   SnapshotRecord,
   EntityRecord,
+  EntityExtract,
   Fingerprint,
   Mapping,
   Snapshot,
@@ -79,7 +79,7 @@ export function entityTargets(
 // Each row carries __key = the source record's leveldb user-key (latin1) so callers can group
 // messages by their reply-chain record. Shared by extractEntity (whole target buckets) and
 // extractRecords (an incremental changed-subset).
-function recordsToRows(records: SnapshotRecord[], def: Mapping['entities'][string]): EntityRecord[] {
+function recordsToRows(records: SnapshotRecord[], def: Mapping['entities'][string]): EntityExtract {
   const mapFields = (src: unknown, recKey: string): EntityRecord => {
     const r: EntityRecord = { __key: recKey };
     for (const [out, spec] of Object.entries(def.fields)) r[out] = firstDefined(src, spec);
@@ -104,17 +104,24 @@ function recordsToRows(records: SnapshotRecord[], def: Mapping['entities'][strin
   };
 
   const rows: EntityRecord[] = [];
+  let decoded = 0;
+  let dropped = 0;
   for (const rec of records) {
     let obj: unknown;
     try {
       obj = decodeValue(rec.value);
     } catch {
+      dropped++;
       continue;
     }
-    if (!obj) continue;
+    if (!obj) {
+      dropped++;
+      continue;
+    }
+    decoded++;
     rows.push(...rowsFromRecord(obj, rec.key.toString('latin1')));
   }
-  return rows;
+  return { records: rows, decoded, dropped };
 }
 
 // Extract rows for one entity definition from a snapshot — iterate only the target buckets'
@@ -125,15 +132,22 @@ export function extractEntity(
   mapping: Mapping | null,
   entityName: string,
   targets?: Set<string>,
-): EntityRecord[] {
+): EntityExtract {
   const def = (mapping as Mapping).entities[entityName];
   targets ??= entityTargets(snap, mapping, entityName);
-  const rows: EntityRecord[] = [];
+  const records: EntityRecord[] = [];
+  let decoded = 0;
+  let dropped = 0;
   for (const sk of targets) {
     const b = snap.buckets.get(sk);
-    if (b) rows.push(...recordsToRows(b.records, def));
+    if (b) {
+      const e = recordsToRows(b.records, def);
+      records.push(...e.records);
+      decoded += e.decoded;
+      dropped += e.dropped;
+    }
   }
-  return rows;
+  return { records, decoded, dropped };
 }
 
 // Extract rows from an explicit record set (the incremental path isolates the changed subset of one
@@ -142,6 +156,6 @@ export function extractRecords(
   records: SnapshotRecord[],
   mapping: Mapping | null,
   entityName: string,
-): EntityRecord[] {
+): EntityExtract {
   return recordsToRows(records, (mapping as Mapping).entities[entityName]);
 }
