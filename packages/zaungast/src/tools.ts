@@ -17,7 +17,7 @@ import {
   senderFilter,
   resolveExcludes,
   querySearch,
-  queryMessageWindow,
+  queryConversationMessages,
   queryThread,
   queryThreadSummaries,
   convMessageStats,
@@ -397,18 +397,8 @@ function renderChannelDigest(
   rx: ReactionCtx,
 ): string {
   const db = store.db;
-  const sconds = ['conv_id=?', 'is_system=0'];
-  const sp: any[] = [convId];
-  if (since) {
-    sconds.push('ts>=?');
-    sp.push(since);
-  }
-  if (until) {
-    sconds.push('ts<?');
-    sp.push(until);
-  }
   // thread summaries (in-window activity decides which threads appear)
-  let summaries = queryThreadSummaries(db, sconds, sp);
+  let summaries = queryThreadSummaries(store, convId, { sinceTs: since, untilTs: until });
   const threadTotal = summaries.length;
   const older = args.cursor && /^older:(\d+):(.+)$/.exec(String(args.cursor));
   if (older) {
@@ -610,31 +600,13 @@ export function readMessages(
   if (conv?.kind === 'channel')
     return renderChannel(store, meta, deferred, conv, id, args, limit, since, until, ownerNm, rx);
 
-  const conds = ['conv_id=?', 'is_system=0'];
-  const p: any[] = [id];
-  if (since) {
-    conds.push('ts>=?');
-    p.push(since);
-  }
-  if (until) {
-    conds.push('ts<?');
-    p.push(until);
-  }
-  // cursor `older:<ts>:<id>` — (ts,id) tuple so equal-timestamp neighbours aren't skipped
-  const older = args.cursor && /^older:(\d+):(.+)$/.exec(String(args.cursor));
-  if (older) {
-    conds.push('(ts<? or (ts=? and id<?))');
-    p.push(Number(older[1]), Number(older[1]), older[2]);
-  }
-
-  const fetched = queryMessageWindow(
-    db,
-    id,
+  const fetched = queryConversationMessages(store, id, {
+    sinceTs: since,
+    untilTs: until,
+    cursor: args.cursor != null ? String(args.cursor) : undefined,
+    around: args.around != null ? String(args.around) : undefined,
     limit,
-    conds,
-    p,
-    args.around ? String(args.around) : undefined,
-  );
+  });
   if ('aroundNotFound' in fetched)
     return `message ${fetched.aroundNotFound} not found in this conversation`;
   const rows = fetched.rows;

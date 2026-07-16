@@ -235,34 +235,59 @@ function runSearchQuery(
 }
 
 // ---------- messages (flat window) ----------
-// Fetch the rows to render for a flat (1:1/group/meeting) conversation: either a window CENTERED
-// on `around` (half before/half after, oldest→newest), or the last `limit` rows matching
-// `conds`/`params` (also oldest→newest). Returns `{ aroundNotFound: <id> }` when the pivot id
-// isn't in the conversation; the MCP layer turns that into its user-facing message.
-export function queryMessageWindow(
-  db: DB,
-  id: string,
-  limit: number,
-  conds: string[],
-  params: any[],
-  around: string | undefined,
+// Options for a flat (1:1/group/meeting) conversation read. Time bounds are pre-parsed epoch ms;
+// `cursor` is the library's own `older:<ts>:<id>` keyset token; `around` is an `m:<id>` pivot.
+export interface ConvMessagesOptions {
+  sinceTs?: number;
+  untilTs?: number;
+  cursor?: string;
+  around?: string;
+  limit: number;
+}
+// Fetch the rows to render for a flat conversation: either a window CENTERED on `around` (half
+// before/half after, oldest→newest, ignoring time/cursor), or the last `limit` rows in the time +
+// cursor window (also oldest→newest). Returns `{ aroundNotFound: <id> }` when the pivot id isn't in
+// the conversation; the MCP layer turns that into its user-facing message.
+export function queryConversationMessages(
+  store: ChatStore,
+  convId: string,
+  opts: ConvMessagesOptions,
 ): { rows: any[] } | { aroundNotFound: string } {
-  if (around) {
-    const aroundId = around.replace(/^m:/, '');
-    const a = db.prepare('select ts from messages where conv_id=? and id=?').get(id, aroundId) as any;
-    if (!a) return { aroundNotFound: around };
-    const half = Math.floor(limit / 2);
+  const db = store.db;
+  if (opts.around) {
+    const aroundId = opts.around.replace(/^m:/, '');
+    const a = db
+      .prepare('select ts from messages where conv_id=? and id=?')
+      .get(convId, aroundId) as any;
+    if (!a) return { aroundNotFound: opts.around };
+    const half = Math.floor(opts.limit / 2);
     const before = db
       .prepare(
         `select * from messages where conv_id=? and is_system=0 and ts<=? order by ts desc, id desc limit ?`,
       )
-      .all(id, a.ts, half) as any[];
+      .all(convId, a.ts, half) as any[];
     const after = db
       .prepare(
         `select * from messages where conv_id=? and is_system=0 and ts>? order by ts asc, id asc limit ?`,
       )
-      .all(id, a.ts, half) as any[];
+      .all(convId, a.ts, half) as any[];
     return { rows: [...before.toReversed(), ...after] };
+  }
+  const conds = ['conv_id=?', 'is_system=0'];
+  const params: any[] = [convId];
+  if (opts.sinceTs) {
+    conds.push('ts>=?');
+    params.push(opts.sinceTs);
+  }
+  if (opts.untilTs) {
+    conds.push('ts<?');
+    params.push(opts.untilTs);
+  }
+  // cursor `older:<ts>:<id>` — (ts,id) tuple so equal-timestamp neighbours aren't skipped
+  const older = opts.cursor && /^older:(\d+):(.+)$/.exec(String(opts.cursor));
+  if (older) {
+    conds.push('(ts<? or (ts=? and id<?))');
+    params.push(Number(older[1]), Number(older[1]), older[2]);
   }
   // last `limit` in the window, rendered oldest→newest (story order)
   const rows = (
@@ -270,7 +295,7 @@ export function queryMessageWindow(
       .prepare(
         `select * from messages where ${conds.join(' and ')} order by ts desc, id desc limit ?`,
       )
-      .all(...params, limit) as any[]
+      .all(...params, opts.limit) as any[]
   ).reverse();
   return { rows };
 }
@@ -285,13 +310,25 @@ export function queryThread(db: DB, convId: string, rootId: string): any[] {
     .all(convId, rootId) as any[];
 }
 
-// Per-reply-chain activity summaries (message count + last-activity ts per root) for the given
-// scope conds/params — drives which threads a channel digest surfaces.
+// Per-reply-chain activity summaries (message count + last-activity ts per root) for a channel's
+// time window — drives which threads a channel digest surfaces. Cursor paging is applied by the MCP
+// layer over the returned summaries (it's a presentation/budget concern), not here.
 export function queryThreadSummaries(
-  db: DB,
-  conds: string[],
-  params: any[],
+  store: ChatStore,
+  convId: string,
+  opts: { sinceTs?: number; untilTs?: number },
 ): { root_id: any; n: number; last: number }[] {
+  const db = store.db;
+  const conds = ['conv_id=?', 'is_system=0'];
+  const params: any[] = [convId];
+  if (opts.sinceTs) {
+    conds.push('ts>=?');
+    params.push(opts.sinceTs);
+  }
+  if (opts.untilTs) {
+    conds.push('ts<?');
+    params.push(opts.untilTs);
+  }
   return db
     .prepare(
       `select root_id, count(*) n, max(ts) last from messages where ${conds.join(' and ')} group by root_id`,
