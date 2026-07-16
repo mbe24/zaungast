@@ -1,6 +1,6 @@
 import './_stdout-guard.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { Session } from 'libzaungast/session.js';
+import { openLiveStore } from 'libzaungast/store-api.js';
 import { buildServer } from './server.js';
 
 // ZAUNGAST_DB_DIR = a static leveldb dir (tests / a manual copy) — skips snapshot+discovery.
@@ -8,23 +8,25 @@ import { buildServer } from './server.js';
 // Refresh mode defaults to 'copy-reuse' (fast: reuse immutable .ldb parses, re-read only the
 // .log — chat data changes often during work hours). ZAUNGAST_INCREMENTAL=reparse opts out
 // to the simpler full-reparse-each-refresh path.
+// `warm: false` → a lazy cold start so `initialize` returns instantly; we warm post-handshake.
 const staticDir = process.env.ZAUNGAST_DB_DIR;
 const incrementalMode = process.env.ZAUNGAST_INCREMENTAL === 'reparse' ? 'reparse' : 'copy-reuse';
-const session = new Session(
+const live = openLiveStore(
   staticDir
-    ? { dir: staticDir, incrementalMode }
-    : { overrideDir: process.env.TEAMS_LEVELDB_DIR, incrementalMode },
+    ? { dir: staticDir, incrementalMode, warm: false }
+    : { overrideDir: process.env.TEAMS_LEVELDB_DIR, incrementalMode, warm: false },
 );
 
-const server = buildServer(session);
+const server = buildServer(live);
 await server.connect(new StdioServerTransport());
 process.stderr.write('zaungast MCP server ready (stdio)\n');
 
 // Warm the index AFTER the handshake so `initialize` returns instantly and the first tool
-// call is fast. Deferred a tick so connect() fully settles first.
+// call is fast. Deferred a tick so connect() fully settles first — the cold store builds on
+// this first refresh().
 setTimeout(() => {
   try {
-    session.warmUp();
+    live.refresh();
   } catch (e) {
     process.stderr.write(`warmUp: ${e}\n`);
   }
@@ -32,7 +34,7 @@ setTimeout(() => {
 
 const shutdown = () => {
   try {
-    session.dispose();
+    live.close();
   } catch {}
   process.exit(0);
 };

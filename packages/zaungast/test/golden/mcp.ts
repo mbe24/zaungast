@@ -44,7 +44,7 @@ class FrozenDate extends RealDate {
 }
 (globalThis as unknown as { Date: typeof Date }).Date = FrozenDate as unknown as typeof Date;
 
-const { Session } = await import('libzaungast/session.js');
+const { openStore } = await import('libzaungast/store-api.js');
 const {
   listConversations,
   readMessages,
@@ -79,68 +79,53 @@ const SINCE = '2020-01-01';
 const UNTIL = '2030-01-01';
 
 function render(dir: string): string {
-  const s = new Session({ dir });
-  const { store, meta, staleProbeDeferred: d } = s.get();
-  const q1 = (sql: string, ...a: unknown[]) => store.db.prepare(sql).get(...(a as any[])) as any;
+  // The static facade handle IS a StoreView (namespaces + meta); the tools accept it directly (a
+  // static store has no `mayBeStale`, so the envelope reads as not-stale — same as the old d=false).
+  const store = openStore(dir);
 
-  const chan = q1(
-    `select id, handle from conversations where kind='channel' and msg_count>0 order by msg_count desc, id limit 1`,
-  );
-  const direct = q1(
-    `select id, handle from conversations where kind='1:1' and msg_count>0 order by msg_count desc, id limit 1`,
-  );
-  const threadRootId = chan
-    ? q1(
-        `select id from messages where conv_id=? and root_id=id and is_system=0 order by ts, id limit 1`,
-        chan.id,
-      )?.id
-    : undefined;
+  // The fixture holds exactly one channel and one 1:1 (see the golden), so these picks are unique
+  // regardless of ordering. The earliest thread root = the first (ts,id-ascending) root message.
+  const chan = store.conversations.list({ kind: 'channel', n: 1 })[0];
+  const direct = store.conversations.list({ kind: '1:1', n: 1 })[0];
+  let threadRootId: string | undefined;
+  if (chan) {
+    const cm = store.messages.inConversation(chan.id, { limit: 500 });
+    if (cm.ok) threadRootId = cm.rows.find((r) => r.rootId === r.id)?.id;
+  }
 
   const parts: string[] = [];
   const add = (label: string, out: string) => parts.push(`########## ${label} ##########\n${out}`);
 
-  add('list_conversations {n:5}', listConversations(store, meta, d, { n: 5 }));
-  add(
-    'list_conversations {kind:"channel", n:4}',
-    listConversations(store, meta, d, { kind: 'channel', n: 4 }),
-  );
+  add('list_conversations {n:5}', listConversations(store, { n: 5 }));
+  add('list_conversations {kind:"channel", n:4}', listConversations(store, { kind: 'channel', n: 4 }));
   if (direct)
     add(
       `read_messages {conversation:"${direct.handle}", limit:6}`,
-      readMessages(store, meta, d, { conversation: direct.handle, limit: 6 }),
+      readMessages(store, { conversation: direct.handle, limit: 6 }),
     );
   if (chan) {
     add(
       `read_messages {conversation:"${chan.handle}", limit:40} (channel digest)`,
-      readMessages(store, meta, d, { conversation: chan.handle, limit: 40 }),
+      readMessages(store, { conversation: chan.handle, limit: 40 }),
     );
     add(
       `read_messages {conversation:"${chan.handle}", reactions:"full"}`,
-      readMessages(store, meta, d, { conversation: chan.handle, limit: 40, reactions: 'full' }),
+      readMessages(store, { conversation: chan.handle, limit: 40, reactions: 'full' }),
     );
     if (threadRootId)
       add(
         `read_messages {conversation:"${chan.handle}", thread:"m:${threadRootId}"}`,
-        readMessages(store, meta, d, { conversation: chan.handle, thread: `m:${threadRootId}` }),
+        readMessages(store, { conversation: chan.handle, thread: `m:${threadRootId}` }),
       );
   }
-  add('search {query:"the", limit:10}', search(store, meta, d, { query: 'the', limit: 10 }));
-  add('search {mentions_me:true, limit:6}', search(store, meta, d, { mentions_me: true, limit: 6 }));
-  add(
-    'top_topics {since,until (all), n:6}',
-    topTopics(store, meta, d, { since: SINCE, until: UNTIL, n: 6 }),
-  );
-  add('find_person {} (roster)', findPerson(store, meta, d, {}));
-  add(
-    'list_events {since,until (all)}',
-    listEvents(store, meta, d, { since: SINCE, until: UNTIL, limit: 30 }),
-  );
-  add(
-    'list_calls {since,until (all)}',
-    listCalls(store, meta, d, { since: SINCE, until: UNTIL, limit: 30 }),
-  );
+  add('search {query:"the", limit:10}', search(store, { query: 'the', limit: 10 }));
+  add('search {mentions_me:true, limit:6}', search(store, { mentions_me: true, limit: 6 }));
+  add('top_topics {since,until (all), n:6}', topTopics(store, { since: SINCE, until: UNTIL, n: 6 }));
+  add('find_person {} (roster)', findPerson(store, {}));
+  add('list_events {since,until (all)}', listEvents(store, { since: SINCE, until: UNTIL, limit: 30 }));
+  add('list_calls {since,until (all)}', listCalls(store, { since: SINCE, until: UNTIL, limit: 30 }));
 
-  s.dispose();
+  store.close();
   return parts.join('\n\n') + '\n';
 }
 

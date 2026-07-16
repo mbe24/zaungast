@@ -1,13 +1,18 @@
-import { loadSnapshot, decodeValue, fingerprint } from 'libzaungast/format/index.js';
+import { fingerprint, sampleStoreFields } from 'libzaungast/format/index.js';
 import type { Snapshot } from 'libzaungast/format/types.js';
 
 // Propose-only schema recovery: when a Teams update changes the DB layout (unknown
 // fingerprint), sample the raw stores and propose a field mapping for a human to verify and
 // save as src/schema/versions/teams-<ver>.json. NEVER applies anything itself.
+//
+// The STRUCTURAL field walk (record keys + threadProperties + messageMap/messages sub-entries)
+// now lives library-side in `sampleStoreFields` (so the raw value decoder stays internal); this
+// module keeps ALL the propose-only POLICY — db-name normalization, candidate matching, scoring,
+// proposal assembly, and output text.
 
+// A sampled store's structural summary + the MCP's normalized db name. Maps from the library's
+// StoreFieldSample (store/dbName/count/sampled/fields/nested/nestedUnder) with `dbNorm` added.
 interface StoreInfo {
-  key: string;
-  dbId: number;
   dbName: string;
   dbNorm: string;
   store: string;
@@ -77,61 +82,19 @@ function conversationNameBonus(storeName: string): number {
   return 0;
 }
 
-// The catalog (db-name / store-name) is now resolved by the loader into the Snapshot; describeSchema
-// reads snap.dbNames / snap.buckets directly (no key decoding here).
-
-// Decode one sampled record's value into `info`'s field set: the record's own top-level keys,
-// threadProperties' keys (conversation topics live there), and — for message-map containers —
-// the union of the first few sub-entries' keys (the first entry can be a control/typing/sparse
-// entry missing the fields the mapping references).
-function sampleRecordFields(info: StoreInfo, value: Buffer | null): void {
-  try {
-    const obj = decodeValue(value);
-    if (!obj || typeof obj !== 'object') return;
-    for (const k of Object.keys(obj)) info.fields.add(k);
-    const tp = (obj as any).threadProperties;
-    if (tp && typeof tp === 'object') for (const k of Object.keys(tp)) info.fields.add(k);
-    for (const container of ['messageMap', 'messages']) {
-      const c = (obj as any)[container];
-      if (c && typeof c === 'object' && !Array.isArray(c)) {
-        for (const entry of Object.values(c).slice(0, 3)) {
-          if (entry && typeof entry === 'object') {
-            info.nested ??= new Set();
-            info.nestedUnder = container;
-            for (const k of Object.keys(entry as object)) info.nested.add(k);
-          }
-        }
-      }
-    }
-  } catch {
-    /* skip undecodable sample */
-  }
-}
-
-// Per-object-store record counts + a sample of up to `cap` records for field discovery, read
-// straight off the snapshot's buckets (already grouped by store, names resolved).
-function sampleStores(snap: Snapshot, cap: number): Map<string, StoreInfo> {
-  const stores = new Map<string, StoreInfo>();
-  for (const [sk, bucket] of snap.buckets) {
-    const dbName = bucket.dbName ?? `db${bucket.dbId}`;
-    const info: StoreInfo = {
-      key: sk,
-      dbId: bucket.dbId,
-      dbName,
-      dbNorm: normalizeDbName(dbName),
-      store: bucket.storeName ?? '?',
-      count: bucket.records.length,
-      sampled: 0,
-      fields: new Set(),
-    };
-    const lim = Math.min(cap, bucket.records.length);
-    for (let i = 0; i < lim; i++) {
-      info.sampled++;
-      sampleRecordFields(info, bucket.records[i].value);
-    }
-    stores.set(sk, info);
-  }
-  return stores;
+// Per-object-store record counts + a structural field sample (up to cap=8 records) come from the
+// library's `sampleStoreFields`; the MCP only adds its normalized db name (`dbNorm`).
+function sampleStores(snap: Snapshot): StoreInfo[] {
+  return [...sampleStoreFields(snap, { cap: 8 }).values()].map((s) => ({
+    dbName: s.dbName,
+    dbNorm: normalizeDbName(s.dbName),
+    store: s.store,
+    count: s.count,
+    sampled: s.sampled,
+    fields: s.fields,
+    nested: s.nested,
+    nestedUnder: s.nestedUnder,
+  }));
 }
 
 // Fields any proposal might reference are pinned to the FRONT of the printed list so a
@@ -200,12 +163,10 @@ function buildProposal(fpHash: string, msgCand: any[], convCand: any[]): any {
   return proposal;
 }
 
-export function describeSchema(dir: string, args: any = {}): string {
-  const snap = loadSnapshot(dir);
+export function describeSchema(snap: Snapshot, args: any = {}): string {
   const fp = fingerprint(snap);
 
-  const stores = sampleStores(snap, 8);
-  const all = [...stores.values()].sort((a, b) => b.count - a.count);
+  const all = sampleStores(snap).sort((a, b) => b.count - a.count);
 
   // score candidates
   const msgCand = all

@@ -1,5 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { Session } from 'libzaungast/session.js';
+import type { LiveTeamsStore, StoreReading } from 'libzaungast';
 import {
   listConversations,
   readMessages,
@@ -29,24 +29,24 @@ const HISTORY_NOTE =
 const YOU_NOTE =
   'The account owner\'s own messages are labelled "<name> (you)" — that speaker is the user, not you the assistant.';
 
-export function buildServer(session: Session): McpServer {
+export function buildServer(live: LiveTeamsStore): McpServer {
   const server = new McpServer({ name: 'zaungast', version: '0.1.0' });
 
-  const run = (fn: (s: any, m: any, d: boolean, a: any) => string, args: any) => {
+  const run = (fn: (view: StoreReading, a: any) => string, args: any) => {
     try {
-      const { store, meta, staleProbeDeferred } = session.get();
-      if (!meta.schemaMatched) {
+      const view = live.current(); // one probe/refresh decision → a pinned, consistent reading
+      if (!view.meta.schemaMatched) {
         return {
           content: [
             {
               type: 'text' as const,
-              text: `This Teams build's IndexedDB schema is not recognized (fingerprint ${meta.fingerprint}). Run the describe_schema tool to inspect the stores and get a proposed mapping.`,
+              text: `This Teams build's IndexedDB schema is not recognized (fingerprint ${view.meta.fingerprint}). Run the describe_schema tool to inspect the stores and get a proposed mapping.`,
             },
           ],
         };
       }
       return {
-        content: [{ type: 'text' as const, text: fn(store, meta, staleProbeDeferred, args) }],
+        content: [{ type: 'text' as const, text: fn(view, args) }],
       };
     } catch (e: any) {
       return {
@@ -135,8 +135,10 @@ export function buildServer(session: Session): McpServer {
     },
     async (args) => {
       try {
+        // Sample the CONSISTENT tmp snapshot backing the current build (never the live Teams dir).
+        const snap = live.reloadSnapshot();
         return {
-          content: [{ type: 'text' as const, text: describeSchema(session.currentDir(), args) }],
+          content: [{ type: 'text' as const, text: describeSchema(snap, args) }],
         };
       } catch (e: any) {
         return {

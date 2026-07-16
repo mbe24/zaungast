@@ -1,28 +1,17 @@
-import { isBotMri, type ChatStore, type StoreMeta } from 'libzaungast/ingest/store.js';
-import { byCodeUnit } from 'libzaungast/util/sort.js';
 import { reactionGlyph } from './util/emoji.js';
+import { byCodeUnit } from './util/sort.js';
 import { htmlToText } from 'libzaungast/util/text.js';
-import {
-  likeEscape,
-  queryPeople,
-  queryCalls,
-  queryConversations,
-  queryEvents,
-  maxEventStart,
-} from 'libzaungast/query.js';
-import {
-  loadTopicsInScope,
-  computeTopicRows,
-  convIdsFor,
-  querySearch,
-  queryConversationMessages,
-  queryThread,
-  queryThreadSummaries,
-  convMessageStats,
-  buildPhraseExtractor,
-  computeTopicsWindow,
-} from 'libzaungast/query.js';
-import type { EventView, TopicView, QueryMiss } from 'libzaungast/query.js';
+import type {
+  StoreView,
+  StoreMeta,
+  MessageView,
+  SearchHit,
+  ConversationView,
+  ThreadSummary,
+  EventView,
+  TopicView,
+  ConvMessagesMiss,
+} from 'libzaungast';
 import type {
   ListConversationsArgs,
   ReadMessagesArgs,
@@ -33,7 +22,11 @@ import type {
   ListCallsArgs,
 } from './schemas.js';
 
-type DB = ChatStore['db'];
+// The pinned reading a tool renders (plan/b3-facade-review.md §3.2/Override 2): the six query
+// namespaces + the build's `meta`, plus `mayBeStale`. It's optional here so a STATIC store
+// (`openStore`, used by the G2 golden) can be passed directly, while the live MCP dispatch passes a
+// full `StoreReading` (`live.current()`); a static store's absent flag reads as not-stale.
+type View = StoreView & { readonly mayBeStale?: boolean };
 
 // ---------- formatting ----------
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -44,10 +37,11 @@ export function fmtTs(ts: number): string {
   const y = d.getFullYear() !== now.getFullYear() ? `${d.getFullYear()}-` : '';
   return `${y}${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
-function envelope(meta: StoreMeta, deferred: boolean, extra = ''): string {
+function envelope(view: View, extra = ''): string {
+  const meta: StoreMeta = view.meta;
   const tz = -new Date().getTimezoneOffset() / 60;
-  const stale = deferred ? ' · data:may-be-stale' : '';
-  const lossy = (meta as any).lossy ? ' · data:incomplete(source-partially-unreadable)' : '';
+  const stale = view.mayBeStale ? ' · data:may-be-stale' : '';
+  const lossy = meta.lossy ? ' · data:incomplete(source-partially-unreadable)' : '';
   return `as_of ${fmtTs(meta.asOf)} (tz${tz >= 0 ? '+' : ''}${tz})${stale}${lossy}${extra ? ' · ' + extra : ''}`;
 }
 export function parseTime(s: string | number | undefined, now = Date.now()): number | undefined {
@@ -73,23 +67,20 @@ function badTime(args: any, keys: string[]): string | null {
       return `error: cannot parse ${k}="${args[k]}" — use ISO (2026-07-01) or relative (-7d / +7d / -24h / -30m)`;
   return null;
 }
-// ftsMatch now lives in ./query.js (imported above).
 // Truncate with an ellipsis marker so the agent can tell a message was cut.
 function clip(s: string, n: number): string {
   s = (s || '').replace(/\s+/g, ' ').trim();
   return s.length > n ? s.slice(0, n) + '…' : s;
 }
 
-// likeEscape now lives in the query layer (./query.js) and is imported above.
+// ---------- resolvers / notes ----------
+// The resolvers + the fallible query cores live in the libzaungast facade. The presentation below
+// turns their structured results (QueryMiss reasons, resolved conversation candidates, coverage
+// spans) into the agent-facing note/error text — the library emits no prose.
 
-// ---------- resolvers (name/handle → ids) ----------
-// The resolvers (convIdsFor/senderFilter/resolveExcludes) + the fallible query cores now live in
-// ./query.js. The presentation below turns their structured results (QueryMiss reasons, resolved
-// ids, coverage spans) into the agent-facing note/error text — the library emits no prose.
-
-// Map a library QueryMiss to its user-facing message (the exact strings the scope-builders used to
-// return inline).
-function describeMiss(m: QueryMiss): string {
+// Map a library miss reason to its user-facing message (the exact strings the scope-builders used to
+// return inline). Handles the read-message `no-such-message` case too (the flat around-pivot miss).
+function describeMiss(m: ConvMessagesMiss): string {
   switch (m.reason) {
     case 'no-such-sender':
       return `no person matches ${m.value}`;
@@ -99,19 +90,18 @@ function describeMiss(m: QueryMiss): string {
       return `exclude: no conversation ${m.value}`;
     case 'no-such-excluded-person':
       return `exclude: no person ${m.value}`;
+    case 'no-such-message':
+      return `message ${m.value} not found in this conversation`;
   }
 }
 
 // A `from:` name-substring (not a p:handle) that matches >1 person → non-blocking narrowing note.
-function fromAmbiguityNote(db: DB, from: string): string {
+// `people.find` returns the FULL match total plus the volume-ranked sample rows.
+function fromAmbiguityNote(view: View, from: string): string {
   if (from.startsWith('p:')) return '';
-  const ppl = db
-    .prepare(
-      String.raw`select handle,name from people where name like ? escape '\' order by msg_count desc`,
-    )
-    .all(`%${likeEscape(from)}%`) as any[];
-  if (ppl.length <= 1) return '';
-  return `note: from:"${from}" matched ${ppl.length} people (${ppl
+  const res = view.people.find({ query: from });
+  if (res.total <= 1) return '';
+  return `note: from:"${from}" matched ${res.total} people (${res.rows
     .slice(0, 4)
     .map((p) => `${p.handle} ${p.name}`)
     .join(', ')}) — pass a p:handle to narrow`;
@@ -124,31 +114,26 @@ function coverageNoteText(hi: number, lo: number): string {
   return `newest cached in this scope: ${fmtTs(hi)} · oldest ${fmtTs(lo)} — local cache may lag the server`;
 }
 // A conversation title-substring that matches >1 conversation → non-blocking disambiguation note.
-function convAmbiguityNote(db: DB, arg: string, ids: string[]): string {
-  if (arg.startsWith('c:') || ids.length <= 1) return '';
-  const rows = db
-    .prepare(
-      `select handle,topic,participant_names from conversations where id in (${ids.map(() => '?').join(',')}) order by last_ts desc limit 4`,
-    )
-    .all(...ids) as any[];
-  const names = rows
-    .map((r) => `${r.handle} ${r.topic || r.participant_names || ''}`.trim())
+// `conversations.resolve` returns the candidate views newest-first (last_ts desc) — the same set
+// `in:` resolved to; the MCP owns the >1 threshold, the ≤4 cap, and the prose.
+function convAmbiguityNote(view: View, arg: string): string {
+  if (arg.startsWith('c:')) return '';
+  const cands = view.conversations.resolve(arg);
+  if (cands.length <= 1) return '';
+  const names = cands
+    .slice(0, 4)
+    .map((r) => `${r.handle} ${r.topic || r.participantNames || ''}`.trim())
     .join(', ');
-  return `note: in:"${arg}" matched ${ids.length} conversations (${names}) — searching all; pass a c:handle to narrow`;
+  return `note: in:"${arg}" matched ${cands.length} conversations (${names}) — searching all; pass a c:handle to narrow`;
 }
 
 // ================= TOOLS =================
 
-// list_conversations = render(queryConversations(...)).
-export function listConversations(
-  store: ChatStore,
-  meta: StoreMeta,
-  deferred: boolean,
-  args: ListConversationsArgs = {},
-): string {
+// list_conversations = render(conversations.list(...)).
+export function listConversations(view: View, args: ListConversationsArgs = {}): string {
   const bt = badTime(args, ['since']);
   if (bt) return bt;
-  const rows = queryConversations(store, {
+  const rows = view.conversations.list({
     n: args.n,
     kind: args.kind,
     query: args.query,
@@ -161,35 +146,31 @@ export function listConversations(
     return `${r.handle} [${r.kind}] "${title}" · ${r.msgCount} msg · last ${fmtTs(r.lastTs)}`;
   });
   const extra = `${rows.length} conversations`;
-  return `${envelope(meta, deferred, extra)}\n${lines.join('\n') || '(none)'}`;
+  return `${envelope(view, extra)}\n${lines.join('\n') || '(none)'}`;
 }
 
 // Resolve a `conversation` selector (handle or title/participant substring) to a single
 // conversation id, or an early-return string (ambiguous-picker text, or a "no match" message)
-// when it can't unambiguously resolve.
-function resolveConversationArg(db: DB, conversation: string): { id: string } | { early: string } {
-  const ids = convIdsFor(db, conversation);
-  if (!ids.length) return { early: `no conversation matches "${conversation}"` };
-  if (ids.length > 1 && !conversation.startsWith('c:')) {
-    const cands = db
-      .prepare(
-        `select handle,kind,topic,participant_names from conversations
-      where id in (${ids.map(() => '?').join(',')}) order by last_ts desc limit 8`,
-      )
-      .all(...ids) as any[];
+// when it can't unambiguously resolve. `conversations.resolve` returns candidate views newest-first.
+function resolveConversationArg(
+  view: View,
+  conversation: string,
+): { id: string } | { early: string } {
+  const cands = view.conversations.resolve(conversation);
+  if (!cands.length) return { early: `no conversation matches "${conversation}"` };
+  if (cands.length > 1 && !conversation.startsWith('c:')) {
     return {
       early:
-        `ambiguous — ${ids.length} conversations match. Pick a handle:\n` +
-        cands.map((c) => `  ${c.handle} [${c.kind}] ${c.topic || c.participant_names}`).join('\n'),
+        `ambiguous — ${cands.length} conversations match. Pick a handle:\n` +
+        cands
+          .slice(0, 8)
+          .map((c) => `  ${c.handle} [${c.kind}] ${c.topic || c.participantNames}`)
+          .join('\n'),
     };
   }
-  return { id: ids[0] };
+  return { id: cands[0].id };
 }
 
-// queryMessageWindow (the flat/around row fetch) now lives in ./query.js (imported above).
-
-// Render message rows oldest→newest, collapsing consecutive same-sender runs (by MRI, not
-// display name) unless more than 15 minutes have passed since the previous message.
 // Reaction summary for one message. Two-level cap, tuned against real data (see plan/vision.md
 // #6): emoji groups sorted by reactor-count desc; groups 1–3 are NAMED (≤3 names, you-first then
 // most-recent, per-group `+K` overflow), groups 4–5 show glyph+count only, group 6+ collapses to
@@ -197,7 +178,7 @@ function resolveConversationArg(db: DB, conversation: string): { id: string } | 
 // caps and names everyone — for "did person X react?". Returns '' when there are no reactions.
 function renderReactions(
   reactionsJson: string | null | undefined,
-  store: ChatStore,
+  view: View,
   selfMri: string | null,
   full: boolean,
 ): string {
@@ -210,7 +191,7 @@ function renderReactions(
   }
   if (!Array.isArray(groups) || groups.length === 0) return '';
   const nameOf = (mri: string): string =>
-    mri === selfMri ? 'you' : store.nameForMri(mri) || '(unknown)';
+    mri === selfMri ? 'you' : view.people.nameFor(mri) || '(unknown)';
   // Order reactors within a group: you first, then most-recent by reaction time.
   const orderedNames = (u: [string, number][]): string[] => {
     const sorted = u.slice().sort((a, b) => {
@@ -247,7 +228,7 @@ function renderReactions(
 }
 
 interface ReactionCtx {
-  store: ChatStore;
+  view: View;
   selfMri: string | null;
   full: boolean;
 }
@@ -265,9 +246,9 @@ function ownerLabel(senderName: string | null | undefined, ownerFallback: string
 
 // The owner's canonical display name (for the fallback + the header legend), or null if it can't
 // be resolved (owner never posted / no self MRI).
-function ownerDisplayName(store: ChatStore, meta: StoreMeta): string | null {
-  const selfMri = (meta as any).selfMri as string | null;
-  return selfMri ? store.nameForMri(selfMri) : null;
+function ownerDisplayName(view: View): string | null {
+  const selfMri = view.meta.selfMri;
+  return selfMri ? view.people.nameFor(selfMri) : null;
 }
 
 // One-line header note that tells a machine reader what `(you)` means. Emitted only when the
@@ -277,28 +258,38 @@ function viewerLegend(name: string | null): string {
 }
 
 // Sender label: the owner as "<name> (you)", everyone else by display name.
-function whoLabel(r: any, ownerFallback: string | null): string {
-  return r.is_mine ? ownerLabel(r.sender_name, ownerFallback) : r.sender_name || '(unknown)';
+function whoLabel(r: MessageView, ownerFallback: string | null): string {
+  return r.isMine ? ownerLabel(r.senderName, ownerFallback) : r.senderName || '(unknown)';
 }
 
 // One rendered message at `indent`: `<indent><ts> <who>> <content><marks><suffix>`, plus an
 // indented reaction line beneath it when reacted. `who` is precomputed (name / "<name> (you)" /
 // "↳" burst mark); `suffix` (e.g. a thread tag) rides the text line, before any reaction line.
-function msgText(r: any, who: string, indent: string, rx?: ReactionCtx, suffix = ''): string {
-  const marks = (r.has_attach ? ' [attachment]' : '') + (r.mentions_me ? ' [@me]' : '');
+function msgText(
+  r: MessageView,
+  who: string,
+  indent: string,
+  rx?: ReactionCtx,
+  suffix = '',
+): string {
+  const marks = (r.hasAttachment ? ' [attachment]' : '') + (r.mentionsMe ? ' [@me]' : '');
   const line = `${indent}${fmtTs(r.ts)} ${who}> ${clip(r.content, 280)}${marks}${suffix}`;
-  const rxLine = rx ? renderReactions(r.reactions, rx.store, rx.selfMri, rx.full) : '';
+  const rxLine = rx ? renderReactions(r.reactionsJson, rx.view, rx.selfMri, rx.full) : '';
   return rxLine ? `${line}\n${indent}      ${rxLine}` : line;
 }
 
 // FLAT rendering (1:1/group, and non-threaded views): chronological, same-sender bursts within
 // 15 min collapse to "↳". Unchanged behaviour.
-function renderMessageLines(rows: any[], ownerFallback: string | null, rx?: ReactionCtx): string[] {
+function renderMessageLines(
+  rows: MessageView[],
+  ownerFallback: string | null,
+  rx?: ReactionCtx,
+): string[] {
   let lastMri: string | null = null;
   let lastTs = 0;
   return rows.map((r) => {
-    const collapsed = r.sender_mri === lastMri && r.ts - lastTs < 15 * 60_000;
-    lastMri = r.sender_mri;
+    const collapsed = r.senderMri === lastMri && r.ts - lastTs < 15 * 60_000;
+    lastMri = r.senderMri;
     lastTs = r.ts;
     const who = collapsed ? '  ↳' : whoLabel(r, ownerFallback);
     return msgText(r, who, '', rx);
@@ -312,13 +303,13 @@ const REPLY_INDENT = '  ';
 // `preReplies` is an optional notice inserted between root and replies (e.g. "+N earlier · …");
 // `hitId` marks one line with a "→" gutter (the search-pivot target).
 function renderThread(
-  root: any,
-  replies: any[],
+  root: MessageView,
+  replies: MessageView[],
   ownerFallback: string | null,
   rx: ReactionCtx | undefined,
   opts: { suffix?: string; preReplies?: string; hitId?: string } = {},
 ): string[] {
-  const mark = (r: any, base: string) =>
+  const mark = (r: MessageView, base: string) =>
     (opts.hitId && String(r.id) === opts.hitId ? '→ ' : '') + base;
   const out: string[] = [
     msgText(root, mark(root, whoLabel(root, ownerFallback)), '', rx, opts.suffix),
@@ -327,8 +318,8 @@ function renderThread(
   let lastMri: string | null = null;
   let lastTs = 0;
   for (const r of replies) {
-    const collapsed = r.sender_mri === lastMri && r.ts - lastTs < 15 * 60_000;
-    lastMri = r.sender_mri;
+    const collapsed = r.senderMri === lastMri && r.ts - lastTs < 15 * 60_000;
+    lastMri = r.senderMri;
     lastTs = r.ts;
     const who = mark(r, collapsed ? '↳' : whoLabel(r, ownerFallback));
     out.push(msgText(r, who, REPLY_INDENT, rx));
@@ -337,26 +328,27 @@ function renderThread(
 }
 
 // Split a thread's ts-ordered rows into { root, replies } (root = the id===root_id message).
-function splitThread(rows: any[], rootId: string): { root: any; replies: any[] } {
+function splitThread(
+  rows: MessageView[],
+  rootId: string,
+): { root: MessageView; replies: MessageView[] } {
   const root = rows.find((r) => String(r.id) === rootId) ?? rows[0];
   return { root, replies: rows.filter((r) => r !== root) };
 }
 
-// Show both local bounds so a caller knows the cache slice — "newest local" flags when the
-// local cache lags the server (its most recent cached message may be days old).
 // ---------- channel (reply-chain) rendering ----------
 const THREAD_INLINE_MAX = 40; // a thread this size or smaller renders whole in thread mode
 const THREAD_WINDOW = 30; // else this many replies per page
 
-function channelHead(conv: any, extra: string): string {
-  return `${conv.handle} [channel] "${conv.topic || conv.participant_names}" · ${extra}`;
+function channelHead(conv: ConversationView, extra: string): string {
+  return `${conv.handle} [channel] "${conv.topic || conv.participantNames}" · ${extra}`;
 }
 
 // One thread in the DIGEST: root always in full; ≤5-message threads show every reply (no marker);
 // ≥6 show root + last 3 + a "+N earlier · read_messages(thread: m:…)" drill-in. A zero-reply thread
 // is a bare root line (no thread tag). `rows` are the thread's non-system messages, ts-ascending.
 function renderDigestThread(
-  rows: any[],
+  rows: MessageView[],
   rootId: string,
   ownerNm: string | null,
   rx: ReactionCtx,
@@ -382,10 +374,8 @@ function renderDigestThread(
 // Default channel view: threads grouped by reply-chain, ordered by last activity (newest at the
 // bottom), size-gated, filled to a message budget (`limit`). Pages threads via the older: cursor.
 function renderChannelDigest(
-  store: ChatStore,
-  meta: StoreMeta,
-  deferred: boolean,
-  conv: any,
+  view: View,
+  conv: ConversationView,
   convId: string,
   args: ReadMessagesArgs,
   limit: number,
@@ -394,25 +384,27 @@ function renderChannelDigest(
   ownerNm: string | null,
   rx: ReactionCtx,
 ): string {
-  const db = store.db;
   // thread summaries (in-window activity decides which threads appear)
-  let summaries = queryThreadSummaries(store, convId, { sinceTs: since, untilTs: until });
+  let summaries: ThreadSummary[] = view.messages.threadSummaries(convId, {
+    sinceTs: since,
+    untilTs: until,
+  });
   const threadTotal = summaries.length;
   const older = args.cursor && /^older:(\d+):(.+)$/.exec(String(args.cursor));
   if (older) {
     const ots = Number(older[1]);
     const oid = older[2];
     summaries = summaries.filter(
-      (s) => s.last < ots || (s.last === ots && String(s.root_id) < oid),
+      (s) => s.lastTs < ots || (s.lastTs === ots && String(s.rootId) < oid),
     );
   }
   // newest-active first for budget filling; ties broken by root_id descending (stable)
-  summaries.sort((a, b) => b.last - a.last || (String(a.root_id) < String(b.root_id) ? 1 : -1));
+  summaries.sort((a, b) => b.lastTs - a.lastTs || (String(a.rootId) < String(b.rootId) ? 1 : -1));
   const shownPer = (n: number) => (n <= 5 ? n : 4); // root + last 3
-  const picked: any[] = [];
+  const picked: ThreadSummary[] = [];
   let budget = 0;
   for (const s of summaries) {
-    const cost = shownPer(s.n);
+    const cost = shownPer(s.count);
     if (picked.length && budget + cost > limit) break;
     picked.push(s);
     budget += cost;
@@ -420,32 +412,30 @@ function renderChannelDigest(
   }
   // display oldest-active first so the most-recently-active thread sits at the bottom
   const blocks = [...picked].reverse().map((s) => {
-    const rows = queryThread(db, convId, s.root_id);
-    return renderDigestThread(rows, String(s.root_id), ownerNm, rx).join('\n');
+    const rows = view.messages.thread(convId, s.rootId);
+    return renderDigestThread(rows, String(s.rootId), ownerNm, rx).join('\n');
   });
   const oldestShown = picked[picked.length - 1];
   const olderCur =
     summaries.length > picked.length && oldestShown
-      ? ` · older: older:${oldestShown.last}:${oldestShown.root_id}`
+      ? ` · older: older:${oldestShown.lastTs}:${oldestShown.rootId}`
       : '';
-  const { total, earliest, newest } = convMessageStats(db, convId);
+  const { total, earliestTs, newestTs } = view.messages.stats(convId);
   const head = channelHead(
     conv,
-    `${total} msgs / ${threadTotal} threads · showing ${picked.length} threads, ${budget} msgs · threads by last activity · local cache ${fmtTs(earliest)}–${fmtTs(newest)}${olderCur}`,
+    `${total} msgs / ${threadTotal} threads · showing ${picked.length} threads, ${budget} msgs · threads by last activity · local cache ${fmtTs(earliestTs)}–${fmtTs(newestTs)}${olderCur}`,
   );
   const body = blocks.join('\n\n') || '(no threads)';
   const legend = /\(you\)>/.test(body) ? viewerLegend(ownerNm) : '';
-  return `${[envelope(meta, deferred), head, legend].filter(Boolean).join('\n')}\n${body}`;
+  return `${[envelope(view), head, legend].filter(Boolean).join('\n')}\n${body}`;
 }
 
 // A single reply-chain: thread mode (read it in full) and the around-pivot (center on a hit).
 // Inlines the whole chain up to THREAD_INLINE_MAX; larger chains window (newest, or around the
 // hit) and page backward with a keyset `more: before m:<id>` cursor.
 function renderThreadView(
-  store: ChatStore,
-  meta: StoreMeta,
-  deferred: boolean,
-  conv: any,
+  view: View,
+  conv: ConversationView,
   convId: string,
   rootId: string,
   args: ReadMessagesArgs,
@@ -453,16 +443,15 @@ function renderThreadView(
   rx: ReactionCtx,
   hitId?: string,
 ): string {
-  const db = store.db;
-  const rows = queryThread(db, convId, rootId);
+  const rows = view.messages.thread(convId, rootId);
   if (!rows.length)
-    return `${envelope(meta, deferred)}\nthread m:${rootId} not found in this conversation`;
+    return `${envelope(view)}\nthread m:${rootId} not found in this conversation`;
   const { root, replies } = splitThread(rows, rootId);
   const rootMissing = String(root.id) !== rootId;
   const total = rows.length;
 
   const beforeM = args.cursor && /^before m:(.+)$/.exec(String(args.cursor));
-  let shown: any[];
+  let shown: MessageView[];
   let earlier = 0;
   if (hitId && total > THREAD_INLINE_MAX) {
     const idx = Math.max(
@@ -499,16 +488,14 @@ function renderThreadView(
     conv,
     `thread m:${rootId}${hitId ? ` around m:${hitId}` : ''} · showing ${1 + shown.length}/${total} · ${status}`,
   );
-  const legend = rows.some((r) => r.is_mine) ? viewerLegend(ownerNm) : '';
-  return `${[envelope(meta, deferred), head, legend].filter(Boolean).join('\n')}\n${lines.join('\n')}`;
+  const legend = rows.some((r) => r.isMine) ? viewerLegend(ownerNm) : '';
+  return `${[envelope(view), head, legend].filter(Boolean).join('\n')}\n${lines.join('\n')}`;
 }
 
 // Dispatch a channel read: a specific thread, an around-pivot (→ the hit's thread), or the digest.
 function renderChannel(
-  store: ChatStore,
-  meta: StoreMeta,
-  deferred: boolean,
-  conv: any,
+  view: View,
+  conv: ConversationView,
   convId: string,
   args: ReadMessagesArgs,
   limit: number,
@@ -519,45 +506,19 @@ function renderChannel(
 ): string {
   if (args.thread) {
     const rootId = String(args.thread).replace(/^m:/, '');
-    return renderThreadView(store, meta, deferred, conv, convId, rootId, args, ownerNm, rx);
+    return renderThreadView(view, conv, convId, rootId, args, ownerNm, rx);
   }
   if (args.around) {
     const aid = String(args.around).replace(/^m:/, '');
-    const arow = store.db
-      .prepare('select root_id from messages where conv_id=? and id=?')
-      .get(convId, aid) as any;
-    if (!arow)
-      return `${envelope(meta, deferred)}\nmessage m:${aid} not found in this conversation`;
-    return renderThreadView(
-      store,
-      meta,
-      deferred,
-      conv,
-      convId,
-      String(arow.root_id),
-      args,
-      ownerNm,
-      rx,
-      aid,
-    );
+    const arow = view.messages.get(convId, aid);
+    if (!arow) return `${envelope(view)}\nmessage m:${aid} not found in this conversation`;
+    return renderThreadView(view, conv, convId, String(arow.rootId), args, ownerNm, rx, aid);
   }
-  return renderChannelDigest(
-    store,
-    meta,
-    deferred,
-    conv,
-    convId,
-    args,
-    limit,
-    since,
-    until,
-    ownerNm,
-    rx,
-  );
+  return renderChannelDigest(view, conv, convId, args, limit, since, until, ownerNm, rx);
 }
 
 function buildReadMessagesHead(
-  conv: any,
+  conv: ConversationView,
   shown: number,
   total: number,
   earliest: number,
@@ -565,109 +526,87 @@ function buildReadMessagesHead(
   olderCursor: string,
 ): string {
   const olderSuffix = olderCursor ? ` · older: ${olderCursor}` : '';
-  return `${conv.handle} [${conv.kind}] "${conv.topic || conv.participant_names}" · showing ${shown}/${total} · local cache ${fmtTs(earliest)}–${fmtTs(newest)}${olderSuffix}`;
+  return `${conv.handle} [${conv.kind}] "${conv.topic || conv.participantNames}" · showing ${shown}/${total} · local cache ${fmtTs(earliest)}–${fmtTs(newest)}${olderSuffix}`;
 }
 
-export function readMessages(
-  store: ChatStore,
-  meta: StoreMeta,
-  deferred: boolean,
-  args: ReadMessagesArgs = {} as ReadMessagesArgs,
-): string {
-  const db = store.db;
+export function readMessages(view: View, args: ReadMessagesArgs = {} as ReadMessagesArgs): string {
   const bt = badTime(args, ['since', 'until']);
   if (bt) return bt;
   if (!args.conversation) return 'error: conversation (handle or title substring) is required';
-  const resolved = resolveConversationArg(db, String(args.conversation));
+  const resolved = resolveConversationArg(view, String(args.conversation));
   if ('early' in resolved) return resolved.early;
   const id = resolved.id;
   const limit = Math.min(Number(args.limit) || 40, 200);
   const since = parseTime(args.since);
   const until = parseTime(args.until);
-  const conv = db
-    .prepare('select handle,kind,topic,participant_names from conversations where id=?')
-    .get(id) as any;
-  const ownerNm = ownerDisplayName(store, meta);
+  const conv = view.conversations.get(id)!;
+  const ownerNm = ownerDisplayName(view);
   const rx: ReactionCtx = {
-    store,
-    selfMri: (meta as any).selfMri as string | null,
+    view,
+    selfMri: view.meta.selfMri,
     full: String(args.reactions) === 'full',
   };
   // Channels render by reply-chain (thread digest / a single thread / an around-pivot); everything
   // else (1:1, group, meeting) stays flat and chronological.
-  if (conv?.kind === 'channel')
-    return renderChannel(store, meta, deferred, conv, id, args, limit, since, until, ownerNm, rx);
+  if (conv.kind === 'channel')
+    return renderChannel(view, conv, id, args, limit, since, until, ownerNm, rx);
 
-  const fetched = queryConversationMessages(store, id, {
+  const res = view.messages.inConversation(id, {
     sinceTs: since,
     untilTs: until,
     cursor: args.cursor != null ? String(args.cursor) : undefined,
     around: args.around != null ? String(args.around) : undefined,
     limit,
   });
-  if ('aroundNotFound' in fetched)
-    return `message ${fetched.aroundNotFound} not found in this conversation`;
-  const rows = fetched.rows;
+  if (!res.ok) return describeMiss(res.reason);
+  const rows = res.rows;
 
-  const { total, earliest, newest } = convMessageStats(db, id);
-  // Only offer an older: cursor when there really are older messages (else the agent pages into nothing).
-  const oldest = rows[0];
-  const olderCursor = oldest && oldest.ts > earliest ? `older:${oldest.ts}:${oldest.id}` : '';
-  const head = buildReadMessagesHead(conv, rows.length, total, earliest, newest, olderCursor);
+  const { total, earliestTs, newestTs } = view.messages.stats(id);
+  // The older: cursor is now the library's own keyset token (offered when the window filled).
+  const olderCursor = res.nextOlder ?? '';
+  const head = buildReadMessagesHead(conv, rows.length, total, earliestTs, newestTs, olderCursor);
   const lines = renderMessageLines(rows, ownerNm, rx);
   // Emit the (you)-legend only when owner-authored rows are actually shown (else it's dead weight).
-  const legend = rows.some((r: any) => r.is_mine) ? viewerLegend(ownerNm) : '';
-  const out = [envelope(meta, deferred), head, legend].filter(Boolean).join('\n');
+  const legend = rows.some((r) => r.isMine) ? viewerLegend(ownerNm) : '';
+  const out = [envelope(view), head, legend].filter(Boolean).join('\n');
   return `${out}\n${lines.join('\n') || '(no messages)'}`;
 }
 
-// The search scope-building + query + coverage-trigger now live in query.querySearch; this file
-// renders its result (notes/legend/lines) below.
-
-// Build the per-hit lines and the (optional) conversation legend, resolving conv_id → handle
-// once per distinct conversation (memoized).
+// Build the per-hit lines and the (optional) conversation legend, resolving conv id → view once per
+// distinct conversation (memoized; the in-memory point get is ~free).
 function buildSearchResults(
-  db: DB,
-  rows: any[],
+  view: View,
+  rows: SearchHit[],
   ownerFallback: string | null,
 ): { lines: string[]; legend: string } {
-  const convH = new Map<string, string>();
-  const hn = (cid: string) =>
-    convH.get(cid) ??
-    convH
-      .set(
-        cid,
-        (db.prepare('select handle from conversations where id=?').get(cid) as any)?.handle ?? '?',
-      )
-      .get(cid)!;
-  const distinct = [...new Set(rows.map((r) => r.conv_id))];
+  const cache = new Map<string, ConversationView | null>();
+  const conv = (cid: string): ConversationView | null => {
+    if (!cache.has(cid)) cache.set(cid, view.conversations.get(cid));
+    return cache.get(cid)!;
+  };
+  const hn = (cid: string) => conv(cid)?.handle ?? '?';
+  const distinct = [...new Set(rows.map((r) => r.convId))];
   const legend =
     distinct.length <= 5
       ? distinct
-          .map(
-            (cid) =>
-              `${hn(cid)}="${(db.prepare('select topic,participant_names from conversations where id=?').get(cid) as any)?.topic || (db.prepare('select participant_names from conversations where id=?').get(cid) as any)?.participant_names || '?'}"`,
-          )
+          .map((cid) => {
+            const c = conv(cid);
+            return `${hn(cid)}="${c?.topic || c?.participantNames || '?'}"`;
+          })
           .join(' · ')
       : '';
   const lines = rows.map((r) => {
-    const label = r.is_mine ? ownerLabel(r.sender_name, ownerFallback) : r.sender_name;
-    return `${hn(r.conv_id)} ${fmtTs(r.ts)} m:${r.id} ${label}> ${clip(r.snip, 140)}`;
+    const label = r.isMine ? ownerLabel(r.senderName, ownerFallback) : r.senderName;
+    return `${hn(r.convId)} ${fmtTs(r.ts)} m:${r.id} ${label}> ${clip(r.snippet, 140)}`;
   });
   return { lines, legend };
 }
 
-export function search(
-  store: ChatStore,
-  meta: StoreMeta,
-  deferred: boolean,
-  args: SearchArgs = {},
-): string {
-  const db = store.db;
+export function search(view: View, args: SearchArgs = {}): string {
   const bt = badTime(args, ['since', 'until']);
   if (bt) return bt;
   const limit = Math.min(Number(args.limit) || 20, 60);
-  const res = querySearch(store, {
+  const res = view.messages.search({
     query: args.query,
     from: args.from != null ? String(args.from) : undefined,
     in: args.in != null ? String(args.in) : undefined,
@@ -678,7 +617,6 @@ export function search(
     sinceTs: parseTime(args.since),
     untilTs: parseTime(args.until),
     limit,
-    ftsEnabled: meta.ftsEnabled,
   });
   if (!res.ok) return describeMiss(res.reason);
   const { rows, order } = res;
@@ -687,23 +625,23 @@ export function search(
   // library resolved `in` → res.inIds; the note text is presentation).
   const notes: string[] = [];
   if (args.from != null) {
-    const fn = fromAmbiguityNote(db, String(args.from));
+    const fn = fromAmbiguityNote(view, String(args.from));
     if (fn) notes.push(fn);
   }
   if (args.in != null && res.inIds) {
-    const an = convAmbiguityNote(db, String(args.in), res.inIds);
+    const an = convAmbiguityNote(view, String(args.in));
     if (an) notes.push(an);
   }
 
-  const ownerNm = ownerDisplayName(store, meta);
-  const { lines, legend } = buildSearchResults(db, rows, ownerNm);
+  const ownerNm = ownerDisplayName(view);
+  const { lines, legend } = buildSearchResults(view, rows, ownerNm);
   const coverage = res.coverage ? coverageNoteText(res.coverage.hi, res.coverage.lo) : '';
   // Owner-label legend, only when a hit is owner-authored (search interleaves conversations, so
   // the (you) rows can be scattered — the legend matters here at least as much as in read_messages).
-  const vlegend = rows.some((r: any) => r.is_mine) ? viewerLegend(ownerNm) : '';
+  const vlegend = rows.some((r) => r.isMine) ? viewerLegend(ownerNm) : '';
 
   const head = [
-    envelope(meta, deferred, `order:${order} · ${rows.length} hits`),
+    envelope(view, `order:${order} · ${rows.length} hits`),
     ...notes,
     vlegend,
     legend,
@@ -714,26 +652,6 @@ export function search(
   return `${head}\n${lines.join('\n') || '(no matches)'}`;
 }
 
-// Build the (cached) per-message phrase extractor: name tokens are excluded from phrase
-// candidates, tokenization is cached per content string (the expensive part) on the store
-// (persists across calls / incremental refreshes, invalidated when the name-token set changes),
-// and per-call `exclude` words are applied by FILTERING the cached array after retrieval — never
-// threaded into the extractor, so one call's excludes can't contaminate another's cached phrases.
-// buildPhraseExtractor now lives in ./query.js (imported above).
-
-// The topics scope-building + message load now live in query.loadTopicsInScope (P4: a
-// conversation/person scope matching nothing is a miss, never a whole-DB fall-through). The MCP
-// keeps the phrase extractor, window/row computation, and the note/label text below.
-
-// Window: explicit since/until (arbitrary range) overrides the enum window. Baseline is always
-// the messages BEFORE the window ("new vs history") — never after — so a topic that persists
-// past the window isn't penalised. The default window anchors to the newest message actually IN
-// SCOPE (`all`), not wall-clock "now".
-// computeTopicsWindow (window policy) now lives in ./query.js; the MCP layer computes `explicit`
-// from arg presence and parses since/until before calling it.
-
-// computeTopicRows moved to ./query.js (imported above).
-
 function renderTopicRows(rows: TopicView[]): string[] {
   return rows.map(
     (r, i) =>
@@ -741,84 +659,65 @@ function renderTopicRows(rows: TopicView[]): string[] {
   );
 }
 
-export function topTopics(
-  store: ChatStore,
-  meta: StoreMeta,
-  deferred: boolean,
-  args: TopTopicsArgs = {},
-): string {
-  const db = store.db;
+export function topTopics(view: View, args: TopTopicsArgs = {}): string {
   const bt = badTime(args, ['since', 'until']);
   if (bt) return bt;
-  const n = Math.min(Number(args.n) || 8, 15);
 
-  const scoped = loadTopicsInScope(store, {
+  const res = view.topics.compute({
     scope: args.scope != null ? String(args.scope) : undefined,
     exclude: args.exclude,
     includeBots: args.include_bots,
+    window: args.window,
+    sinceTs: parseTime(args.since),
+    untilTs: parseTime(args.until),
+    n: args.n,
   });
-  if (!scoped.ok) return describeMiss(scoped.reason);
-  const { all, botExcluded, minSenders, excludeWords, scopeConvIds } = scoped;
-
-  const phrases = buildPhraseExtractor(store, db, new Set(excludeWords));
-  if (!all.length) return `${envelope(meta, deferred)}\n(no messages in scope)`;
+  if (!res.ok) return describeMiss(res.reason);
+  if (res.scopeTotal === 0) return `${envelope(view)}\n(no messages in scope)`;
 
   // scope-conversation ambiguity note (parallel to search's in: note) — kept first in `notes`, as
   // the old buildTopicsScope emitted it during scope resolution.
   const notes: string[] = [];
-  if (args.scope != null && String(args.scope).startsWith('conversation:') && scopeConvIds) {
-    const amb = convAmbiguityNote(db, String(args.scope).slice(13), scopeConvIds);
+  if (args.scope != null && String(args.scope).startsWith('conversation:') && res.scopeConvIds) {
+    const amb = convAmbiguityNote(view, String(args.scope).slice(13));
     if (amb) notes.push(amb.replace('in:', 'scope conversation:'));
   }
 
+  if (res.botExcluded)
+    notes.push(`excluded ${res.botExcluded} bot/app msgs · include_bots:true to include`);
+  if (res.baseTotal < 30)
+    notes.push(`baseline sparse (${res.baseTotal} msgs) — ×baseline is approximate`);
   const explicit = args.since != null || args.until != null;
-  const { sinceTs, untilTs } = computeTopicsWindow(all, {
-    explicit,
-    sinceTs: parseTime(args.since),
-    untilTs: parseTime(args.until),
-    windowKey: args.window,
-  });
-  const { rows, baseTotal, win } = computeTopicRows(all, phrases, sinceTs, untilTs, minSenders, n);
-
-  if (botExcluded)
-    notes.push(`excluded ${botExcluded} bot/app msgs · include_bots:true to include`);
-  if (baseTotal < 30) notes.push(`baseline sparse (${baseTotal} msgs) — ×baseline is approximate`);
-  const untilLabel = untilTs === Number.MAX_SAFE_INTEGER ? 'now' : fmtTs(untilTs);
+  const untilLabel =
+    res.window.untilTs === Number.MAX_SAFE_INTEGER ? 'now' : fmtTs(res.window.untilTs);
   const windowLabel = explicit
-    ? `range ${fmtTs(sinceTs)}..${untilLabel}`
+    ? `range ${fmtTs(res.window.sinceTs)}..${untilLabel}`
     : `window ${args.window || '7d'}`;
-  const lines = renderTopicRows(rows);
-  const head = [envelope(meta, deferred, `${windowLabel} · ${win.length} msgs`), ...notes].join(
-    '\n',
-  );
+  const lines = renderTopicRows(res.rows);
+  const head = [envelope(view, `${windowLabel} · ${res.windowCount} msgs`), ...notes].join('\n');
   return `${head}\n${lines.join('\n') || '(no distinctive topics)'}`;
 }
 
-// find_person = render(queryPeople(...)). The library returns typed PersonRows + how the query
+// find_person = render(people.find(...)). The library returns typed PersonViews + how the query
 // resolved; this MCP renderer owns the header/line/legend text and the token layout.
-export function findPerson(
-  store: ChatStore,
-  meta: StoreMeta,
-  deferred: boolean,
-  args: FindPersonArgs = {},
-): string {
-  const res = queryPeople(store, { query: args.query, n: args.n });
+export function findPerson(view: View, args: FindPersonArgs = {}): string {
+  const res = view.people.find({ query: args.query, n: args.n });
   if (res.mode === 'handle' && !res.rows.length)
-    return `${envelope(meta, deferred)}\nno person with handle ${res.query}`;
+    return `${envelope(view)}\nno person with handle ${res.query}`;
   if (res.mode === 'search' && !res.rows.length)
-    return `${envelope(meta, deferred)}\nno person matches "${res.query}" — try a shorter substring, or call find_person with no query to scan the roster.`;
+    return `${envelope(view)}\nno person matches "${res.query}" — try a shorter substring, or call find_person with no query to scan the roster.`;
   const header =
     res.mode === 'handle'
       ? 'profile'
       : res.mode === 'search'
         ? `${res.rows.length} people match "${res.query}"`
         : `roster — top ${res.rows.length} by volume`;
-  const selfMri = (meta as any).selfMri as string | null;
+  const selfMri = view.meta.selfMri;
   const lines = res.rows.map((r) => {
-    const tags = `${isBotMri(r.mri) ? ' [bot]' : ''}${selfMri && r.mri === selfMri ? ' (you)' : ''}`;
+    const tags = `${r.isBot ? ' [bot]' : ''}${selfMri && r.mri === selfMri ? ' (you)' : ''}`;
     return `${r.handle} "${r.name || '(unknown)'}"${tags} · ${r.msgCount} msg · last ${fmtTs(r.lastTs)}`;
   });
-  return `${envelope(meta, deferred, header)}\n${lines.join('\n')}`;
+  return `${envelope(view, header)}\n${lines.join('\n')}`;
 }
 
 // ================= list_events / list_calls =================
@@ -866,10 +765,8 @@ function elideUrlsToHostnames(text: string): string {
   return text.replace(/https?:\/\/([^\s/]+)(\/[^\s]*)?/gi, (_m, host) => `[link: ${host}]`);
 }
 
-// EventView now lives in ./query.js (imported above).
-
 // One event row, fully rendered (subject/org/attendees/response/chat-pivot/tags).
-function renderEventLine(db: DB, r: EventView): string {
+function renderEventLine(view: View, r: EventView): string {
   const tags =
     (r.isCancelled ? ' [cancelled]' : '') +
     (r.isConfidential ? ' [confidential]' : '') +
@@ -880,9 +777,7 @@ function renderEventLine(db: DB, r: EventView): string {
   const you = r.myResponse ? `you: ${r.myResponse}` : '';
   let chat = '';
   if (r.kind === 'meeting') {
-    const conv = r.cid
-      ? (db.prepare('select handle from conversations where id=?').get(r.cid) as any)
-      : null;
+    const conv = r.cid ? view.conversations.get(r.cid) : null;
     chat = `chat ${conv ? conv.handle : '(no cached chat)'}`;
   }
   const parts = [org, attendees, you, chat].filter(Boolean);
@@ -891,7 +786,7 @@ function renderEventLine(db: DB, r: EventView): string {
 
 // Recurrence run-collapse: rows sharing a series_id, in the window, beyond the first 2 collapse
 // to one summary line (the chat handle prints once — on the fully-rendered first occurrence).
-function renderEventGroups(db: DB, rows: EventView[]): string[] {
+function renderEventGroups(view: View, rows: EventView[]): string[] {
   // Group by series_id, preserving each row's relative chronological position (rows arrive
   // pre-sorted by start_ts asc, so a group's array is automatically in series order too).
   const bySeries = new Map<string, EventView[]>();
@@ -910,7 +805,7 @@ function renderEventGroups(db: DB, rows: EventView[]): string[] {
       if (group.length > 2) {
         if (collapsedHandled.has(r.seriesId)) continue; // already summarized
         collapsedHandled.add(r.seriesId);
-        lines.push(renderEventLine(db, r));
+        lines.push(renderEventLine(view, r));
         const rest = group.length - 1;
         const next = group[1];
         lines.push(
@@ -919,17 +814,12 @@ function renderEventGroups(db: DB, rows: EventView[]): string[] {
         continue;
       }
     }
-    lines.push(renderEventLine(db, r));
+    lines.push(renderEventLine(view, r));
   }
   return lines;
 }
 
-export function listEvents(
-  store: ChatStore,
-  meta: StoreMeta,
-  deferred: boolean,
-  args: ListEventsArgs = {},
-): string {
+export function listEvents(view: View, args: ListEventsArgs = {}): string {
   const bt = badTime(args, ['since', 'until']);
   if (bt) return bt;
   const now = Date.now();
@@ -941,7 +831,7 @@ export function listEvents(
   const winSince = sinceArg ?? (noWindowGiven ? now : undefined);
   const winUntil = untilArg ?? (noWindowGiven ? now + 7 * 864e5 : undefined);
 
-  const rows = queryEvents(store, {
+  const rows = view.events.list({
     sinceTs: winSince,
     untilTs: winUntil,
     type: args.type,
@@ -950,7 +840,6 @@ export function listEvents(
     hideCancelled: args.hide_cancelled,
     limit: args.limit,
   });
-  const db = store.db;
 
   const notes: string[] = [];
   // The cache only holds MATERIALIZED occurrences of a recurring series — a far-future window
@@ -958,7 +847,7 @@ export function listEvents(
   // effective window end against the newest occurrence the cache has for ANY event (not just
   // this query's matches), since that's the honest bound on what could possibly be materialized.
   if (winUntil != null) {
-    const maxStart = maxEventStart(store);
+    const maxStart = view.events.maxStart();
     if (winUntil > maxStart)
       notes.push(
         `note: window extends past the newest cached occurrence (${fmtTs(maxStart)}) — the cache only holds materialized occurrences; recurring events further out may be under-reported`,
@@ -981,10 +870,8 @@ export function listEvents(
     }
   }
 
-  const lines = renderEventGroups(db, rows);
-  const head = [envelope(meta, deferred, `${rows.length} events`), ...notes]
-    .filter(Boolean)
-    .join('\n');
+  const lines = renderEventGroups(view, rows);
+  const head = [envelope(view, `${rows.length} events`), ...notes].filter(Boolean).join('\n');
   return `${head}\n${(lines.join('\n') || '(no events)') + bodyBlock}`;
 }
 
@@ -1001,7 +888,7 @@ function humanizeDuration(ms: number): string {
 // The recording/transcript pointer resolved into a `read_messages`-ready pivot: the announcement
 // message's conversation handle + id. Skips gracefully (returns '') if unresolvable — the
 // conversation may not be cached, or the JSON may be malformed.
-function renderRecordingPivot(db: DB, recordingLinkJson: string | null | undefined): string {
+function renderRecordingPivot(view: View, recordingLinkJson: string | null | undefined): string {
   if (!recordingLinkJson) return '';
   let link: { conversationId?: string; linkedMessageId?: string };
   try {
@@ -1010,24 +897,17 @@ function renderRecordingPivot(db: DB, recordingLinkJson: string | null | undefin
     return '';
   }
   if (!link.conversationId || !link.linkedMessageId) return '';
-  const conv = db
-    .prepare('select handle from conversations where id=?')
-    .get(link.conversationId) as any;
+  const conv = view.conversations.get(link.conversationId);
   if (!conv) return '';
   return ` recorded → ${conv.handle} m:${link.linkedMessageId}`;
 }
 
-// list_calls = render(queryCalls(...)). Library resolves + filters + limits the rows; this
+// list_calls = render(calls.list(...)). Library resolves + filters + limits the rows; this
 // renderer owns arg validation and the arrow/tail/tags/pivot layout.
-export function listCalls(
-  store: ChatStore,
-  meta: StoreMeta,
-  deferred: boolean,
-  args: ListCallsArgs = {},
-): string {
+export function listCalls(view: View, args: ListCallsArgs = {}): string {
   const bt = badTime(args, ['since', 'until']);
   if (bt) return bt;
-  const rows = queryCalls(store, {
+  const rows = view.calls.list({
     direction: args.direction,
     missed: args.missed,
     sinceTs: parseTime(args.since),
@@ -1035,7 +915,6 @@ export function listCalls(
     participant: args.participant,
     limit: args.limit,
   });
-  const db = store.db;
   const lines = rows.map((r) => {
     const arrow = r.direction === 'Incoming' ? '←' : r.direction === 'Outgoing' ? '→' : '?';
     const tail = r.isMissed
@@ -1046,9 +925,9 @@ export function listCalls(
       (r.hasVoicemail ? ' [voicemail]' : '') +
       (r.spamLevel && !/^none$/i.test(r.spamLevel) ? ' [spam?]' : '') +
       (r.isCurrentUserPart === 0 ? ' [not-you]' : '');
-    const pivot = renderRecordingPivot(db, r.recordingLink);
+    const pivot = renderRecordingPivot(view, r.recordingLink);
     return `${fmtTs(r.startTs)} ${arrow} ${r.label} · ${tail}${tags}${pivot}`;
   });
-  const head = envelope(meta, deferred, `${rows.length} calls`);
+  const head = envelope(view, `${rows.length} calls`);
   return `${head}\n${lines.join('\n') || '(no calls)'}`;
 }

@@ -1,5 +1,7 @@
-// Tests for the feedback-driven features (single ingest, reused store).
-import { ingest } from 'libzaungast/ingest/ingest.js';
+// Tests for the feedback-driven features, driven through the libzaungast facade (openStore) + the
+// MCP renderers. Real-data smoke test (ZAUNGAST_TEST_DIR).
+import { openStore } from 'libzaungast/store-api.js';
+import { loadSnapshot } from 'libzaungast/format/index.js';
 import { search, topTopics, findPerson, readMessages } from 'zaungast/tools.js';
 import { describeSchema } from 'zaungast/tools/describeSchema.js';
 
@@ -20,82 +22,74 @@ const ok = (n: string, c: boolean, d = '') => {
   }
 };
 
-const { store, meta } = ingest(DIR);
-const d = false;
-const busiest = store.db
-  .prepare('select handle from conversations order by msg_count desc limit 1')
-  .get() as any;
-const botP = store.db
-  .prepare("select handle from people where mri like '28:%' order by msg_count desc limit 1")
-  .get() as any;
+const store = openStore(DIR);
+// most-recent conversation (facade lists newest-first) — a stand-in for "a busy conversation".
+const busiest = store.conversations.list({ n: 1 })[0];
+// the highest-volume bot among the roster (find() is volume-ranked).
+const botP = store.people.find({ n: 25 }).rows.find((p) => p.isBot);
 
 console.log('=== bot classification ===');
 {
-  const def = topTopics(store, meta, d, { window: '30d', n: 6 });
-  const inc = topTopics(store, meta, d, { window: '30d', n: 6, include_bots: true });
+  const def = topTopics(store, { window: '30d', n: 6 });
+  const inc = topTopics(store, { window: '30d', n: 6, include_bots: true });
   ok('default excludes bots + discloses', /excluded \d+ bot\/app msgs/.test(def));
   ok('include_bots omits the exclusion note', !/excluded \d+ bot/.test(inc));
-  const roster = findPerson(store, meta, d, { n: 8 });
+  const roster = findPerson(store, { n: 8 });
   ok('find_person tags a bot [bot]', /\[bot\]/.test(roster));
   ok('find_person tags self (you)', /\(you\)/.test(roster));
 }
 
 console.log('=== cache-horizon coverage note ===');
 {
-  const empty = search(store, meta, d, { in: busiest.handle, since: '-1m', limit: 3 });
+  const empty = search(store, { in: busiest.handle, since: '-1m', limit: 3 });
   ok('empty since-window shows coverage', /newest cached in this scope/.test(empty));
   ok('coverage claims cache, not "quiet"', !/quiet/i.test(empty));
-  const future = search(store, meta, d, { query: 'the', since: '2099-01-01', limit: 3 });
+  const future = search(store, { query: 'the', since: '2099-01-01', limit: 3 });
   ok('future window → 0 hits + coverage', /0 hits/.test(future) && /newest cached/.test(future));
 }
 
 console.log('=== in: ambiguity note ===');
 {
-  const gen = store.db
-    .prepare("select count(*) n from conversations where topic='General'")
-    .get() as any;
-  const res = search(store, meta, d, { in: 'General', limit: 2 });
+  const genCount = store.conversations
+    .list({ query: 'General', n: 1000 })
+    .filter((c) => c.topic === 'General').length;
+  const res = search(store, { in: 'General', limit: 2 });
   // only assert the note when the fixture actually has duplicate "General"s
   ok(
     'duplicate in: titles noted',
-    gen.n < 2 || /matched \d+ conversations/.test(res),
-    `Generals=${gen.n}`,
+    genCount < 2 || /matched \d+ conversations/.test(res),
+    `Generals=${genCount}`,
   );
 }
 
 console.log('=== exclude (words + handles) ===');
 {
-  const excl = topTopics(store, meta, d, { window: '30d', n: 8, exclude: ['token', 'jwt'] });
+  const excl = topTopics(store, { window: '30d', n: 8, exclude: ['token', 'jwt'] });
   ok('excluded words absent from topics', !/"token"|"jwt"/.test(excl));
   if (botP) {
-    const s2 = search(store, meta, d, { query: 'the', exclude: [botP.handle], limit: 10 });
+    const s2 = search(store, { query: 'the', exclude: [botP.handle], limit: 10 });
     ok('excluded person absent from hits', !s2.includes(botP.handle.replace('p:', '')));
   } else ok('excluded person absent from hits', true, '(no bot person in fixture)');
   ok(
     'bad exclude handle fails loudly',
-    /exclude: no (conversation|person)/.test(
-      search(store, meta, d, { query: 'x', exclude: ['c:nope'] }),
-    ),
+    /exclude: no (conversation|person)/.test(search(store, { query: 'x', exclude: ['c:nope'] })),
   );
 }
 
 console.log('=== top_topics since/until + P4 ===');
 {
-  const r = topTopics(store, meta, d, { since: '-14d', until: '-7d', n: 4 });
+  const r = topTopics(store, { since: '-14d', until: '-7d', n: 4 });
   ok('explicit range shows in envelope', /range .+\.\..+/.test(r));
-  ok(
-    'bad since errors',
-    /cannot parse since/.test(topTopics(store, meta, d, { since: 'last week' })),
-  );
+  ok('bad since errors', /cannot parse since/.test(topTopics(store, { since: 'last week' })));
   ok(
     'P4: nonexistent conversation scope errors',
-    /no conversation matches/.test(topTopics(store, meta, d, { scope: 'conversation:zzzznope' })),
+    /no conversation matches/.test(topTopics(store, { scope: 'conversation:zzzznope' })),
   );
 }
 
 console.log('=== describe_schema nested labeling ===');
 {
-  const ds = describeSchema(DIR, { limit: 30 });
+  const ds = describeSchema(loadSnapshot(DIR), { limit: 30 });
   ok('labels the per-entry level', /per messageMap\.\* entry:/.test(ds));
   ok(
     'nested fields include the mapped paths',
@@ -108,9 +102,7 @@ console.log('=== read_messages header ===');
 {
   ok(
     'header shows local cache bounds',
-    /local cache .+–.+/.test(
-      readMessages(store, meta, d, { conversation: busiest.handle, limit: 2 }),
-    ),
+    /local cache .+–.+/.test(readMessages(store, { conversation: busiest.handle, limit: 2 })),
   );
 }
 
