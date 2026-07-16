@@ -40,13 +40,25 @@ const ENTITIES: Record<string, string> = {
 
 export function htmlToText(html: string | undefined | null): string {
   if (!html) return '';
+  // One pass over tags + entities (was six sequential scans): a combined matcher whose replacer
+  // reproduces the old passes exactly — div-open / </p> / <br> collapse to '\n', other tags strip,
+  // &#x..;/&#..; decode numerically, &name; via the table. Then the whitespace normalizer.
   return html
-    .replace(/<div[^>]*>/gi, '\n')
-    .replace(/<\/p>|<br\s*\/?>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&#x([0-9a-f]+);/gi, (_, h) => codePoint(Number.parseInt(h, 16)))
-    .replace(/&#(\d+);/g, (_, n) => codePoint(Number(n)))
-    .replace(/&\w+;/g, (m) => ENTITIES[m] ?? ENTITIES[m.toLowerCase()] ?? ' ')
+    .replace(/<[^>]+>|&#x[0-9a-f]+;|&#\d+;|&\w+;/gi, (m) => {
+      if (m.charCodeAt(0) === 0x3c) {
+        // '<' — a tag
+        if (/^<div[^>]*>$/i.test(m) || /^<\/p>$/i.test(m) || /^<br\s*\/?>$/i.test(m)) return '\n';
+        return '';
+      }
+      if (m.charCodeAt(1) === 0x23) {
+        // '&#' — numeric entity
+        const x = m.charCodeAt(2);
+        return x === 0x78 || x === 0x58 // 'x' / 'X' → hex, else decimal
+          ? codePoint(Number.parseInt(m.slice(3, -1), 16))
+          : codePoint(Number(m.slice(2, -1)));
+      }
+      return ENTITIES[m] ?? ENTITIES[m.toLowerCase()] ?? ' '; // &name;
+    })
     .replace(/[ \t]+/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();

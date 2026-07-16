@@ -59,6 +59,26 @@ console.log('=== snappy ===');
   eq('long literal 130B', Snappy.uncompress(longLit).toString(), 'z'.repeat(130));
 }
 
+console.log('=== htmlToText (A8 characterization — pins the tag/entity/whitespace transforms) ===');
+{
+  eq('br -> newline', htmlToText('a<br>b'), 'a\nb');
+  eq('br self-closing -> newline', htmlToText('a<br/>b'), 'a\nb');
+  eq('close-p -> newline', htmlToText('<p>x</p><p>y</p>'), 'x\ny');
+  eq('div-open -> newline', htmlToText('<div>a</div><div>b</div>'), 'a\nb');
+  eq('strip other tags', htmlToText('<span itemtype="x">Name</span>'), 'Name');
+  eq('entity amp/lt', htmlToText('a&amp;b&lt;c'), 'a&b<c');
+  eq('entity case-insensitive named', htmlToText('x&AMP;y'), 'x&y');
+  eq('numeric decimal entity', htmlToText('&#65;&#66;'), 'AB');
+  eq('numeric hex entity (lower+UPPER x)', htmlToText('&#x41;&#X42;'), 'AB');
+  eq('accented named entity', htmlToText('gr&uuml;&szlig;e'), 'grüße');
+  eq('unknown named entity -> space', htmlToText('a&bogus;b'), 'a b');
+  eq('collapse spaces/tabs', htmlToText('a \t  b'), 'a b');
+  eq('collapse blank lines', htmlToText('a<br><br><br><br>b'), 'a\n\nb');
+  eq('entity inside stripped tag is gone', htmlToText('<a href="&amp;">t</a>'), 't');
+  eq('combined', htmlToText('<div>Hi &amp; <b>bye</b></div>'), 'Hi & bye');
+  eq('empty/nullish', htmlToText(''), '');
+}
+
 console.log('=== structured-clone (V8) ===');
 {
   // {a:1}: FF 0F, 'o', '"' len1 'a', 'I' zigzag(1)=2, '{' count1
