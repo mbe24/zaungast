@@ -17,6 +17,7 @@ import {
   convIdsFor,
   senderFilter,
   runSearchQuery,
+  queryMessageWindow,
 } from './query.js';
 import type { EventRow, TopicRow } from './query.js';
 import type {
@@ -180,45 +181,7 @@ function resolveConversationArg(db: DB, conversation: string): { id: string } | 
   return { id: ids[0] };
 }
 
-// Fetch the rows to render: either a window CENTERED on `around` (half before/half after,
-// oldest→newest), or the last `limit` rows matching `conds`/`params` (also oldest→newest).
-function fetchMessageRows(
-  db: DB,
-  id: string,
-  limit: number,
-  conds: string[],
-  params: any[],
-  around: string | undefined,
-): { rows: any[] } | { early: string } {
-  if (around) {
-    const aroundId = around.replace(/^m:/, '');
-    const a = db
-      .prepare('select ts from messages where conv_id=? and id=?')
-      .get(id, aroundId) as any;
-    if (!a) return { early: `message ${around} not found in this conversation` };
-    const half = Math.floor(limit / 2);
-    const before = db
-      .prepare(
-        `select * from messages where conv_id=? and is_system=0 and ts<=? order by ts desc, id desc limit ?`,
-      )
-      .all(id, a.ts, half) as any[];
-    const after = db
-      .prepare(
-        `select * from messages where conv_id=? and is_system=0 and ts>? order by ts asc, id asc limit ?`,
-      )
-      .all(id, a.ts, half) as any[];
-    return { rows: [...before.toReversed(), ...after] };
-  }
-  // last `limit` in the window, rendered oldest→newest (story order)
-  const rows = (
-    db
-      .prepare(
-        `select * from messages where ${conds.join(' and ')} order by ts desc, id desc limit ?`,
-      )
-      .all(...params, limit) as any[]
-  ).reverse();
-  return { rows };
-}
+// queryMessageWindow (the flat/around row fetch) now lives in ./query.js (imported above).
 
 // Render message rows oldest→newest, collapsing consecutive same-sender runs (by MRI, not
 // display name) unless more than 15 minutes have passed since the previous message.
@@ -674,7 +637,7 @@ export function readMessages(
     p.push(Number(older[1]), Number(older[1]), older[2]);
   }
 
-  const fetched = fetchMessageRows(
+  const fetched = queryMessageWindow(
     db,
     id,
     limit,
@@ -682,7 +645,8 @@ export function readMessages(
     p,
     args.around ? String(args.around) : undefined,
   );
-  if ('early' in fetched) return fetched.early;
+  if ('aroundNotFound' in fetched)
+    return `message ${fetched.aroundNotFound} not found in this conversation`;
   const rows = fetched.rows;
 
   const total = (

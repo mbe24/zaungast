@@ -91,6 +91,47 @@ export function runSearchQuery(
   return { rows, order: 'time' };
 }
 
+// ---------- messages (flat window) ----------
+// Fetch the rows to render for a flat (1:1/group/meeting) conversation: either a window CENTERED
+// on `around` (half before/half after, oldest→newest), or the last `limit` rows matching
+// `conds`/`params` (also oldest→newest). Returns `{ aroundNotFound: <id> }` when the pivot id
+// isn't in the conversation; the MCP layer turns that into its user-facing message.
+export function queryMessageWindow(
+  db: DB,
+  id: string,
+  limit: number,
+  conds: string[],
+  params: any[],
+  around: string | undefined,
+): { rows: any[] } | { aroundNotFound: string } {
+  if (around) {
+    const aroundId = around.replace(/^m:/, '');
+    const a = db.prepare('select ts from messages where conv_id=? and id=?').get(id, aroundId) as any;
+    if (!a) return { aroundNotFound: around };
+    const half = Math.floor(limit / 2);
+    const before = db
+      .prepare(
+        `select * from messages where conv_id=? and is_system=0 and ts<=? order by ts desc, id desc limit ?`,
+      )
+      .all(id, a.ts, half) as any[];
+    const after = db
+      .prepare(
+        `select * from messages where conv_id=? and is_system=0 and ts>? order by ts asc, id asc limit ?`,
+      )
+      .all(id, a.ts, half) as any[];
+    return { rows: [...before.toReversed(), ...after] };
+  }
+  // last `limit` in the window, rendered oldest→newest (story order)
+  const rows = (
+    db
+      .prepare(
+        `select * from messages where ${conds.join(' and ')} order by ts desc, id desc limit ?`,
+      )
+      .all(...params, limit) as any[]
+  ).reverse();
+  return { rows };
+}
+
 // ---------- people ----------
 export interface PersonRow {
   handle: string;
