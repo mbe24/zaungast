@@ -673,7 +673,7 @@ export interface TopicRow {
 // "updated/status" chatter isn't a topic you discussed. Excluded from BOTH window and baseline
 // so lift isn't skewed. (Scope/exclude conds are built by the MCP layer, which owns the shared
 // conversation/person resolvers.)
-export function loadTopicsMessages(
+function loadTopicsMessages(
   db: DB,
   conds: string[],
   params: any[],
@@ -689,6 +689,66 @@ export function loadTopicsMessages(
     botExcluded = before - all.length;
   }
   return { all, botExcluded };
+}
+
+// Options for a topics query scope. `scope` is `conversation:<term>` or `person:<term>`; `exclude`
+// mixes c:/p: handles (scope filters) and plain words (phrase-extractor stopwords).
+export interface TopicsScopeOptions {
+  scope?: string;
+  exclude?: string[];
+  includeBots?: boolean;
+}
+// On success: the scoped, bot-filtered messages + the facts the MCP needs — `botExcluded` (for the
+// disclosure note), `minSenders` (person/1:1 scope relaxes the ≥2-sender anti-spam gate to ≥1),
+// `excludeWords` (plain exclude words → phrase-extractor stopwords), and `scopeConvIds` (resolved
+// ids when scope=conversation:, for the ambiguity note). A conversation/person scope matching
+// NOTHING is a miss, never a silent fall-through to whole-DB topics (P4).
+export type TopicsScopeResult =
+  | { ok: false; reason: QueryMiss }
+  | {
+      ok: true;
+      all: any[];
+      botExcluded: number;
+      minSenders: number;
+      excludeWords: string[];
+      scopeConvIds?: string[];
+    };
+// Resolve the topics scope (conversation/person + excludes) and load its messages. Owns everything
+// that was the MCP's resolveExcludes + buildTopicsScope + loadTopicsMessages — no SQL fragments
+// cross the boundary.
+export function loadTopicsInScope(store: ChatStore, opts: TopicsScopeOptions): TopicsScopeResult {
+  const db = store.db;
+  const ex = resolveExcludes(db, opts.exclude);
+  if (ex.miss) return { ok: false, reason: ex.miss };
+  const conds = ['is_system=0', "content<>''"];
+  const params: any[] = [];
+  let minSenders = 2;
+  let scopeConvIds: string[] | undefined;
+  const scope = opts.scope;
+  if (scope && scope.startsWith('conversation:')) {
+    const term = scope.slice(13);
+    const ids = convIdsFor(db, term);
+    if (!ids.length) return { ok: false, reason: { reason: 'no-such-conversation', value: term } };
+    scopeConvIds = ids;
+    conds.push(`conv_id in (${ids.map(() => '?').join(',')})`);
+    params.push(...ids);
+  } else if (scope && scope.startsWith('person:')) {
+    const f = senderFilter(db, scope.slice(7));
+    if (f.miss) return { ok: false, reason: { reason: 'no-such-sender', value: scope.slice(7) } };
+    conds.push(f.sql.replace('m.', ''));
+    params.push(...f.params);
+    minSenders = 1;
+  }
+  if (ex.convIds.length) {
+    conds.push(`conv_id not in (${ex.convIds.map(() => '?').join(',')})`);
+    params.push(...ex.convIds);
+  }
+  if (ex.mris.length) {
+    conds.push(`sender_mri not in (${ex.mris.map(() => '?').join(',')})`);
+    params.push(...ex.mris);
+  }
+  const { all, botExcluded } = loadTopicsMessages(db, conds, params, opts.includeBots);
+  return { ok: true, all, botExcluded, minSenders, excludeWords: ex.words, scopeConvIds };
 }
 
 // Score each candidate phrase by lift (window rate ÷ Laplace-smoothed baseline rate) weighted by

@@ -11,11 +11,9 @@ import {
   maxEventStart,
 } from 'libzaungast/query.js';
 import {
-  loadTopicsMessages,
+  loadTopicsInScope,
   computeTopicRows,
   convIdsFor,
-  senderFilter,
-  resolveExcludes,
   querySearch,
   queryConversationMessages,
   queryThread,
@@ -723,46 +721,9 @@ export function search(
 // threaded into the extractor, so one call's excludes can't contaminate another's cached phrases.
 // buildPhraseExtractor now lives in ./query.js (imported above).
 
-// Restrict top_topics to a conversation or a person, plus always-applied excludes. A person/1:1
-// scope inherently has one speaker per phrase, so the ≥2-sender anti-spam gate relaxes to ≥1
-// there. A conversation/person scope matching NOTHING must error, not silently fall through to
-// whole-DB topics (P4).
-function buildTopicsScope(
-  db: DB,
-  scope: string | undefined,
-  ex: { convIds: string[]; mris: string[] },
-): { conds: string[]; params: any[]; notes: string[]; minSenders: number } | { miss: string } {
-  const conds = ['is_system=0', "content<>''"];
-  const params: any[] = [];
-  const notes: string[] = [];
-  let personScope = false;
-  if (scope && scope.startsWith('conversation:')) {
-    const term = scope.slice(13);
-    const ids = convIdsFor(db, term);
-    if (!ids.length) return { miss: `no conversation matches "${term}"` };
-    conds.push(`conv_id in (${ids.map(() => '?').join(',')})`);
-    params.push(...ids);
-    const amb = convAmbiguityNote(db, term, ids);
-    if (amb) notes.push(amb.replace('in:', 'scope conversation:'));
-  } else if (scope && scope.startsWith('person:')) {
-    const f = senderFilter(db, scope.slice(7));
-    if (f.miss) return { miss: f.miss };
-    conds.push(f.sql.replace('m.', ''));
-    params.push(...f.params);
-    personScope = true;
-  }
-  if (ex.convIds.length) {
-    conds.push(`conv_id not in (${ex.convIds.map(() => '?').join(',')})`);
-    params.push(...ex.convIds);
-  }
-  if (ex.mris.length) {
-    conds.push(`sender_mri not in (${ex.mris.map(() => '?').join(',')})`);
-    params.push(...ex.mris);
-  }
-  return { conds, params, notes, minSenders: personScope ? 1 : 2 };
-}
-
-// loadTopicsMessages + computeTopicRows now live in ./query.js (the topic analytics core).
+// The topics scope-building + message load now live in query.loadTopicsInScope (P4: a
+// conversation/person scope matching nothing is a miss, never a whole-DB fall-through). The MCP
+// keeps the phrase extractor, window/row computation, and the note/label text below.
 
 // Window: explicit since/until (arbitrary range) overrides the enum window. Baseline is always
 // the messages BEFORE the window ("new vs history") — never after — so a topic that persists
@@ -791,16 +752,24 @@ export function topTopics(
   if (bt) return bt;
   const n = Math.min(Number(args.n) || 8, 15);
 
-  const ex = resolveExcludes(db, args.exclude);
-  if (ex.miss) return describeMiss(ex.miss);
-  const phrases = buildPhraseExtractor(store, db, new Set(ex.words));
+  const scoped = loadTopicsInScope(store, {
+    scope: args.scope != null ? String(args.scope) : undefined,
+    exclude: args.exclude,
+    includeBots: args.include_bots,
+  });
+  if (!scoped.ok) return describeMiss(scoped.reason);
+  const { all, botExcluded, minSenders, excludeWords, scopeConvIds } = scoped;
 
-  const scoped = buildTopicsScope(db, args.scope ? String(args.scope) : undefined, ex);
-  if ('miss' in scoped) return scoped.miss;
-  const { conds, params, notes, minSenders } = scoped;
-
-  const { all, botExcluded } = loadTopicsMessages(db, conds, params, args.include_bots);
+  const phrases = buildPhraseExtractor(store, db, new Set(excludeWords));
   if (!all.length) return `${envelope(meta, deferred)}\n(no messages in scope)`;
+
+  // scope-conversation ambiguity note (parallel to search's in: note) — kept first in `notes`, as
+  // the old buildTopicsScope emitted it during scope resolution.
+  const notes: string[] = [];
+  if (args.scope != null && String(args.scope).startsWith('conversation:') && scopeConvIds) {
+    const amb = convAmbiguityNote(db, String(args.scope).slice(13), scopeConvIds);
+    if (amb) notes.push(amb.replace('in:', 'scope conversation:'));
+  }
 
   const explicit = args.since != null || args.until != null;
   const { sinceTs, untilTs } = computeTopicsWindow(all, {
