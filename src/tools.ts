@@ -3,6 +3,7 @@ import { makeExtractor } from './util/topics.js';
 import { byCodeUnit } from './util/sort.js';
 import { reactionGlyph } from './util/emoji.js';
 import { htmlToText } from './util/text.js';
+import { likeEscape, queryPeople } from './query.js';
 import type {
   ListConversationsArgs,
   ReadMessagesArgs,
@@ -65,10 +66,7 @@ function clip(s: string, n: number): string {
   return s.length > n ? s.slice(0, n) + '…' : s;
 }
 
-// escape LIKE wildcards in user input (used with `escape '\'`)
-function likeEscape(s: string): string {
-  return s.replace(/[\\%_]/g, (m) => '\\' + m);
-}
+// likeEscape now lives in the query layer (./query.js) and is imported above.
 
 // ---------- resolvers (name/handle → ids) ----------
 function convIdsFor(db: DB, arg: string): string[] {
@@ -1191,44 +1189,29 @@ export function topTopics(
   return `${head}\n${lines.join('\n') || '(no distinctive topics)'}`;
 }
 
+// find_person = render(queryPeople(...)). The library returns typed PersonRows + how the query
+// resolved; this MCP renderer owns the header/line/legend text and the token layout.
 export function findPerson(
   store: ChatStore,
   meta: StoreMeta,
   deferred: boolean,
   args: FindPersonArgs = {},
 ): string {
-  const db = store.db;
-  const n = Math.min(Number(args.n) || 8, 25);
-  const q = args.query ? String(args.query).trim() : '';
-  let rows: any[];
-  let header: string;
-  if (q.startsWith('p:')) {
-    rows = db
-      .prepare('select handle,mri,name,msg_count,last_ts from people where handle=?')
-      .all(q) as any[];
-    if (!rows.length) return `${envelope(meta, deferred)}\nno person with handle ${q}`;
-    header = 'profile';
-  } else if (q) {
-    rows = db
-      .prepare(
-        String.raw`select handle,mri,name,msg_count,last_ts from people where name like ? escape '\' order by msg_count desc limit ?`,
-      )
-      .all(`%${likeEscape(q)}%`, n) as any[];
-    if (!rows.length)
-      return `${envelope(meta, deferred)}\nno person matches "${q}" — try a shorter substring, or call find_person with no query to scan the roster.`;
-    header = `${rows.length} people match "${q}"`;
-  } else {
-    rows = db
-      .prepare(
-        'select handle,mri,name,msg_count,last_ts from people order by msg_count desc limit ?',
-      )
-      .all(n) as any[];
-    header = `roster — top ${rows.length} by volume`;
-  }
+  const res = queryPeople(store, { query: args.query, n: args.n });
+  if (res.mode === 'handle' && !res.rows.length)
+    return `${envelope(meta, deferred)}\nno person with handle ${res.query}`;
+  if (res.mode === 'search' && !res.rows.length)
+    return `${envelope(meta, deferred)}\nno person matches "${res.query}" — try a shorter substring, or call find_person with no query to scan the roster.`;
+  const header =
+    res.mode === 'handle'
+      ? 'profile'
+      : res.mode === 'search'
+        ? `${res.rows.length} people match "${res.query}"`
+        : `roster — top ${res.rows.length} by volume`;
   const selfMri = (meta as any).selfMri as string | null;
-  const lines = rows.map((r) => {
+  const lines = res.rows.map((r) => {
     const tags = `${isBotMri(r.mri) ? ' [bot]' : ''}${selfMri && r.mri === selfMri ? ' (you)' : ''}`;
-    return `${r.handle} "${r.name || '(unknown)'}"${tags} · ${r.msg_count} msg · last ${fmtTs(r.last_ts)}`;
+    return `${r.handle} "${r.name || '(unknown)'}"${tags} · ${r.msgCount} msg · last ${fmtTs(r.lastTs)}`;
   });
   return `${envelope(meta, deferred, header)}\n${lines.join('\n')}`;
 }
