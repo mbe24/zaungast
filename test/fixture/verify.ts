@@ -452,6 +452,74 @@ ok(
 );
 ok('no bare "ME>" label remains in search', !/(^|\s)ME>/.test(ownSearch), ownSearch.slice(0, 300));
 
+// ---- 8b. channel reply-chain rendering (digest / thread mode / around-pivot) ----
+console.log('\n=== channel threaded rendering ===');
+const chConv = store.db
+  .prepare(`select handle, id from conversations where kind='channel' limit 1`)
+  .get() as any;
+const bigRoot = (
+  store.db
+    .prepare(
+      `select root_id, count(*) n from messages where conv_id=? and is_system=0 group by root_id order by n desc limit 1`,
+    )
+    .get(chConv.id) as any
+).root_id as string;
+const digest = readMessages(store, meta, false, { conversation: chConv.handle, limit: 40 });
+ok(
+  'digest declares last-activity thread ordering',
+  /threads by last activity/.test(digest),
+  digest.slice(0, 220),
+);
+ok(
+  'big thread (7 msgs) shows a [thread m:… · 6 replies] tag',
+  new RegExp(`\\[thread m:${bigRoot} · 6 replies`).test(digest),
+  digest,
+);
+ok(
+  'big thread truncated to root + last 3 with a verbatim drill-in call',
+  new RegExp(`\\+3 earlier · read_messages\\(thread: m:${bigRoot}\\)`).test(digest),
+  digest,
+);
+ok('big thread earliest reply is hidden in the digest', !/CLRS chapter 8/.test(digest), digest);
+ok('big thread newest reply is shown in the digest', /I'll pin these to the channel/.test(digest));
+ok(
+  'small (≤5) thread shows every reply (both A replies present)',
+  /Are the lectures recorded too\?/.test(digest) &&
+    /post the recording link after class/.test(digest),
+);
+ok(
+  'owner reply is labelled "<name> (you)" in a thread',
+  /Ada Lovelace \(you\)>/.test(digest),
+  digest,
+);
+
+const tmode = readMessages(store, meta, false, {
+  conversation: chConv.handle,
+  thread: 'm:' + bigRoot,
+});
+ok(
+  'thread mode inlines the whole 7-msg chain and says complete',
+  /showing 7\/7 · complete/.test(tmode),
+  tmode,
+);
+ok('thread mode shows the earliest reply (not truncated)', /CLRS chapter 8/.test(tmode));
+ok('thread mode (fits) has no "+N earlier" marker', !/earlier/.test(tmode));
+
+const chReply = store.db
+  .prepare(
+    `select id, root_id from messages where conv_id=? and is_system=0 and id<>root_id limit 1`,
+  )
+  .get(chConv.id) as any;
+const around = readMessages(store, meta, false, {
+  conversation: chConv.handle,
+  around: 'm:' + chReply.id,
+});
+ok(
+  'around: in a channel resolves to the hit thread and marks the hit with →',
+  new RegExp(`thread m:${chReply.root_id}`).test(around) && /→ /.test(around),
+  around.slice(0, 300),
+);
+
 // ---- 9. list_events / list_calls (tool-render assertions) ----
 // All fixture calendar/call dates live in March 2026 — an explicit since/until window (rather
 // than the tools' own forward-looking default) makes these tests independent of wall-clock "now".

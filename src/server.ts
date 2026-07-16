@@ -70,7 +70,7 @@ export function buildServer(session: Session): McpServer {
     'read_messages',
     {
       title: 'Read a conversation',
-      description: `Read one conversation's messages in STORY ORDER (oldest→newest). Target by handle (c:xxxx) or title/participant substring. Page back with the returned older: cursor, or center on a message with around:. ${YOU_NOTE} ${HISTORY_NOTE}`,
+      description: `Read one conversation's messages in STORY ORDER (oldest→newest). Target by handle (c:xxxx) or title/participant substring. Page back with the returned older: cursor, or center on a message with around:. CHANNELS are grouped by reply-thread (root + replies, newest-active last); pass thread:m:<root> to read one thread in full — the digest prints the exact drill-in call. ${YOU_NOTE} ${HISTORY_NOTE}`,
       inputSchema: readMessagesShape,
     },
     async (args) => run(readMessages, args),

@@ -27,17 +27,37 @@ Your Teams sidebar. With no arguments, returns the most-recently-active conversa
 One conversation's messages in **story order** (oldest→newest). The header shows the local
 cache span and an `older:` cursor for paging.
 
-| Arg               | Description                                                            |
-| ----------------- | ---------------------------------------------------------------------- |
-| `conversation`    | `c:` handle or title/participant substring (**required**).             |
-| `limit`           | Default 40, max 200.                                                   |
-| `since` / `until` | Time window (ISO or relative).                                         |
-| `cursor`          | The `older:…` value from a previous result, to page back.              |
-| `around`          | A message id (`m:…` from a search hit) to center a window on.          |
-| `reactions`       | `full` to list every reactor by name (default shows a capped summary). |
+| Arg               | Description                                                                          |
+| ----------------- | ------------------------------------------------------------------------------------ |
+| `conversation`    | `c:` handle or title/participant substring (**required**).                           |
+| `limit`           | Default 40, max 200.                                                                 |
+| `since` / `until` | Time window (ISO or relative).                                                       |
+| `cursor`          | The `older:…` (or in-thread `more:…`) value from a previous result, to page.         |
+| `around`          | A message id (`m:…` from a search hit) to center on (its thread, in channels).       |
+| `thread`          | In a channel, a thread id (`m:…` of a reply-chain root) to read that thread in full. |
+| `reactions`       | `full` to list every reactor by name (default shows a capped summary).               |
 
 Consecutive messages from the same sender are collapsed with `↳`. Markers: `[@me]`,
 `[attachment]`.
+
+### Channels are threaded
+
+In **channels**, output is grouped by reply-chain instead of interleaved by time: each thread
+shows its **root** in full, then replies indented beneath it, and threads are ordered by **last
+activity** (most-recently-active at the bottom). Small threads (≤5 messages) show every reply;
+larger ones show the root + last 3 replies and a drill-in marker naming the exact call:
+
+```
+09:14 Hana Björk> proposal: move CI to the new runners  [thread m:1747033 · 20 replies · last 10:41]
+  +17 earlier · read_messages(thread: m:1747033)
+  16:20 Bob Ito> staging is green on the new pool
+  10:41 Hana Björk> 🎉
+```
+
+Pass `thread: m:<root>` to read one thread in full (it inlines up to ~40 messages, then pages
+backward with a `more: before m:<id>` cursor and reports `complete` when done). `around: m:<id>`
+in a channel resolves to that message's thread (marking the hit with `→`). 1:1, group, and
+meeting conversations stay flat and chronological.
 
 Your own messages are labelled **`<Your Name> (you)`** (not `ME`), and the result header carries a
 `viewer:` line naming who `(you)` is. That speaker is the account owner — for an AI agent reading

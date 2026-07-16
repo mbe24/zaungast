@@ -60,17 +60,22 @@ export class ChatStore {
       -- TEXT value at the first NUL on JS read-back (a plain SELECT would return '' for real keys).
       -- Hex is NUL-free so it round-trips; ingest encodes both this column and the reconcile's
       -- live-key set the same way. (Regression-guarded in test/fixture/verify.ts.)
+      -- root_id: the id of the reply-chain root this message belongs to (a channel thread key).
+      -- Teams marks the root with parentMessageId === its own id, and every reply's parentMessageId
+      -- is the root's id; ingest derives root_id from that. root_id === id ⇒ this message is a root.
+      -- In 1:1/group chats each message is its own root (unthreaded); only channels render threaded.
       create table messages(
         conv_id text, id text, chain_key text, version integer default 0, ts integer,
         sender_mri text, sender_name text, kind text, is_mine integer default 0,
         is_system integer default 0, has_attach integer default 0, mentions_me integer default 0,
-        content text, reactions text,
+        content text, reactions text, root_id text,
         primary key(conv_id, id)
       );
       create index msg_conv_ts on messages(conv_id, ts);
       create index msg_sender_ts on messages(sender_mri, ts);
       create index msg_ts on messages(ts);
       create index msg_chain on messages(chain_key);
+      create index msg_root on messages(conv_id, root_id, ts);
       create table events(
         id text primary key,
         series_id text,              -- seriesMasterId; groups a recurring series (one c: handle + run-collapse)
@@ -193,6 +198,7 @@ export class ChatStore {
     mentionsMe: number;
     content: string;
     reactions?: string | null;
+    rootId?: string | null;
   }) {
     // H3: the conflict path must update is_system/is_mine/kind too — soft-deletes are edits
     // that clear content and flip these flags. Version guard keeps newest-wins. Reactions ride the
@@ -200,13 +206,14 @@ export class ChatStore {
     // >= guard lets an equal-version rewrite refresh them.
     this.q(
       `insert into messages
-      (conv_id,id,chain_key,version,ts,sender_mri,sender_name,kind,is_mine,is_system,has_attach,mentions_me,content,reactions)
-      values (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      (conv_id,id,chain_key,version,ts,sender_mri,sender_name,kind,is_mine,is_system,has_attach,mentions_me,content,reactions,root_id)
+      values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       on conflict(conv_id,id) do update set
         chain_key=excluded.chain_key, version=excluded.version, ts=excluded.ts,
         sender_mri=excluded.sender_mri, sender_name=excluded.sender_name, kind=excluded.kind,
         is_mine=excluded.is_mine, is_system=excluded.is_system, has_attach=excluded.has_attach,
-        mentions_me=excluded.mentions_me, content=excluded.content, reactions=excluded.reactions
+        mentions_me=excluded.mentions_me, content=excluded.content, reactions=excluded.reactions,
+        root_id=excluded.root_id
       where excluded.version >= messages.version`,
     ).run(
       m.convId,
@@ -223,6 +230,7 @@ export class ChatStore {
       m.mentionsMe,
       m.content,
       m.reactions ?? null,
+      m.rootId ?? m.id,
     );
   }
 

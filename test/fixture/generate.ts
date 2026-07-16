@@ -104,7 +104,9 @@ function buildMessageRecord(m: MessageDef, conv: ConversationDef): Record<string
     id: messageId(m),
     type: 'Message', // the mapping's `keep` filter requires this literal value
     conversationId: conv.id,
-    parentMessageId: '0',
+    // Real Teams: a reply-chain ROOT's parentMessageId is its own id; each reply's is the root's
+    // id. Mirror that so ingest derives root_id correctly (m.replyTo = the root message's ts).
+    parentMessageId: m.replyTo != null ? String(m.replyTo) : messageId(m),
     version: 1,
     originalArrivalTime: new Date(m.ts).toISOString(),
     creator: m.sender.mri,

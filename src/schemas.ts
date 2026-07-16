@@ -23,11 +23,22 @@ export const readMessagesShape = {
   limit: z.number().int().min(1).max(200).optional().describe('default 40'),
   since: z.string().optional(),
   until: z.string().optional(),
-  cursor: z.string().optional().describe('the older:… value from a previous result, to page back'),
+  cursor: z
+    .string()
+    .optional()
+    .describe('the older:… (or in-thread more:…) value from a previous result, to page'),
   around: z
     .string()
     .optional()
-    .describe('a message id (the m:… value from a search hit) to center a window on'),
+    .describe(
+      'a message id (the m:… value from a search hit) to center on (its thread, in channels)',
+    ),
+  thread: z
+    .string()
+    .optional()
+    .describe(
+      'in a channel, a thread id (the m:… of a reply-chain root) to read that thread in full',
+    ),
   reactions: z
     .enum(['full'])
     .optional()

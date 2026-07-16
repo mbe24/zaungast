@@ -82,9 +82,15 @@ function applyMessages(store: ChatStore, msgRows: any[], selfMri: string | null)
     const senderMri = m.senderId || '?';
     const isMine = (selfMri && senderMri === selfMri) || m.isSentByCurrentUser ? 1 : 0;
     const mentionsMe = selfMri && !isMine && mentionedMris(m.mentions).includes(selfMri) ? 1 : 0;
+    // Reply-chain root: Teams sets a root's parentMessageId to its own id, and each reply's
+    // parentMessageId to the root's id. So root_id = parent (when it's a real, different id) else
+    // self. Channels render threaded on this; 1:1/group messages are each their own root.
+    const idStr = String(m.id);
+    const parent = m.parentMessageId != null ? String(m.parentMessageId) : '';
+    const rootId = parent && parent !== idStr ? parent : idStr;
     store.insertMessage({
       convId,
-      id: String(m.id),
+      id: idStr,
       // hex-encode the chain key: it's a binary leveldb key (embedded NUL bytes), and node:sqlite
       // truncates a TEXT value at the first NUL on read-back — so a raw latin1 chain_key reads back
       // as '' for essentially every real key. hex is NUL-free, round-trips, and the reconcile stays
@@ -101,8 +107,9 @@ function applyMessages(store: ChatStore, msgRows: any[], selfMri: string | null)
       mentionsMe,
       content: htmlToText(rawHtml),
       reactions: compactReactions(m.reactions),
+      rootId,
     });
-    changedIds.add(String(m.id));
+    changedIds.add(idStr);
   }
   return changedIds;
 }

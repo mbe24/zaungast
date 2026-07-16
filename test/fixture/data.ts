@@ -102,6 +102,7 @@ export interface MessageDef {
   isSentByCurrentUser?: boolean;
   mentions?: { mri: string; displayName: string }[];
   files?: string[];
+  replyTo?: number; // the ts of the reply-chain ROOT this message answers (absent ⇒ this is a root)
   systemType?: string; // when set, messageType becomes `ThreadActivity/${systemType}` and content is a control blob
   // Real shape: message.properties.emotions = [ { key, users: [ { mri, time } ] } ]. `key` is a
   // Teams reaction shortcode (e.g. 'like', 'heart', '1f389_partypopper'); `users` is per-reactor.
@@ -228,27 +229,52 @@ export const CONVERSATIONS: ConversationDef[] = [
     teamId: 'team-cs101-guid-0000',
     topic: 'CS101 Algorithms - General',
     threadType: 'channel',
-    messages: [
-      { sender: edsger, content: 'Welcome to CS101: Algorithms and Data Structures.', ts: next() },
-      {
-        sender: grace,
-        content: 'Lecture slides for week 5 are posted.',
-        ts: next(),
-        files: ['https://example.invalid/files/week5-slides.pdf'],
-      },
-      {
-        sender: ada,
-        content: "Thanks! Quick question about Big-O from today's lecture.",
-        ts: next(),
-        isSentByCurrentUser: true,
-      },
-      {
-        sender: grace,
-        content: '<topicUpdate>CS101 Algorithms - General</topicUpdate>',
-        ts: next(),
-        systemType: 'TopicUpdate',
-      },
-    ],
+    messages: ((): MessageDef[] => {
+      // Two reply-chains (A small, C large) interleaved in time, plus a bare root B — so channel
+      // threading is exercised: grouping (not time-order), the ≤5 show-all gate, a self/(you)
+      // reply, and a thread big enough to truncate in the digest yet inline whole in thread mode.
+      const a = next(); // thread A root
+      const b = next(); // bare root B (no replies)
+      const a1 = next(); // A reply
+      const c = next(); // thread C root
+      const a2 = next(); // A reply (from the owner)
+      const c1 = next(),
+        c2 = next(),
+        c3 = next(),
+        c4 = next(),
+        c5 = next(),
+        c6 = next(); // C replies (root + 6 = 7 total ⇒ digest truncates to root + last 3)
+      return [
+        { sender: edsger, content: 'Welcome to CS101: Algorithms and Data Structures.', ts: a },
+        {
+          sender: grace,
+          content: 'Lecture slides for week 5 are posted.',
+          ts: b,
+          files: ['https://example.invalid/files/week5-slides.pdf'],
+        },
+        { sender: alan, content: 'Are the lectures recorded too?', ts: a1, replyTo: a },
+        { sender: barbara, content: 'Reading list for the sorting unit - suggestions?', ts: c },
+        {
+          sender: ada,
+          content: "I'll post the recording link after class.",
+          ts: a2,
+          replyTo: a,
+          isSentByCurrentUser: true,
+        },
+        { sender: grace, content: 'CLRS chapter 8 is the classic.', ts: c1, replyTo: c },
+        { sender: alan, content: 'Sedgewick has nice animations.', ts: c2, replyTo: c },
+        { sender: edsger, content: 'Skiena for building intuition.', ts: c3, replyTo: c },
+        { sender: radia, content: 'The Knuth volume if you dare.', ts: c4, replyTo: c },
+        { sender: barbara, content: 'Thanks all - great suggestions.', ts: c5, replyTo: c },
+        { sender: grace, content: "I'll pin these to the channel.", ts: c6, replyTo: c },
+        {
+          sender: grace,
+          content: '<topicUpdate>CS101 Algorithms - General</topicUpdate>',
+          ts: next(),
+          systemType: 'TopicUpdate',
+        },
+      ];
+    })(),
   },
   {
     id: '19:meeting_998877@thread.v2', // meeting (convKind: 'meeting_' substring -> 'meeting', checked before '@thread.v2')

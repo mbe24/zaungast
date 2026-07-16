@@ -340,6 +340,23 @@ function viewerLegend(name: string | null): string {
   return name ? `viewer: ${name} — "(you)" marks this account's owner, not the assistant` : '';
 }
 
+// Sender label: the owner as "<name> (you)", everyone else by display name.
+function whoLabel(r: any, ownerFallback: string | null): string {
+  return r.is_mine ? ownerLabel(r.sender_name, ownerFallback) : r.sender_name || '(unknown)';
+}
+
+// One rendered message at `indent`: `<indent><ts> <who>> <content><marks><suffix>`, plus an
+// indented reaction line beneath it when reacted. `who` is precomputed (name / "<name> (you)" /
+// "↳" burst mark); `suffix` (e.g. a thread tag) rides the text line, before any reaction line.
+function msgText(r: any, who: string, indent: string, rx?: ReactionCtx, suffix = ''): string {
+  const marks = (r.has_attach ? ' [attachment]' : '') + (r.mentions_me ? ' [@me]' : '');
+  const line = `${indent}${fmtTs(r.ts)} ${who}> ${clip(r.content, 280)}${marks}${suffix}`;
+  const rxLine = rx ? renderReactions(r.reactions, rx.store, rx.selfMri, rx.full) : '';
+  return rxLine ? `${line}\n${indent}      ${rxLine}` : line;
+}
+
+// FLAT rendering (1:1/group, and non-threaded views): chronological, same-sender bursts within
+// 15 min collapse to "↳". Unchanged behaviour.
 function renderMessageLines(rows: any[], ownerFallback: string | null, rx?: ReactionCtx): string[] {
   let lastMri: string | null = null;
   let lastTs = 0;
@@ -347,19 +364,289 @@ function renderMessageLines(rows: any[], ownerFallback: string | null, rx?: Reac
     const collapsed = r.sender_mri === lastMri && r.ts - lastTs < 15 * 60_000;
     lastMri = r.sender_mri;
     lastTs = r.ts;
-    const senderLabel = r.is_mine
-      ? ownerLabel(r.sender_name, ownerFallback)
-      : r.sender_name || '(unknown)';
-    const who = collapsed ? '  ↳' : senderLabel;
-    const marks = (r.has_attach ? ' [attachment]' : '') + (r.mentions_me ? ' [@me]' : '');
-    const line = `${fmtTs(r.ts)} ${who}> ${clip(r.content, 280)}${marks}`;
-    const rxLine = rx ? renderReactions(r.reactions, rx.store, rx.selfMri, rx.full) : '';
-    return rxLine ? `${line}\n      ${rxLine}` : line;
+    const who = collapsed ? '  ↳' : whoLabel(r, ownerFallback);
+    return msgText(r, who, '', rx);
   });
+}
+
+const REPLY_INDENT = '  ';
+
+// THREADED rendering: a root at column 0, then its replies indented, same-sender bursts among the
+// shown replies collapsing to "↳". `suffix` tags the root (e.g. "[thread m:… · N replies · …]");
+// `preReplies` is an optional notice inserted between root and replies (e.g. "+N earlier · …");
+// `hitId` marks one line with a "→" gutter (the search-pivot target).
+function renderThread(
+  root: any,
+  replies: any[],
+  ownerFallback: string | null,
+  rx: ReactionCtx | undefined,
+  opts: { suffix?: string; preReplies?: string; hitId?: string } = {},
+): string[] {
+  const mark = (r: any, base: string) =>
+    (opts.hitId && String(r.id) === opts.hitId ? '→ ' : '') + base;
+  const out: string[] = [
+    msgText(root, mark(root, whoLabel(root, ownerFallback)), '', rx, opts.suffix),
+  ];
+  if (opts.preReplies) out.push(`${REPLY_INDENT}${opts.preReplies}`);
+  let lastMri: string | null = null;
+  let lastTs = 0;
+  for (const r of replies) {
+    const collapsed = r.sender_mri === lastMri && r.ts - lastTs < 15 * 60_000;
+    lastMri = r.sender_mri;
+    lastTs = r.ts;
+    const who = mark(r, collapsed ? '↳' : whoLabel(r, ownerFallback));
+    out.push(msgText(r, who, REPLY_INDENT, rx));
+  }
+  return out;
+}
+
+// Split a thread's ts-ordered rows into { root, replies } (root = the id===root_id message).
+function splitThread(rows: any[], rootId: string): { root: any; replies: any[] } {
+  const root = rows.find((r) => String(r.id) === rootId) ?? rows[0];
+  return { root, replies: rows.filter((r) => r !== root) };
 }
 
 // Show both local bounds so a caller knows the cache slice — "newest local" flags when the
 // local cache lags the server (its most recent cached message may be days old).
+// ---------- channel (reply-chain) rendering ----------
+const THREAD_INLINE_MAX = 40; // a thread this size or smaller renders whole in thread mode
+const THREAD_WINDOW = 30; // else this many replies per page
+
+function channelHead(conv: any, extra: string): string {
+  return `${conv.handle} [channel] "${conv.topic || conv.participant_names}" · ${extra}`;
+}
+
+// One thread in the DIGEST: root always in full; ≤5-message threads show every reply (no marker);
+// ≥6 show root + last 3 + a "+N earlier · read_messages(thread: m:…)" drill-in. A zero-reply thread
+// is a bare root line (no thread tag). `rows` are the thread's non-system messages, ts-ascending.
+function renderDigestThread(
+  rows: any[],
+  rootId: string,
+  ownerNm: string | null,
+  rx: ReactionCtx,
+): string[] {
+  const { root, replies } = splitThread(rows, rootId);
+  const rootMissing = String(root.id) !== rootId;
+  const nReplies = replies.length;
+  const last = fmtTs(rows[rows.length - 1].ts);
+  const suffix = nReplies
+    ? `  [thread m:${rootId} · ${nReplies} ${nReplies === 1 ? 'reply' : 'replies'} · last ${last}]`
+    : '';
+  const missNote = rootMissing ? `[root m:${rootId} not in local cache]` : undefined;
+  if (rows.length <= 5)
+    return renderThread(root, replies, ownerNm, rx, { suffix, preReplies: missNote });
+  const shown = replies.slice(-3);
+  const pre = `+${nReplies - shown.length} earlier · read_messages(thread: m:${rootId})`;
+  return renderThread(root, shown, ownerNm, rx, {
+    suffix,
+    preReplies: missNote ? `${missNote}  ${pre}` : pre,
+  });
+}
+
+// Default channel view: threads grouped by reply-chain, ordered by last activity (newest at the
+// bottom), size-gated, filled to a message budget (`limit`). Pages threads via the older: cursor.
+function renderChannelDigest(
+  store: ChatStore,
+  meta: StoreMeta,
+  deferred: boolean,
+  conv: any,
+  convId: string,
+  args: ReadMessagesArgs,
+  limit: number,
+  since: number | undefined,
+  until: number | undefined,
+  ownerNm: string | null,
+  rx: ReactionCtx,
+): string {
+  const db = store.db;
+  const sconds = ['conv_id=?', 'is_system=0'];
+  const sp: any[] = [convId];
+  if (since) {
+    sconds.push('ts>=?');
+    sp.push(since);
+  }
+  if (until) {
+    sconds.push('ts<?');
+    sp.push(until);
+  }
+  // thread summaries (in-window activity decides which threads appear)
+  let summaries = db
+    .prepare(
+      `select root_id, count(*) n, max(ts) last from messages where ${sconds.join(' and ')} group by root_id`,
+    )
+    .all(...sp) as any[];
+  const threadTotal = summaries.length;
+  const older = args.cursor && /^older:(\d+):(.+)$/.exec(String(args.cursor));
+  if (older) {
+    const ots = Number(older[1]);
+    const oid = older[2];
+    summaries = summaries.filter(
+      (s) => s.last < ots || (s.last === ots && String(s.root_id) < oid),
+    );
+  }
+  // newest-active first for budget filling; ties broken by root_id descending (stable)
+  summaries.sort((a, b) => b.last - a.last || (String(a.root_id) < String(b.root_id) ? 1 : -1));
+  const shownPer = (n: number) => (n <= 5 ? n : 4); // root + last 3
+  const picked: any[] = [];
+  let budget = 0;
+  for (const s of summaries) {
+    const cost = shownPer(s.n);
+    if (picked.length && budget + cost > limit) break;
+    picked.push(s);
+    budget += cost;
+    if (budget >= limit) break;
+  }
+  // display oldest-active first so the most-recently-active thread sits at the bottom
+  const blocks = [...picked].reverse().map((s) => {
+    const rows = db
+      .prepare(
+        `select * from messages where conv_id=? and root_id=? and is_system=0 order by ts asc, id asc`,
+      )
+      .all(convId, s.root_id) as any[];
+    return renderDigestThread(rows, String(s.root_id), ownerNm, rx).join('\n');
+  });
+  const oldestShown = picked[picked.length - 1];
+  const olderCur =
+    summaries.length > picked.length && oldestShown
+      ? ` · older: older:${oldestShown.last}:${oldestShown.root_id}`
+      : '';
+  const total = (
+    db.prepare('select count(*) n from messages where conv_id=? and is_system=0').get(convId) as any
+  ).n;
+  const span = db
+    .prepare('select min(ts) lo, max(ts) hi from messages where conv_id=? and is_system=0 and ts>0')
+    .get(convId) as any;
+  const head = channelHead(
+    conv,
+    `${total} msgs / ${threadTotal} threads · showing ${picked.length} threads, ${budget} msgs · threads by last activity · local cache ${fmtTs(span?.lo ?? 0)}–${fmtTs(span?.hi ?? 0)}${olderCur}`,
+  );
+  const body = blocks.join('\n\n') || '(no threads)';
+  const legend = /\(you\)>/.test(body) ? viewerLegend(ownerNm) : '';
+  return `${[envelope(meta, deferred), head, legend].filter(Boolean).join('\n')}\n${body}`;
+}
+
+// A single reply-chain: thread mode (read it in full) and the around-pivot (center on a hit).
+// Inlines the whole chain up to THREAD_INLINE_MAX; larger chains window (newest, or around the
+// hit) and page backward with a keyset `more: before m:<id>` cursor.
+function renderThreadView(
+  store: ChatStore,
+  meta: StoreMeta,
+  deferred: boolean,
+  conv: any,
+  convId: string,
+  rootId: string,
+  args: ReadMessagesArgs,
+  ownerNm: string | null,
+  rx: ReactionCtx,
+  hitId?: string,
+): string {
+  const db = store.db;
+  const rows = db
+    .prepare(
+      `select * from messages where conv_id=? and root_id=? and is_system=0 order by ts asc, id asc`,
+    )
+    .all(convId, rootId) as any[];
+  if (!rows.length)
+    return `${envelope(meta, deferred)}\nthread m:${rootId} not found in this conversation`;
+  const { root, replies } = splitThread(rows, rootId);
+  const rootMissing = String(root.id) !== rootId;
+  const total = rows.length;
+
+  const beforeM = args.cursor && /^before m:(.+)$/.exec(String(args.cursor));
+  let shown: any[];
+  let earlier = 0;
+  if (hitId && total > THREAD_INLINE_MAX) {
+    const idx = Math.max(
+      0,
+      replies.findIndex((r) => String(r.id) === hitId),
+    );
+    const start = Math.max(0, idx - Math.floor(THREAD_WINDOW / 2));
+    shown = replies.slice(start, start + THREAD_WINDOW);
+    earlier = start;
+  } else if (beforeM) {
+    const cutId = beforeM[1];
+    const cut = replies.find((r) => String(r.id) === cutId);
+    const cutTs = cut ? cut.ts : Infinity;
+    const older = replies.filter((r) => r.ts < cutTs || (r.ts === cutTs && String(r.id) < cutId));
+    shown = older.slice(-THREAD_WINDOW);
+    earlier = older.length - shown.length;
+  } else if (total > THREAD_INLINE_MAX) {
+    shown = replies.slice(-THREAD_WINDOW);
+    earlier = replies.length - shown.length;
+  } else {
+    shown = replies;
+  }
+
+  const more = earlier > 0 && shown.length > 0;
+  const preParts: string[] = [];
+  if (rootMissing) preParts.push(`[root m:${rootId} not in local cache]`);
+  if (more) preParts.push(`… +${earlier} earlier · more: before m:${shown[0].id}`);
+  const lines = renderThread(root, shown, ownerNm, rx, {
+    preReplies: preParts.join('  ') || undefined,
+    hitId,
+  });
+  const status = more ? `more: before m:${shown[0].id}` : 'complete';
+  const head = channelHead(
+    conv,
+    `thread m:${rootId}${hitId ? ` around m:${hitId}` : ''} · showing ${1 + shown.length}/${total} · ${status}`,
+  );
+  const legend = rows.some((r) => r.is_mine) ? viewerLegend(ownerNm) : '';
+  return `${[envelope(meta, deferred), head, legend].filter(Boolean).join('\n')}\n${lines.join('\n')}`;
+}
+
+// Dispatch a channel read: a specific thread, an around-pivot (→ the hit's thread), or the digest.
+function renderChannel(
+  store: ChatStore,
+  meta: StoreMeta,
+  deferred: boolean,
+  conv: any,
+  convId: string,
+  args: ReadMessagesArgs,
+  limit: number,
+  since: number | undefined,
+  until: number | undefined,
+  ownerNm: string | null,
+  rx: ReactionCtx,
+): string {
+  if (args.thread) {
+    const rootId = String(args.thread).replace(/^m:/, '');
+    return renderThreadView(store, meta, deferred, conv, convId, rootId, args, ownerNm, rx);
+  }
+  if (args.around) {
+    const aid = String(args.around).replace(/^m:/, '');
+    const arow = store.db
+      .prepare('select root_id from messages where conv_id=? and id=?')
+      .get(convId, aid) as any;
+    if (!arow)
+      return `${envelope(meta, deferred)}\nmessage m:${aid} not found in this conversation`;
+    return renderThreadView(
+      store,
+      meta,
+      deferred,
+      conv,
+      convId,
+      String(arow.root_id),
+      args,
+      ownerNm,
+      rx,
+      aid,
+    );
+  }
+  return renderChannelDigest(
+    store,
+    meta,
+    deferred,
+    conv,
+    convId,
+    args,
+    limit,
+    since,
+    until,
+    ownerNm,
+    rx,
+  );
+}
+
 function buildReadMessagesHead(
   conv: any,
   shown: number,
@@ -385,16 +672,29 @@ export function readMessages(
   const resolved = resolveConversationArg(db, String(args.conversation));
   if ('early' in resolved) return resolved.early;
   const id = resolved.id;
-
   const limit = Math.min(Number(args.limit) || 40, 200);
+  const since = parseTime(args.since);
+  const until = parseTime(args.until);
+  const conv = db
+    .prepare('select handle,kind,topic,participant_names from conversations where id=?')
+    .get(id) as any;
+  const ownerNm = ownerDisplayName(store, meta);
+  const rx: ReactionCtx = {
+    store,
+    selfMri: (meta as any).selfMri as string | null,
+    full: String(args.reactions) === 'full',
+  };
+  // Channels render by reply-chain (thread digest / a single thread / an around-pivot); everything
+  // else (1:1, group, meeting) stays flat and chronological.
+  if (conv?.kind === 'channel')
+    return renderChannel(store, meta, deferred, conv, id, args, limit, since, until, ownerNm, rx);
+
   const conds = ['conv_id=?', 'is_system=0'];
   const p: any[] = [id];
-  const since = parseTime(args.since);
   if (since) {
     conds.push('ts>=?');
     p.push(since);
   }
-  const until = parseTime(args.until);
   if (until) {
     conds.push('ts<?');
     p.push(until);
@@ -417,9 +717,6 @@ export function readMessages(
   if ('early' in fetched) return fetched.early;
   const rows = fetched.rows;
 
-  const conv = db
-    .prepare('select handle,kind,topic,participant_names from conversations where id=?')
-    .get(id) as any;
   const total = (
     db.prepare('select count(*) n from messages where conv_id=? and is_system=0').get(id) as any
   ).n;
@@ -432,12 +729,7 @@ export function readMessages(
   const oldest = rows[0];
   const olderCursor = oldest && oldest.ts > earliest ? `older:${oldest.ts}:${oldest.id}` : '';
   const head = buildReadMessagesHead(conv, rows.length, total, earliest, newest, olderCursor);
-  const ownerNm = ownerDisplayName(store, meta);
-  const lines = renderMessageLines(rows, ownerNm, {
-    store,
-    selfMri: (meta as any).selfMri as string | null,
-    full: String(args.reactions) === 'full',
-  });
+  const lines = renderMessageLines(rows, ownerNm, rx);
   // Emit the (you)-legend only when owner-authored rows are actually shown (else it's dead weight).
   const legend = rows.some((r: any) => r.is_mine) ? viewerLegend(ownerNm) : '';
   const out = [envelope(meta, deferred), head, legend].filter(Boolean).join('\n');
