@@ -11,7 +11,7 @@ import {
   queryEvents,
   maxEventStart,
 } from './query.js';
-import { loadTopicsMessages, computeTopicRows } from './query.js';
+import { loadTopicsMessages, computeTopicRows, convIdsFor, senderFilter } from './query.js';
 import type { EventRow, TopicRow } from './query.js';
 import type {
   ListConversationsArgs,
@@ -78,28 +78,8 @@ function clip(s: string, n: number): string {
 // likeEscape now lives in the query layer (./query.js) and is imported above.
 
 // ---------- resolvers (name/handle → ids) ----------
-function convIdsFor(db: DB, arg: string): string[] {
-  if (arg.startsWith('c:')) {
-    const r = db.prepare('select id from conversations where handle=?').get(arg) as any;
-    return r ? [r.id] : [];
-  }
-  const like = `%${likeEscape(arg)}%`;
-  return (
-    db
-      .prepare(
-        String.raw`select id from conversations where topic like ? escape '\' or participant_names like ? escape '\'`,
-      )
-      .all(like, like) as any[]
-  ).map((r) => r.id);
-}
-function senderFilter(db: DB, arg: string): { sql: string; params: any[]; miss?: string } {
-  if (arg.startsWith('p:')) {
-    const r = db.prepare('select mri from people where handle=?').get(arg) as any;
-    if (!r) return { sql: '1=0', params: [], miss: `no person matches ${arg}` };
-    return { sql: 'm.sender_mri=?', params: [r.mri] };
-  }
-  return { sql: String.raw`m.sender_name like ? escape '\'`, params: [`%${likeEscape(arg)}%`] };
-}
+// convIdsFor + senderFilter now live in ./query.js (imported above); the presentation-flavored
+// resolvers below (exclude-list validation, coverage/ambiguity notes) stay MCP-side.
 
 // Resolve an `exclude` list into conversation ids / sender MRIs / plain words. Handles fail
 // loudly (return .miss) so a typo'd handle never silently excludes nothing.

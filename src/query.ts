@@ -12,6 +12,40 @@ export function likeEscape(s: string): string {
   return s.replace(/[\\%_]/g, (m) => '\\' + m);
 }
 
+// ---------- resolvers (name/handle → ids) ----------
+// Shared by the message-oriented tools (read_messages/search/top_topics). Pure resolution over the
+// store; the MCP layer wraps these with agent-facing disambiguation/coverage text.
+
+// A conversation selector (c:handle or title/participant substring) → matching conversation ids.
+export function convIdsFor(db: DB, arg: string): string[] {
+  if (arg.startsWith('c:')) {
+    const r = db.prepare('select id from conversations where handle=?').get(arg) as any;
+    return r ? [r.id] : [];
+  }
+  const like = `%${likeEscape(arg)}%`;
+  return (
+    db
+      .prepare(
+        String.raw`select id from conversations where topic like ? escape '\' or participant_names like ? escape '\'`,
+      )
+      .all(like, like) as any[]
+  ).map((r) => r.id);
+}
+
+// A sender selector (p:handle or display-name substring) → a message-table WHERE fragment (aliased
+// `m.`) + params, or a `.miss` when a p:handle doesn't resolve.
+export function senderFilter(
+  db: DB,
+  arg: string,
+): { sql: string; params: any[]; miss?: string } {
+  if (arg.startsWith('p:')) {
+    const r = db.prepare('select mri from people where handle=?').get(arg) as any;
+    if (!r) return { sql: '1=0', params: [], miss: `no person matches ${arg}` };
+    return { sql: 'm.sender_mri=?', params: [r.mri] };
+  }
+  return { sql: String.raw`m.sender_name like ? escape '\'`, params: [`%${likeEscape(arg)}%`] };
+}
+
 // ---------- people ----------
 export interface PersonRow {
   handle: string;
