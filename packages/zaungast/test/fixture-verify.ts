@@ -11,6 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   loadEntries,
+  loadSnapshot,
   fingerprint,
   loadMapping,
   selectMapping,
@@ -127,10 +128,11 @@ const { live, lossy, rawCount, uniqueCount } = loadEntries(dir);
 ok('live.length > 0', live.length > 0, `live=${live.length}`);
 ok('lossy === false', lossy === false);
 console.log(`  raw=${rawCount} unique=${uniqueCount} live=${live.length}`);
+const snap = loadSnapshot(dir);
 
 // ---- 2. fingerprint + selectMapping ----
 console.log('\n=== fingerprint / selectMapping ===');
-const fp = fingerprint(live);
+const fp = fingerprint(snap);
 console.log(`  fingerprint hash=${fp.hash} stores=${fp.stores.map((s) => s.store).join(',')}`);
 const VDIR = fileURLToPath(new URL('../../libzaungast/src/schema/versions/', import.meta.url));
 const mappings = fs
@@ -147,7 +149,7 @@ console.log(`  resolved via: ${via}`);
 
 // ---- 3. extractEntity: conversation / message ----
 console.log('\n=== extractEntity: conversation ===');
-const convRows = extractEntity(live, mapping, 'conversation');
+const convRows = extractEntity(snap, mapping, 'conversation');
 eq('conversation row count', convRows.length, CONVERSATIONS.length);
 const channel = convRows.find((r) => r.id === '19:11223344aabb@thread.tacv2');
 eq(
@@ -164,7 +166,7 @@ ok(
 );
 
 console.log('\n=== extractEntity: message ===');
-const msgRows = extractEntity(live, mapping, 'message');
+const msgRows = extractEntity(snap, mapping, 'message');
 const wantMsgCount = CONVERSATIONS.reduce((n, c) => n + c.messages.length, 0);
 eq('message row count', msgRows.length, wantMsgCount);
 const adaFirst = CONVERSATIONS[0].messages[0];
@@ -301,7 +303,7 @@ eq('profile email matches', adaProfile?.email, 'ada.lovelace@example.edu');
 
 // ---- 4b. extractEntity: event (calendar) — decode round-trip against test/fixture/data.ts ----
 console.log('\n=== extractEntity: event ===');
-const eventRows = extractEntity(live, mapping, 'event');
+const eventRows = extractEntity(snap, mapping, 'event');
 eq('event row count (raw, incl. RecurringMaster)', eventRows.length, EVENTS.length);
 const cachedMeetingRow = eventRows.find((r) => r.id === 'evt-meeting-cached');
 eq('cached-meeting subject decodes', cachedMeetingRow?.subject, 'CS101 Midterm Review Session');
@@ -330,7 +332,7 @@ ok(
 
 // ---- 4c. extractEntity: call (call-history) — decode round-trip ----
 console.log('\n=== extractEntity: call ===');
-const callRows = extractEntity(live, mapping, 'call');
+const callRows = extractEntity(snap, mapping, 'call');
 eq('call row count (raw, incl. deleted)', callRows.length, CALLS.length);
 const recordedCallRow = callRows.find((r) => r.id === 'call-4-recorded');
 const recordings = recordedCallRow?.recordings as any[] | undefined;

@@ -7,6 +7,8 @@ import { ingest, applyIncremental } from 'libzaungast/ingest/ingest.js';
 import {
   loadEntries,
   loadEntriesReuse,
+  loadSnapshot,
+  loadSnapshotReuse,
   decodePrefix,
   entityTargets,
   loadMapping,
@@ -81,12 +83,8 @@ console.log('\n=== C. spine: partial + applyIncremental(cached load) == full reb
   })();
   const partial = ingest(DIR, { seqCap: cap });
   const cache = new Map();
-  const loaded = loadEntriesReuse(DIR, cache);
-  const r = applyIncremental(partial.store, partial.state!, {
-    live: loaded.live,
-    maxSeq: loaded.maxSeq,
-    lossy: loaded.lossy,
-  });
+  const loaded = loadSnapshotReuse(DIR, cache);
+  const r = applyIncremental(partial.store, partial.state!, loaded);
   const full = ingest(DIR);
   const dump = (s: any) =>
     JSON.stringify({
@@ -199,14 +197,15 @@ function craftDeletionLog(userKey: Buffer, seq: number): Buffer {
 }
 function msgStoreKey(dir: string): Buffer | null {
   const { live } = loadEntries(dir);
+  const snap = loadSnapshot(dir);
   const mapping = selectMapping(
     fs
       .readdirSync(VDIR)
       .filter((f: string) => f.endsWith('.json'))
       .map((f: string) => loadMapping(path.join(VDIR, f))),
-    fingerprint(live),
+    fingerprint(snap),
   ).mapping;
-  const targets: Set<string> = entityTargets(live, mapping, 'message');
+  const targets: Set<string> = entityTargets(snap, mapping, 'message');
   for (const e of live) {
     let p: any;
     try {

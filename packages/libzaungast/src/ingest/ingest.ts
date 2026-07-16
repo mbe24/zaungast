@@ -2,14 +2,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  loadEntries,
-  decodePrefix,
+  loadSnapshot,
   fingerprint,
   loadMapping,
   selectMapping,
   extractEntity,
+  extractRecords,
   entityTargets,
 } from '../format/index.js';
+import type { Entry, Snapshot } from '../format/types.js';
 import { ChatStore, type StoreMeta } from './store.js';
 import { htmlToText, isSystemMessage, mentionedMris, hasAttachment } from '../util/text.js';
 
@@ -115,8 +116,8 @@ function applyMessages(store: ChatStore, msgRows: any[], selfMri: string | null)
 }
 
 // Populate the profiles name-source (mri → display name). Whole-store replace each ingest.
-function applyProfiles(store: ChatStore, live: any[], mapping: any) {
-  const rows = extractEntity(live, mapping, 'profile').map((r: any) => ({
+function applyProfiles(store: ChatStore, snap: Snapshot, mapping: any) {
+  const rows = extractEntity(snap, mapping, 'profile').map((r: any) => ({
     mri: String(r.mri ?? ''),
     name: String(r.name ?? ''),
   }));
@@ -160,8 +161,8 @@ function compactAttendees(attendees: unknown): string | null {
 // Populate the events table (calendar) — whole-store replace each ingest, exactly like
 // applyProfiles (see store.ts's replaceEvents doc). `RecurringMaster` rows are series templates,
 // never rendered as an event, so they're dropped here rather than inserted and filtered later.
-function applyEvents(store: ChatStore, live: any[], mapping: any) {
-  const rows = extractEntity(live, mapping, 'event');
+function applyEvents(store: ChatStore, snap: Snapshot, mapping: any) {
+  const rows = extractEntity(snap, mapping, 'event');
   const out = [];
   for (const r of rows as any[]) {
     if (r.eventType === 'RecurringMaster') continue;
@@ -228,8 +229,8 @@ function recordingLinkOf(r: any): string | null {
 // Populate the calls table (call-history) — whole-store replace each ingest, like applyEvents.
 // `is_missed` maps ONLY callState==='Missed' (the real data's other observed value, 'Declined',
 // is a deliberate reject — not a miss — see the ingest report for the full enumeration).
-function applyCalls(store: ChatStore, live: any[], mapping: any) {
-  const rows = extractEntity(live, mapping, 'call');
+function applyCalls(store: ChatStore, snap: Snapshot, mapping: any) {
+  const rows = extractEntity(snap, mapping, 'call');
   const out = [];
   for (const r of rows as any[]) {
     const direction = r.callDirection != null ? String(r.callDirection) : null;
@@ -308,8 +309,9 @@ function finalMeta(
 // FULL rebuild from a fresh snapshot dir. `seqCap` (tests only) builds a PARTIAL store as of
 // an earlier sequence, so a following applyIncremental can be proven to reach a full rebuild.
 export function ingest(dir: string, opts: { seqCap?: number } = {}): Ingested {
-  const { live, maxSeq, lossy } = loadEntries(dir, { seqCap: opts.seqCap });
-  const fp = fingerprint(live);
+  const snap = loadSnapshot(dir, { seqCap: opts.seqCap });
+  const { maxSeq, lossy } = snap;
+  const fp = fingerprint(snap);
   const { mapping } = selectMapping(loadMappings(), fp);
   if (!mapping) {
     const store = new ChatStore();
@@ -332,19 +334,19 @@ export function ingest(dir: string, opts: { seqCap?: number } = {}): Ingested {
       },
     };
   }
-  const msgTargets: Set<string> = entityTargets(live, mapping, 'message');
-  const convTargets: Set<string> = entityTargets(live, mapping, 'conversation');
-  const msgRows = extractEntity(live, mapping, 'message', msgTargets);
-  const convRows = extractEntity(live, mapping, 'conversation', convTargets);
+  const msgTargets: Set<string> = entityTargets(snap, mapping, 'message');
+  const convTargets: Set<string> = entityTargets(snap, mapping, 'conversation');
+  const msgRows = extractEntity(snap, mapping, 'message', msgTargets);
+  const convRows = extractEntity(snap, mapping, 'conversation', convTargets);
   const selfMri = voteSelfMri(msgRows);
 
   const store = new ChatStore();
   store.db.exec('BEGIN');
   applyConversationMeta(store, convRows);
   applyMessages(store, msgRows, selfMri);
-  applyProfiles(store, live, mapping);
-  applyEvents(store, live, mapping);
-  applyCalls(store, live, mapping);
+  applyProfiles(store, snap, mapping);
+  applyEvents(store, snap, mapping);
+  applyCalls(store, snap, mapping);
   store.db.exec('COMMIT');
   store.recomputeDerived(selfMri);
   store.refreshFts(null);
@@ -356,19 +358,14 @@ export function ingest(dir: string, opts: { seqCap?: number } = {}): Ingested {
 // INCREMENTAL apply onto an existing store. Mutates the store in place; the caller updates
 // meta/state. `skipped` = a lossy load, nothing applied (retry next refresh); `needFullRebuild`
 // = a schema change; either way the caller must not advance state on that basis.
-export interface LoadedEntries {
-  live: any[];
-  maxSeq: number;
-  lossy: boolean;
-}
-
-// Overload: accept a dir (reparse-load internally) or pre-loaded entries (copy-reuse path).
+// Accept a dir (reparse-load internally) or a pre-loaded Snapshot (copy-reuse path).
 export function applyIncremental(
   store: ChatStore,
   state: IngestState,
-  source: string | LoadedEntries,
+  source: string | Snapshot,
 ): { needFullRebuild: boolean; newMaxSeq: number; skipped: boolean } {
-  const { live, maxSeq: newMax, lossy } = typeof source === 'string' ? loadEntries(source) : source;
+  const snap = typeof source === 'string' ? loadSnapshot(source) : source;
+  const { maxSeq: newMax, lossy } = snap;
   // HOLE 1 fix: a lossy load (a table/log couldn't be fully read) makes chains spuriously
   // absent from `live`, which the deletion reconcile would treat as deletions. Refuse to apply
   // — serve the current store; a clean read next refresh will catch up.
@@ -379,8 +376,8 @@ export function applyIncremental(
   // a new mapped database appeared → full rebuild. Recomputed from live metadata each refresh.
   // Irrelevant store churn (Teams creates messaging-slice / consumption stores dynamically) is
   // correctly ignored because those don't match our mapping.
-  const msgT = entityTargets(live, state.mapping, 'message');
-  const convT = entityTargets(live, state.mapping, 'conversation');
+  const msgT = entityTargets(snap, state.mapping, 'message');
+  const convT = entityTargets(snap, state.mapping, 'conversation');
   if (!setEq(msgT, state.msgTargets) || !setEq(convT, state.convTargets))
     return { needFullRebuild: true, newMaxSeq: state.maxSeq, skipped: false };
 
@@ -391,29 +388,24 @@ export function applyIncremental(
   // no-op refresh cost. The store is untouched; the caller just re-stamps meta.asOf.
   if (newMax === state.maxSeq) return { needFullRebuild: false, newMaxSeq: newMax, skipped: false };
 
-  // Live keys of the message store (for whole-chain / compaction deletion reconcile) and the
-  // changed message-store records (seq > maxSeq) to re-extract.
+  // Live keys of the message store(s) (for whole-chain / compaction deletion reconcile) and the
+  // changed message-store records (seq > maxSeq) to re-extract. Read straight off the message
+  // buckets — already grouped by store, no per-entry prefix decode.
   const liveChainKeys = new Set<string>();
   const changedChainKeys = new Set<string>();
-  const newLive: any[] = [];
-  for (const e of live) {
-    let p: any;
-    try {
-      p = decodePrefix(e.key);
-    } catch {
-      continue;
-    }
-    if (p.indexId !== 1) {
-      if (e.seq > state.maxSeq) newLive.push(e);
-      continue;
-    }
-    const sk = `${p.databaseId}:${p.objectStoreId}`;
-    if (state.msgTargets.has(sk)) {
+  const changedMsgRecords: Entry[] = [];
+  for (const sk of state.msgTargets) {
+    const b = snap.buckets.get(sk);
+    if (!b) continue;
+    for (const rec of b.records) {
       // hex, matching the chain_key column encoding in applyMessages (NUL-safe read-back).
-      liveChainKeys.add(e.key.toString('hex'));
-      if (e.seq > state.maxSeq) changedChainKeys.add(e.key.toString('hex'));
+      const hex = rec.key.toString('hex');
+      liveChainKeys.add(hex);
+      if (rec.seq > state.maxSeq) {
+        changedChainKeys.add(hex);
+        changedMsgRecords.push(rec);
+      }
     }
-    if (e.seq > state.maxSeq) newLive.push(e);
   }
 
   // HOLE 2 fix: on any error inside the transaction, ROLLBACK and demand a full rebuild rather
@@ -423,17 +415,17 @@ export function applyIncremental(
     // deletions first (whole-chain gone), then delete changed chains before re-inserting them
     store.deleteMessagesForMissingChains(liveChainKeys);
     for (const ck of changedChainKeys) store.deleteMessagesByChain(ck);
-    const newMsgRows = extractEntity(newLive, state.mapping, 'message', state.msgTargets);
+    const newMsgRows = extractRecords(changedMsgRecords, state.mapping, 'message');
     applyMessages(store, newMsgRows, state.selfMri);
     // profiles/events/calls are all cheap (hundreds of rows) → whole-store replace from the
-    // full live set each refresh, exactly like profiles — this is what keeps the
+    // full snapshot each refresh, exactly like profiles — this is what keeps the
     // incremental==full-rebuild invariant trivially true for them.
-    applyProfiles(store, live, state.mapping);
-    applyEvents(store, live, state.mapping);
-    applyCalls(store, live, state.mapping);
+    applyProfiles(store, snap, state.mapping);
+    applyEvents(store, snap, state.mapping);
+    applyCalls(store, snap, state.mapping);
 
     // conversations are cheap → fully reconcile each refresh: re-apply live meta, drop orphans.
-    const convRows = extractEntity(live, state.mapping, 'conversation', state.convTargets);
+    const convRows = extractEntity(snap, state.mapping, 'conversation', state.convTargets);
     const liveConvIds = new Set<string>(convRows.map((c: any) => c.id).filter(Boolean));
     store.db.exec('update conversations set topic=null, team_id=null, meta_last_ts=0');
     applyConversationMeta(store, convRows);

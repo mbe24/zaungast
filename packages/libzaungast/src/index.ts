@@ -6,6 +6,6 @@ export * from './query.js';
 export * from './format/index.js';
 export { Session } from './session.js';
 export { ingest, applyIncremental } from './ingest/ingest.js';
-export type { IngestState, LoadedEntries } from './ingest/ingest.js';
+export type { IngestState } from './ingest/ingest.js';
 export { ChatStore, isBotMri } from './ingest/store.js';
 export type { StoreMeta } from './ingest/store.js';

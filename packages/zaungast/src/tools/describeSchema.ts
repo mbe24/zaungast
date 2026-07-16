@@ -1,13 +1,5 @@
-import {
-  loadEntries,
-  decodePrefix,
-  readStringWithLength,
-  readVarint,
-  utf16be,
-  decodeValue,
-  fingerprint,
-} from 'libzaungast/format/index.js';
-import type { DecodedPrefix, Entry } from 'libzaungast/format/types.js';
+import { loadSnapshot, decodeValue, fingerprint } from 'libzaungast/format/index.js';
+import type { Snapshot } from 'libzaungast/format/types.js';
 
 // Propose-only schema recovery: when a Teams update changes the DB layout (unknown
 // fingerprint), sample the raw stores and propose a field mapping for a human to verify and
@@ -85,45 +77,8 @@ function conversationNameBonus(storeName: string): number {
   return 0;
 }
 
-// ---- schema catalog (db-name / store-name metadata rows) ----
-// Chromium keeps its IndexedDB schema catalog as metadata rows: database names live in the
-// (0,0,0) keyspace under marker 0xc9, store names in the (db,0,0) keyspace under marker 0x32.
-function buildCatalog(live: Entry[]): {
-  dbNames: Map<number, string>;
-  storeNames: Map<string, string>;
-} {
-  const dbNames = new Map<number, string>();
-  const storeNames = new Map<string, string>();
-  for (const { key, value } of live) {
-    if (key.length < 1) continue;
-    let p: DecodedPrefix;
-    try {
-      p = decodePrefix(key);
-    } catch {
-      continue;
-    }
-    if (
-      p.databaseId === 0 &&
-      p.objectStoreId === 0 &&
-      p.indexId === 0 &&
-      key[p.headerLen] === 0xc9
-    ) {
-      const [, p2] = readStringWithLength(key, p.headerLen + 1);
-      const [name] = readStringWithLength(key, p2);
-      const [id] = readVarint(value, 0);
-      dbNames.set(id, name);
-    } else if (
-      p.databaseId > 0 &&
-      p.objectStoreId === 0 &&
-      p.indexId === 0 &&
-      key[p.headerLen] === 0x32
-    ) {
-      const [osId, pp] = readVarint(key, p.headerLen + 1);
-      if (key[pp] === 0) storeNames.set(`${p.databaseId}:${osId}`, utf16be(value));
-    }
-  }
-  return { dbNames, storeNames };
-}
+// The catalog (db-name / store-name) is now resolved by the loader into the Snapshot; describeSchema
+// reads snap.dbNames / snap.buckets directly (no key decoding here).
 
 // Decode one sampled record's value into `info`'s field set: the record's own top-level keys,
 // threadProperties' keys (conversation topics live there), and — for message-map containers —
@@ -153,44 +108,28 @@ function sampleRecordFields(info: StoreInfo, value: Buffer | null): void {
   }
 }
 
-// Walk every live record under an object store (indexId 1), counting per-store record totals
-// and sampling up to `cap` records per store for field discovery.
-function sampleStores(
-  live: Entry[],
-  dbNames: Map<number, string>,
-  storeNames: Map<string, string>,
-  cap: number,
-): Map<string, StoreInfo> {
+// Per-object-store record counts + a sample of up to `cap` records for field discovery, read
+// straight off the snapshot's buckets (already grouped by store, names resolved).
+function sampleStores(snap: Snapshot, cap: number): Map<string, StoreInfo> {
   const stores = new Map<string, StoreInfo>();
-  for (const { key, value } of live) {
-    let p: DecodedPrefix;
-    try {
-      p = decodePrefix(key);
-    } catch {
-      continue;
-    }
-    if (p.indexId !== 1) continue;
-    const sk = `${p.databaseId}:${p.objectStoreId}`;
-    let info = stores.get(sk);
-    if (!info) {
-      const dbName = dbNames.get(p.databaseId) ?? `db${p.databaseId}`;
-      info = {
-        key: sk,
-        dbId: p.databaseId,
-        dbName,
-        dbNorm: normalizeDbName(dbName),
-        store: storeNames.get(sk) ?? '?',
-        count: 0,
-        sampled: 0,
-        fields: new Set(),
-      };
-      stores.set(sk, info);
-    }
-    info.count++;
-    if (info.sampled < cap) {
+  for (const [sk, bucket] of snap.buckets) {
+    const dbName = bucket.dbName ?? `db${bucket.dbId}`;
+    const info: StoreInfo = {
+      key: sk,
+      dbId: bucket.dbId,
+      dbName,
+      dbNorm: normalizeDbName(dbName),
+      store: bucket.storeName ?? '?',
+      count: bucket.records.length,
+      sampled: 0,
+      fields: new Set(),
+    };
+    const lim = Math.min(cap, bucket.records.length);
+    for (let i = 0; i < lim; i++) {
       info.sampled++;
-      sampleRecordFields(info, value);
+      sampleRecordFields(info, bucket.records[i].value);
     }
+    stores.set(sk, info);
   }
   return stores;
 }
@@ -262,11 +201,10 @@ function buildProposal(fpHash: string, msgCand: any[], convCand: any[]): any {
 }
 
 export function describeSchema(dir: string, args: any = {}): string {
-  const { live } = loadEntries(dir);
-  const fp = fingerprint(live);
+  const snap = loadSnapshot(dir);
+  const fp = fingerprint(snap);
 
-  const { dbNames, storeNames } = buildCatalog(live);
-  const stores = sampleStores(live, dbNames, storeNames, 8);
+  const stores = sampleStores(snap, 8);
   const all = [...stores.values()].sort((a, b) => b.count - a.count);
 
   // score candidates
@@ -286,7 +224,7 @@ export function describeSchema(dir: string, args: any = {}): string {
   ]);
 
   const lines: string[] = [];
-  lines.push(`fingerprint ${fp.hash} · ${dbNames.size} databases · ${all.length} data stores`);
+  lines.push(`fingerprint ${fp.hash} · ${snap.dbNames.size} databases · ${all.length} data stores`);
   lines.push('', 'Top data stores (by record count):');
   lines.push(...renderStoreList(all, Number(args.limit) || 20, interest));
 

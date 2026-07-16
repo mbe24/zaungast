@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  loadEntries,
+  loadSnapshot,
   fingerprint,
   selectMapping,
   loadMapping,
@@ -83,13 +83,13 @@ function digestOf(dir: string) {
     .readdirSync(VERSIONS)
     .filter((f) => f.endsWith('.json'))
     .map((f) => loadMapping(path.join(VERSIONS, f)));
-  const { live } = loadEntries(dir);
-  const fp = fingerprint(live);
+  const snap = loadSnapshot(dir);
+  const fp = fingerprint(snap);
   const { mapping } = selectMapping(mappings, fp);
   if (!mapping) throw new Error('selectMapping returned no mapping for the real store fingerprint');
   const entities: Record<string, { count: number; sha256: string }> = {};
   for (const name of Object.keys(mapping.entities)) {
-    const rows = extractEntity(live, mapping, name);
+    const rows = extractEntity(snap, mapping, name);
     // sort rows deterministically (by __key, tie-break on canonical JSON) before hashing
     const sorted = [...rows].sort((a, b) => {
       const ka = String((a as any).__key ?? ''),

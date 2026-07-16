@@ -23,6 +23,7 @@ export {
   loadEntries,
   loadEntriesReuse,
   loadSnapshot,
+  loadSnapshotReuse,
   decodePrefix,
   decodeValue,
   readVarint,
@@ -30,6 +31,6 @@ export {
   utf16be,
 } from './chromium/indexeddb.js';
 export { fingerprint } from './fingerprint.js';
-export { loadMapping, selectMapping, entityTargets, extractEntity } from './resolver.js';
+export { loadMapping, selectMapping, entityTargets, extractEntity, extractRecords } from './resolver.js';
 export { discoverTeamsDbs } from './discover.js';
 export type * from './types.js';

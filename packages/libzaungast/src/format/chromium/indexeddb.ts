@@ -230,7 +230,10 @@ export function loadSnapshot(dir: string, opts: LoadEntriesOptions = {}): Snapsh
 // (a cached `.ldb` no longer present) via `compacted` — the caller MUST full-rebuild then,
 // because compaction can elide tombstones (a deletion whose evidence is gone). Returns the same
 // shape as loadEntries plus `compacted`. Mutates ldbCache (adds new files, prunes removed).
-export function loadEntriesReuse(dir: string, ldbCache: LdbCache): LoadEntriesReuseResult {
+function buildReuseMap(
+  dir: string,
+  ldbCache: LdbCache,
+): { map: Map<string, Entry>; raw: number; lossy: boolean; compacted: boolean } {
   const all = fs.readdirSync(dir);
   const ldbNow = new Set(all.filter((f) => f.endsWith('.ldb')));
   const logNow = all.filter((f) => f.endsWith('.log')).sort(byCodeUnit);
@@ -268,9 +271,23 @@ export function loadEntriesReuse(dir: string, ldbCache: LdbCache): LoadEntriesRe
   for (const f of [...ldbCache.keys()]) if (!ldbNow.has(f)) ldbCache.delete(f);
 
   if (readLogsInto(dir, logNow, consider)) lossy = true;
+  return { map, raw, lossy, compacted };
+}
 
+export function loadEntriesReuse(dir: string, ldbCache: LdbCache): LoadEntriesReuseResult {
+  const { map, lossy, compacted } = buildReuseMap(dir, ldbCache);
   const { live, maxSeq } = collectLive(map);
   return { live, maxSeq, lossy, compacted };
+}
+
+// Copy-reuse variant of loadSnapshot: same cached-`.ldb` reuse + compaction detection, grouped
+// into a Snapshot.
+export function loadSnapshotReuse(
+  dir: string,
+  ldbCache: LdbCache,
+): Snapshot & { compacted: boolean } {
+  const { map, raw, lossy, compacted } = buildReuseMap(dir, ldbCache);
+  return { ...collectSnapshot(map, raw, lossy), compacted };
 }
 
 // ---- Chromium IndexedDB key coding ----

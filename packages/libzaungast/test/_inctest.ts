@@ -6,7 +6,7 @@ import { ingest, applyIncremental } from 'libzaungast/ingest/ingest.js';
 import { ChatStore } from 'libzaungast/ingest/store.js';
 import {
   loadEntries,
-  decodePrefix,
+  loadSnapshot,
   entityTargets,
   loadMapping,
   selectMapping,
@@ -99,42 +99,31 @@ function ftsConsistent(store: ChatStore): boolean {
   return (a?.g ?? null) === (b?.g ?? null);
 }
 const VDIR = fileURLToPath(new URL('../src/schema/versions/', import.meta.url));
-function getMapping(live: any) {
+function getMapping(snap: any) {
   const mappings = fs
     .readdirSync(VDIR)
     .filter((f) => f.endsWith('.json'))
     .map((f) => loadMapping(path.join(VDIR, f)));
-  return selectMapping(mappings, fingerprint(live)).mapping;
+  return selectMapping(mappings, fingerprint(snap)).mapping;
 }
-function msgStoreKey(live: any): Buffer | null {
-  const targets: Set<string> = entityTargets(live, getMapping(live), 'message');
-  for (const e of live) {
-    let p: any;
-    try {
-      p = decodePrefix(e.key);
-    } catch {
-      continue;
-    }
-    // MUST require indexId===1: only data records carry messages. The first entry in the store's
-    // (db:os) is often a metadata / secondary-index record (e.g. indexId 32) owning zero messages,
-    // so tombstoning it removes nothing and a "count dropped" assertion would spuriously fail.
-    if (p.indexId === 1 && targets.has(`${p.databaseId}:${p.objectStoreId}`)) return e.key;
+function msgStoreKey(snap: any): Buffer | null {
+  const targets: Set<string> = entityTargets(snap, getMapping(snap), 'message');
+  // buckets already hold ONLY indexId===1 (data) records, in dedup-insertion order — the same
+  // first message-store record key the old decodePrefix scan-loop would have returned.
+  for (const sk of targets) {
+    const b = snap.buckets.get(sk);
+    if (b?.records.length) return b.records[0].key;
   }
   return null;
 }
 // median seq among message-store records → guarantees a real delta for the incremental
 function midSeq(dir: string): number {
-  const { live } = loadEntries(dir);
-  const targets: Set<string> = entityTargets(live, getMapping(live), 'message');
+  const snap = loadSnapshot(dir);
+  const targets: Set<string> = entityTargets(snap, getMapping(snap), 'message');
   const seqs: number[] = [];
-  for (const e of live) {
-    let p: any;
-    try {
-      p = decodePrefix(e.key);
-    } catch {
-      continue;
-    }
-    if (targets.has(`${p.databaseId}:${p.objectStoreId}`)) seqs.push(e.seq);
+  for (const sk of targets) {
+    const b = snap.buckets.get(sk);
+    if (b) for (const rec of b.records) seqs.push(rec.seq);
   }
   seqs.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   return seqs[Math.floor(seqs.length / 2)];
@@ -190,24 +179,23 @@ console.log(
   '\n=== D. deletion sweep: tombstone chains of size 1 / mid / max → count drops by EXACTLY N, == full ===',
 );
 {
-  const { live, maxSeq } = loadEntries(DIR);
-  const targets = entityTargets(live, getMapping(live), 'message');
+  const snap = loadSnapshot(DIR);
+  const maxSeq = snap.maxSeq;
+  const targets = entityTargets(snap, getMapping(snap), 'message');
   // Discover each message-store DATA record's chain size (rows it owns) from one ingest, so the
   // sweep adapts to whatever capture is pointed at it. chain_key is hex-encoded in the store, so
-  // match on e.key.toString('hex'). Only indexId===1 records are real chains.
+  // match on e.key.toString('hex'). Buckets already hold only indexId===1 records, so no key
+  // re-decode / indexId re-check is needed here (matches the old decodePrefix-filtered scan).
   const disc = ingest(DIR);
   const owns = disc.store.db.prepare('select count(*) n from messages where chain_key=?');
   const cands: { key: Buffer; n: number }[] = [];
-  for (const e of live) {
-    let p: any;
-    try {
-      p = decodePrefix(e.key);
-    } catch {
-      continue;
+  for (const sk of targets) {
+    const b = snap.buckets.get(sk);
+    if (!b) continue;
+    for (const e of b.records) {
+      const n = (owns.get(e.key.toString('hex')) as any).n;
+      if (n > 0) cands.push({ key: e.key, n });
     }
-    if (p.indexId !== 1 || !targets.has(`${p.databaseId}:${p.objectStoreId}`)) continue;
-    const n = (owns.get(e.key.toString('hex')) as any).n;
-    if (n > 0) cands.push({ key: e.key, n });
   }
   disc.store.close();
   cands.sort((a, b) => a.n - b.n);
@@ -259,10 +247,10 @@ console.log('\n=== E. Session end-to-end: warm full → mutate → incremental r
   ok('warm-up is a full ingest with data', m0.refreshMode === 'full' && m0.counts.messages > 0);
   const before = m0.counts.messages;
   // mutate: tombstone a chain
-  const { live, maxSeq } = loadEntries(copy);
+  const snap = loadSnapshot(copy);
   fs.writeFileSync(
     path.join(copy, 'zz0.log'),
-    craftDeletionLog(msgStoreKey(live)!, maxSeq + 1000),
+    craftDeletionLog(msgStoreKey(snap)!, snap.maxSeq + 1000),
   );
   const m1 = s.refreshNow(false); // incremental
   ok('refresh after mutation is incremental', m1.refreshMode === 'incremental');
@@ -303,10 +291,10 @@ console.log(
   applyIncremental(s.store, s.state!, copy);
   s.state!.maxSeq = loadEntries(copy).maxSeq; // step 1: catch up
   const n1 = (s.store.db.prepare('select count(*) n from messages').get() as any).n;
-  const { live, maxSeq } = loadEntries(copy);
+  const snap = loadSnapshot(copy);
   fs.writeFileSync(
     path.join(copy, 'zzz1.log'),
-    craftDeletionLog(msgStoreKey(live)!, maxSeq + 1000),
+    craftDeletionLog(msgStoreKey(snap)!, snap.maxSeq + 1000),
   ); // step 2: delete
   applyIncremental(s.store, s.state!, copy);
   s.state!.maxSeq = loadEntries(copy).maxSeq;
@@ -444,10 +432,10 @@ console.log(
   const copy = copyDir(DIR);
   const cap = midSeq(copy);
   const s = ingest(copy, { seqCap: cap });
-  const { maxSeq } = loadEntries(copy);
+  const snap = loadSnapshot(copy);
   fs.writeFileSync(
     path.join(copy, 'zzz2.log'),
-    craftDeletionLog(msgStoreKey(loadEntries(copy).live)!, maxSeq + 1000),
+    craftDeletionLog(msgStoreKey(snap)!, snap.maxSeq + 1000),
   );
   const orig = s.store.recomputeDerived.bind(s.store);
   (s.store as any).recomputeDerived = () => {

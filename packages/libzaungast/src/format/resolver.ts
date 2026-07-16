@@ -2,19 +2,15 @@ import fs from 'node:fs';
 // Engine seam: mapping/extraction is engine-agnostic in intent (a mapped record has the same
 // fields however it was stored), but today it decodes raw Chromium records inline. A second
 // engine would hand this module already-decoded records. See ./index.ts.
-import {
-  decodePrefix,
-  readStringWithLength,
-  readVarint,
-  utf16be,
-  decodeValue,
-} from './chromium/indexeddb.js';
+// Only Chromium dependency left after the Snapshot migration: value decoding (keys/grouping/catalog
+// are resolved by the loader into the Snapshot). This is the documented, deferred value-decode seam.
+import { decodeValue } from './chromium/indexeddb.js';
 import type {
-  DecodedPrefix,
   Entry,
   ExtractedRow,
   FingerprintResult,
   Mapping,
+  Snapshot,
   SelectMappingResult,
 } from './types.js';
 
@@ -60,94 +56,35 @@ function firstDefined(obj: unknown, spec: string | string[]): unknown {
   return undefined;
 }
 
-// Per-`live` memoized index: the prefix decode of every entry (the single biggest ingest waste
-// — a full ingest used to re-run decodePrefix ~11× over all entries, ~1.2M closure+object allocs
-// just to re-derive (dbId,osId,indexId)) plus the db/store-name catalog, computed ONCE and shared
-// across the fingerprint-independent consumers (entityTargets ×N + extractEntity ×N). Keyed on the
-// live array reference (WeakMap → GC'd with it); the incremental path's subset array gets its own.
-interface LiveIndex {
-  prefixes: (DecodedPrefix | null)[]; // parallel to live; null = key too short / undecodable
-  dbNames: Map<number, string>;
-  storeNames: Map<string, string>;
-}
-const indexCache = new WeakMap<Entry[], LiveIndex>();
-
-function liveIndex(live: Entry[]): LiveIndex {
-  const hit = indexCache.get(live);
-  if (hit) return hit;
-  const prefixes: (DecodedPrefix | null)[] = new Array(live.length);
-  const dbNames = new Map<number, string>();
-  const storeNames = new Map<string, string>();
-  for (let i = 0; i < live.length; i++) {
-    const { key, value } = live[i];
-    let p: DecodedPrefix | null = null;
-    if (key.length >= 1) {
-      try {
-        p = decodePrefix(key);
-      } catch {
-        p = null;
-      }
-    }
-    prefixes[i] = p;
-    if (!p) continue;
-    const { databaseId, objectStoreId, indexId, headerLen } = p;
-    if (databaseId === 0 && objectStoreId === 0 && indexId === 0 && key[headerLen] === 0xc9) {
-      const [, p2] = readStringWithLength(key, headerLen + 1);
-      const [name] = readStringWithLength(key, p2);
-      // See fingerprint.ts: `live` only holds non-deletion entries, so value is never null here.
-      const [id] = readVarint(value, 0);
-      dbNames.set(id, name);
-    } else if (databaseId > 0 && objectStoreId === 0 && indexId === 0 && key[headerLen] === 0x32) {
-      const [osId, pp] = readVarint(key, headerLen + 1);
-      if (key[pp] === 0) storeNames.set(`${databaseId}:${osId}`, utf16be(value));
-    }
-  }
-  const idx: LiveIndex = { prefixes, dbNames, storeNames };
-  indexCache.set(live, idx);
-  return idx;
-}
-
-// The (dbId:osId) keys whose db/store match an entity definition. Uses the shared per-live catalog
-// (no re-scan). `mapping` is typed to also accept `null` because callers commonly pass the result
-// of `selectMapping(...).mapping` straight through without a guard, exactly as the untyped original
-// did — a null mapping still throws the same TypeError on first access below.
+// The (dbId:osId) keys whose db/store match an entity definition, read straight from the snapshot's
+// resolved catalog (no scan, no key decode). `mapping` is typed to also accept `null` because
+// callers commonly pass `selectMapping(...).mapping` straight through — a null mapping still throws
+// the same TypeError on first access, exactly as the untyped original did.
 export function entityTargets(
-  live: Entry[],
+  snap: Snapshot,
   mapping: Mapping | null,
   entityName: string,
 ): Set<string> {
   const def = (mapping as Mapping).entities[entityName];
-  const { dbNames, storeNames } = liveIndex(live);
   const targets = new Set<string>();
-  for (const [sk, storeName] of storeNames) {
+  for (const [sk, storeName] of snap.storeNames) {
     const dbId = Number(sk.split(':')[0]);
-    const dbName = dbNames.get(dbId);
+    const dbName = snap.dbNames.get(dbId);
     if (dbName && glob(def.db, dbName) && storeName === def.store) targets.add(sk);
   }
   return targets;
 }
 
-// Extract rows for one entity definition. Each row carries __key = the source record's
-// leveldb user-key (latin1) so callers can group messages by their reply-chain record.
-// `targets` (from entityTargets) may be supplied to extract from a subset of `live` that
-// lacks the db-name metadata (incremental path). Iterates `live` in order (output order
-// preserved) using the shared prefix index — no per-entry re-decode of the key prefix.
-export function extractEntity(
-  live: Entry[],
-  mapping: Mapping | null,
-  entityName: string,
-  targets?: Set<string>,
-): ExtractedRow[] {
-  const def = (mapping as Mapping).entities[entityName];
-  targets ??= entityTargets(live, mapping, entityName);
-  const { prefixes } = liveIndex(live);
-
+// Map an already-selected set of records (all from one entity's store) to rows via its mapping def.
+// Each row carries __key = the source record's leveldb user-key (latin1) so callers can group
+// messages by their reply-chain record. Shared by extractEntity (whole target buckets) and
+// extractRecords (an incremental changed-subset).
+function recordsToRows(records: Entry[], def: Mapping['entities'][string]): ExtractedRow[] {
   const mapFields = (src: unknown, recKey: string): ExtractedRow => {
     const r: ExtractedRow = { __key: recKey };
     for (const [out, spec] of Object.entries(def.fields)) r[out] = firstDefined(src, spec);
     return r;
   };
-
   // One decoded record → 0..n rows. A def may `iterate` a container of sub-items (optionally
   // `keep`-filtered); otherwise the whole record is one row.
   const rowsFromRecord = (obj: unknown, recKey: string): ExtractedRow[] => {
@@ -167,19 +104,44 @@ export function extractEntity(
   };
 
   const rows: ExtractedRow[] = [];
-  for (let i = 0; i < live.length; i++) {
-    const p = prefixes[i];
-    if (!p || p.indexId !== 1) continue;
-    if (!targets.has(`${p.databaseId}:${p.objectStoreId}`)) continue;
-    const { key, value } = live[i];
+  for (const rec of records) {
     let obj: unknown;
     try {
-      obj = decodeValue(value);
+      obj = decodeValue(rec.value);
     } catch {
       continue;
     }
     if (!obj) continue;
-    rows.push(...rowsFromRecord(obj, key.toString('latin1')));
+    rows.push(...rowsFromRecord(obj, rec.key.toString('latin1')));
   }
   return rows;
+}
+
+// Extract rows for one entity definition from a snapshot — iterate only the target buckets'
+// (indexId===1) records; no full scan, no key re-decode. `targets` (from entityTargets) may be
+// supplied to skip recomputing them.
+export function extractEntity(
+  snap: Snapshot,
+  mapping: Mapping | null,
+  entityName: string,
+  targets?: Set<string>,
+): ExtractedRow[] {
+  const def = (mapping as Mapping).entities[entityName];
+  targets ??= entityTargets(snap, mapping, entityName);
+  const rows: ExtractedRow[] = [];
+  for (const sk of targets) {
+    const b = snap.buckets.get(sk);
+    if (b) rows.push(...recordsToRows(b.records, def));
+  }
+  return rows;
+}
+
+// Extract rows from an explicit record set (the incremental path isolates the changed subset of one
+// entity's store and maps just those, avoiding a whole-store re-extract).
+export function extractRecords(
+  records: Entry[],
+  mapping: Mapping | null,
+  entityName: string,
+): ExtractedRow[] {
+  return recordsToRows(records, (mapping as Mapping).entities[entityName]);
 }

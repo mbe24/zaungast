@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ingest, applyIncremental, type Ingested } from './ingest/ingest.js';
-import { discoverTeamsDbs, loadEntriesReuse } from './format/index.js';
+import { discoverTeamsDbs, loadSnapshotReuse } from './format/index.js';
 
 // Self-heal backstop: force a full rebuild at least this often, so any incremental drift is
 // bounded to minutes. (Correctness doesn't depend on it — incremental reconciles deletions —
@@ -209,18 +209,14 @@ export class Session {
       // H-E: snapshotReuse + loadEntriesReuse are inside the try so a throw there (e.g. an
       // rmSync EPERM in the mirror-delete) also falls back to the reparse path, not aborts.
       const lossy = this.snapshotReuse(liveDir, this.snapshotDir);
-      const loaded = loadEntriesReuse(this.snapshotDir, this.ldbCache);
+      const loaded = loadSnapshotReuse(this.snapshotDir, this.ldbCache);
       if (lossy || loaded.lossy) {
         this.lastIngestAt = Date.now();
         return true;
       } // skip, keep current, retry
       if (loaded.compacted) return false; // secondary safety net (pre-check should have caught it)
 
-      const r = applyIncremental(this.cur.store, this.cur.state, {
-        live: loaded.live,
-        maxSeq: loaded.maxSeq,
-        lossy: false,
-      });
+      const r = applyIncremental(this.cur.store, this.cur.state, loaded);
       if (r.skipped) {
         this.lastIngestAt = Date.now();
         return true;
