@@ -127,18 +127,20 @@ export function loadEntries(
   let raw = 0,
     lossy = false;
 
+  // Store the incoming key/value by reference (they are private views over the read file buffers,
+  // which nobody mutates) and mutate the winning slot in place on overwrite — no per-entry copy.
   const consider: Consider = (userKey, value, seq, type) => {
     if (seqCap !== undefined && seq > seqCap) return;
     raw++;
     const hex = userKey.toString('latin1');
     const cur = map.get(hex);
-    if (!cur || seq > cur.seq)
-      map.set(hex, {
-        seq,
-        type,
-        key: Buffer.from(userKey),
-        value: value ? Buffer.from(value) : null,
-      });
+    if (!cur) map.set(hex, { seq, type, key: userKey, value });
+    else if (seq > cur.seq) {
+      cur.seq = seq;
+      cur.type = type;
+      cur.key = userKey;
+      cur.value = value;
+    }
   };
 
   if (readTablesInto(dir, files, consider)) lossy = true;
@@ -183,13 +185,13 @@ export function loadEntriesReuse(dir: string, ldbCache: LdbCache): LoadEntriesRe
     raw++;
     const hex = userKey.toString('latin1');
     const cur = map.get(hex);
-    if (!cur || seq > cur.seq)
-      map.set(hex, {
-        seq,
-        type,
-        key: Buffer.from(userKey),
-        value: value ? Buffer.from(value) : null,
-      });
+    if (!cur) map.set(hex, { seq, type, key: userKey, value });
+    else if (seq > cur.seq) {
+      cur.seq = seq;
+      cur.type = type;
+      cur.key = userKey;
+      cur.value = value;
+    }
   };
 
   // H-B: only cache a CLEAN parse — a partial (res.lossy) parse must be retried next refresh, not

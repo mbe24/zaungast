@@ -52,28 +52,20 @@ export function unmaskCrc(m: number): number {
   return ((x >>> 17) | (x << 15)) >>> 0;
 }
 
-// Read a block's raw bytes given a handle, handling the 5-byte trailer + compression.
-function readBlock(fd: number, handle: BlockHandle, verifyCrc = false): BlockReadResult {
+// Read a block's raw bytes from the in-memory file buffer, handling the 5-byte trailer +
+// compression. Uncompressed blocks are returned as a *view* into `file` (no copy) — the caller
+// must treat block/entry buffers as read-only (nothing in the reader mutates decoded buffers).
+function readBlock(file: Buffer, handle: BlockHandle, verifyCrc = false): BlockReadResult {
   const { offset, size } = handle;
-  const buf = Buffer.alloc(size + 5); // include 1-byte type + 4-byte crc trailer
-  // fs.readSync may perform a SHORT READ for large blocks — loop until fully read.
-  let got = 0;
-  while (got < size + 5) {
-    const n = fs.readSync(fd, buf, got, size + 5 - got, offset + got);
-    if (n <= 0) break;
-    got += n;
-  }
-  const compressionType = buf[size];
+  const compressionType = file[offset + size];
   let crcOk: boolean | null = null;
   if (verifyCrc) {
-    const stored = unmaskCrc(buf.readUInt32LE(size + 1));
-    crcOk = crc32c(buf, 0, size + 1) === stored;
+    const stored = unmaskCrc(file.readUInt32LE(offset + size + 1));
+    crcOk = crc32c(file, offset, offset + size + 1) === stored;
   }
-  const contents = buf.subarray(0, size);
-  if (compressionType === 0) return { data: Buffer.from(contents), compressionType, crcOk };
-  if (compressionType === 1) {
-    return { data: Snappy.uncompress(contents), compressionType, crcOk };
-  }
+  const contents = file.subarray(offset, offset + size);
+  if (compressionType === 0) return { data: contents, compressionType, crcOk };
+  if (compressionType === 1) return { data: Snappy.uncompress(contents), compressionType, crcOk };
   throw new Error(`Unsupported compression type ${compressionType}`);
 }
 
@@ -92,29 +84,33 @@ export function* parseBlock(data: Buffer): Generator<TableEntry> {
     [shared, pos] = readVarintNum(data, pos);
     [nonShared, pos] = readVarintNum(data, pos);
     [valueLen, pos] = readVarintNum(data, pos);
-    const keyDelta = data.subarray(pos, pos + nonShared);
+    const keyStart = pos;
     pos += nonShared;
-    const value = data.subarray(pos, pos + valueLen);
+    const value = data.subarray(pos, pos + valueLen); // view into the block
     pos += valueLen;
-    const key = Buffer.concat([prevKey.subarray(0, shared), keyDelta]);
+    // Build the key with a single owned allocation (shared prefix + this entry's delta) instead of
+    // Buffer.concat's array literal + intermediate subarray.
+    const key = Buffer.allocUnsafe(shared + nonShared);
+    prevKey.copy(key, 0, 0, shared);
+    data.copy(key, shared, keyStart, keyStart + nonShared);
     prevKey = key;
     yield [key, value];
   }
 }
 
 export function readTable(path: string): TableReadResult {
-  const fd = fs.openSync(path, 'r');
-  const stat = fs.fstatSync(fd);
-  const fileSize = stat.size;
-  const footer = Buffer.alloc(48);
-  fs.readSync(fd, footer, 0, 48, fileSize - 48);
-  const magic = footer.readBigUInt64LE(40);
+  // Read the whole (tmp-copy) file once: one syscall, no per-block zeroed Buffer.alloc + readSync.
+  // Blocks/values become views into this buffer; the entries returned pin it for their lifetime.
+  const file = fs.readFileSync(path);
+  const fileSize = file.length;
+  const footerOff = fileSize - 48;
+  const magic = file.readBigUInt64LE(fileSize - 8);
   if (magic !== MAGIC_HIGH) {
     console.error(`WARNING: bad magic ${magic.toString(16)} (expected ${MAGIC_HIGH.toString(16)})`);
   }
-  // metaindex handle (skipped), then index handle (varints at start of footer)
-  const [, p] = readBlockHandle(footer, 0);
-  const [indexHandle] = readBlockHandle(footer, p);
+  // metaindex handle (skipped), then index handle (varints at the start of the 48-byte footer)
+  const [, p] = readBlockHandle(file, footerOff);
+  const [indexHandle] = readBlockHandle(file, p);
 
   // Verify CRCs: a copy taken while a table was being written could be torn. If the index
   // block itself is corrupt we can't trust the table — skip it. Corrupt data blocks are
@@ -124,11 +120,8 @@ export function readTable(path: string): TableReadResult {
   // Per-data-block CRC is skipped for speed (halves read time; the WAL is still fully CRC'd).
   // `lossy` = true if any block was skipped, so callers can refuse to treat a partial read as
   // deletion truth (an incremental deletion reconcile MUST NOT run on a lossy load).
-  const { data: indexData, crcOk: idxOk } = readBlock(fd, indexHandle, true);
-  if (idxOk === false) {
-    fs.closeSync(fd);
-    return { entries: [], lossy: true };
-  }
+  const { data: indexData, crcOk: idxOk } = readBlock(file, indexHandle, true);
+  if (idxOk === false) return { entries: [], lossy: true };
 
   const entries: TableEntry[] = [];
   let lossy = false;
@@ -136,14 +129,15 @@ export function readTable(path: string): TableReadResult {
     // index value = BlockHandle of a data block
     const [handle] = readBlockHandle(ivalue, 0);
     try {
-      const block = readBlock(fd, handle, false);
-      for (const [k, v] of parseBlock(block.data)) entries.push([Buffer.from(k), Buffer.from(v)]);
+      const block = readBlock(file, handle, false);
+      // key is owned (parseBlock allocates it); value is a view into the block (into `file` for
+      // uncompressed blocks, or the per-block snappy output). No copy here.
+      for (const [k, v] of parseBlock(block.data)) entries.push([k, v]);
     } catch {
       lossy = true;
       continue;
     } // corrupt/short block → skip, mark lossy
   }
-  fs.closeSync(fd);
   return { entries, lossy };
 }
 

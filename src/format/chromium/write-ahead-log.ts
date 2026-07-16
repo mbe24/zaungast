@@ -92,7 +92,9 @@ export function parseWriteAheadLog(path: string): WalBatch[] {
         value = record.subarray(p, p + vlen);
         p += vlen;
       }
-      ops.push({ type: opType, key: Buffer.from(key), value: value ? Buffer.from(value) : null });
+      // key/value are views into the read file buffer (or the reassembled record); no copy. They
+      // pin their backing buffer for the batch's lifetime — safe, nothing mutates decoded buffers.
+      ops.push({ type: opType, key, value: value ?? null });
     }
     batches.push({ sequence, ops });
   }
