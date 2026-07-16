@@ -253,7 +253,8 @@ export const CONVERSATIONS: ConversationDef[] = [
           files: ['https://example.invalid/files/week5-slides.pdf'],
         },
         { sender: alan, content: 'Are the lectures recorded too?', ts: a1, replyTo: a },
-        { sender: barbara, content: 'Reading list for the sorting unit - suggestions?', ts: c },
+        // emoji + curly punctuation → forces the two-byte (UTF-16) SSV string path end-to-end
+        { sender: barbara, content: 'Reading list for the sorting unit — suggestions? 📚', ts: c },
         {
           sender: ada,
           content: "I'll post the recording link after class.",

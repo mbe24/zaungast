@@ -67,7 +67,8 @@ const TAG = {
   INT32: 0x49,
   DOUBLE: 0x4e,
   BIGINT: 0x5a, // 'Z'
-  STR1: 0x22,
+  STR1: 0x22, // one-byte (Latin1) string
+  STR2: 0x63, // 'c' two-byte (UTF-16LE) string
   BEGIN_OBJ: 0x6f,
   END_OBJ: 0x7b,
   BEGIN_DENSE: 0x41,
@@ -88,12 +89,22 @@ function encodeBigInt(v: bigint): Buffer {
   return Buffer.concat([Buffer.from([TAG.BIGINT]), varint(bitfield), Buffer.from(bytes)]);
 }
 
+// Mirror V8's ValueSerializer: a string whose UTF-16 code units all fit in a byte is written as a
+// one-byte (Latin1) string; the moment any unit exceeds 0xFF it's a two-byte (UTF-16LE) string —
+// exactly the per-string choice the real Teams cache makes. Both length prefixes are BYTE counts.
 function encodeString(s: string): Buffer {
+  let oneByte = true;
   for (let i = 0; i < s.length; i++) {
-    const cu = s.charCodeAt(i); // NOSONAR S7758 — UTF-16 code units by design (see verify.ts round-trip)
-    if (cu > 0xff) throw new Error(`fixture strings must be latin1/ASCII: ${JSON.stringify(s)}`);
+    if (s.charCodeAt(i) > 0xff) {
+      // NOSONAR S7758 — UTF-16 code units by design (matches V8's OneByte/TwoByte split)
+      oneByte = false;
+      break;
+    }
   }
-  return Buffer.concat([Buffer.from([TAG.STR1]), varint(s.length), Buffer.from(s, 'latin1')]);
+  if (oneByte)
+    return Buffer.concat([Buffer.from([TAG.STR1]), varint(s.length), Buffer.from(s, 'latin1')]);
+  const body = Buffer.from(s, 'utf16le'); // byte length = 2 × code units
+  return Buffer.concat([Buffer.from([TAG.STR2]), varint(body.length), body]);
 }
 
 function encodeDouble(d: number): Buffer {

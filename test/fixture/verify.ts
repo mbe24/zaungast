@@ -104,6 +104,23 @@ console.log('\n=== Blob host-object round-trip ===');
   eq('field after blob host object still decodes', blobRec.tail, 'ok');
 }
 
+// ---- 0d. SSV string encodings: one-byte (Latin1) vs two-byte (UTF-16LE), per V8 ----
+// A value whose code units all fit in a byte is written one-byte (tag 0x22); any code unit >0xff
+// makes it a two-byte UTF-16LE string (tag 0x63) — the per-string choice the real Teams cache
+// makes. An exact round-trip of emoji/surrogates/CJK/curly-punctuation proves BOTH the encoder's
+// two-byte emission and the decoder's 0x63 path (before this, the fixture encoder threw on >0xff).
+console.log('\n=== SSV string encodings (one-byte / two-byte, per V8) ===');
+{
+  const uni = 'café 🎉 Görkem Paweł 𝕏 端末 — “curly”';
+  eq('two-byte string round-trips exactly', (decodeValue(idbValue({ s: uni })) as any).s, uni);
+  const mixed = decodeValue(idbValue({ a: 'hello world', b: 'wörld 🌍', c: 42 })) as any;
+  eq(
+    'one-byte and two-byte fields coexist in one record',
+    [mixed.a, mixed.b, mixed.c],
+    ['hello world', 'wörld 🌍', 42],
+  );
+}
+
 // ---- 1. loadEntries ----
 console.log('\n=== loadEntries ===');
 const { live, lossy, rawCount, uniqueCount } = loadEntries(dir);
@@ -504,6 +521,11 @@ ok(
 );
 ok('thread mode shows the earliest reply (not truncated)', /CLRS chapter 8/.test(tmode));
 ok('thread mode (fits) has no "+N earlier" marker', !/earlier/.test(tmode));
+ok(
+  'emoji in real message content survives ingest→render (two-byte SSV path)',
+  /📚/.test(tmode),
+  tmode.slice(0, 160),
+);
 
 const chReply = store.db
   .prepare(
