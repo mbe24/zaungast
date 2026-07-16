@@ -1,0 +1,805 @@
+{
+  "entities": {
+    "call": [
+      {
+        "__key": "\u0000\u0005\u0001\u0001\u0001\u000e\u0000c\u0000a\u0000l\u0000l\u0000-\u00005\u0000-\u0000d\u0000e\u0000l\u0000e\u0000t\u0000e\u0000d",
+        "callDirection": "Outgoing",
+        "callState": "Accepted",
+        "callType": "TwoParty",
+        "durationInMs": 120000,
+        "id": "call-5-deleted",
+        "isDeleted": true,
+        "originator": {
+          "displayName": null,
+          "id": "8:orgid:a1000000-0000-4000-8000-000000000001"
+        },
+        "startTime": "2026-03-09T12:00:00.000Z",
+        "target": {
+          "displayName": null,
+          "id": "8:orgid:a1000000-0000-4000-8000-000000000002"
+        }
+      },
+      {
+        "__key": "\u0000\u0005\u0001\u0001\u0001\u000f\u0000c\u0000a\u0000l\u0000l\u0000-\u00004\u0000-\u0000r\u0000e\u0000c\u0000o\u0000r\u0000d\u0000e\u0000d",
+        "callDirection": "Incoming",
+        "callState": "Accepted",
+        "callType": "TwoParty",
+        "durationInMs": 3900000,
+        "id": "call-4-recorded",
+        "originator": {
+          "displayName": null,
+          "id": "8:orgid:a1000000-0000-4000-8000-000000000006"
+        },
+        "recordings": [
+          {
+            "contentTypes": "Recording+Transcript",
+            "id": "rec-call-4-recorded",
+            "linkedMessage": {
+              "conversationId": "19:f1e2d3c4b5a6@thread.v2",
+              "linkedMessageId": "1772443200000"
+            }
+          }
+        ],
+        "startTime": "2026-03-09T11:00:00.000Z",
+        "target": {
+          "displayName": null,
+          "id": "8:orgid:a1000000-0000-4000-8000-000000000001"
+        }
+      },
+      {
+        "__key": "\u0000\u0005\u0001\u0001\u0001\u0011\u0000c\u0000a\u0000l\u0000l\u0000-\u00003\u0000-\u0000m\u0000u\u0000l\u0000t\u0000i\u0000p\u0000a\u0000r\u0000t\u0000y",
+        "callDirection": "Outgoing",
+        "callState": "Accepted",
+        "callType": "MultiParty",
+        "durationInMs": 45000,
+        "groupChatThreadId": "19:f1e2d3c4b5a6@thread.v2",
+        "id": "call-3-multiparty",
+        "originator": {
+          "displayName": null,
+          "id": "8:orgid:a1000000-0000-4000-8000-000000000001"
+        },
+        "participantList": [
+          {
+            "displayName": null,
+            "id": "8:orgid:a1000000-0000-4000-8000-000000000001"
+          },
+          {
+            "displayName": null,
+            "id": "8:orgid:a1000000-0000-4000-8000-000000000004"
+          },
+          {
+            "displayName": null,
+            "id": "8:orgid:a1000000-0000-4000-8000-000000000005"
+          }
+        ],
+        "startTime": "2026-03-09T10:00:00.000Z",
+        "target": {
+          "displayName": null,
+          "id": "8:orgid:a1000000-0000-4000-8000-000000000004"
+        }
+      },
+      {
+        "__key": "\u0000\u0005\u0001\u0001\u0001\u0016\u0000c\u0000a\u0000l\u0000l\u0000-\u00002\u0000-\u0000o\u0000u\u0000t\u0000g\u0000o\u0000i\u0000n\u0000g\u0000-\u0000m\u0000i\u0000s\u0000s\u0000e\u0000d",
+        "callDirection": "Outgoing",
+        "callState": "Missed",
+        "callType": "TwoParty",
+        "durationInMs": 0,
+        "id": "call-2-outgoing-missed",
+        "originator": {
+          "displayName": null,
+          "id": "8:orgid:a1000000-0000-4000-8000-000000000001"
+        },
+        "startTime": "2026-03-09T09:00:00.000Z",
+        "target": {
+          "displayName": null,
+          "id": "8:orgid:a1000000-0000-4000-8000-000000000003"
+        }
+      },
+      {
+        "__key": "\u0000\u0005\u0001\u0001\u0001\u0018\u0000c\u0000a\u0000l\u0000l\u0000-\u00001\u0000-\u0000i\u0000n\u0000c\u0000o\u0000m\u0000i\u0000n\u0000g\u0000-\u0000a\u0000c\u0000c\u0000e\u0000p\u0000t\u0000e\u0000d",
+        "callDirection": "Incoming",
+        "callState": "Accepted",
+        "callType": "TwoParty",
+        "durationInMs": 300000,
+        "id": "call-1-incoming-accepted",
+        "originator": {
+          "displayName": null,
+          "id": "8:orgid:a1000000-0000-4000-8000-000000000007"
+        },
+        "startTime": "2026-03-09T08:00:00.000Z",
+        "target": {
+          "displayName": null,
+          "id": "8:orgid:a1000000-0000-4000-8000-000000000001"
+        }
+      }
+    ],
+    "conversation": [
+      {
+        "__key": "\u0000\u0001\u0001\u0001\u0001\u0019\u00001\u00009\u0000:\u0000f\u00001\u0000e\u00002\u0000d\u00003\u0000c\u00004\u0000b\u00005\u0000a\u00006\u0000@\u0000t\u0000h\u0000r\u0000e\u0000a\u0000d\u0000.\u0000v\u00002",
+        "id": "19:f1e2d3c4b5a6@thread.v2",
+        "lastMessageTimeUtc": 1772444400000,
+        "threadType": "chat",
+        "topic": "study-group-cs101",
+        "type": "Chat"
+      },
+      {
+        "__key": "\u0000\u0001\u0001\u0001\u0001\u001b\u00001\u00009\u0000:\u0000m\u0000e\u0000e\u0000t\u0000i\u0000n\u0000g\u0000_\u00009\u00009\u00008\u00008\u00007\u00007\u0000@\u0000t\u0000h\u0000r\u0000e\u0000a\u0000d\u0000.\u0000v\u00002",
+        "id": "19:meeting_998877@thread.v2",
+        "lastMessageTimeUtc": 1772448600000,
+        "threadType": "meeting",
+        "topic": "CS101 Midterm Review Session",
+        "type": "Meeting"
+      },
+      {
+        "__key": "\u0000\u0001\u0001\u0001\u0001\u001c\u00001\u00009\u0000:\u00001\u00001\u00002\u00002\u00003\u00003\u00004\u00004\u0000a\u0000a\u0000b\u0000b\u0000@\u0000t\u0000h\u0000r\u0000e\u0000a\u0000d\u0000.\u0000t\u0000a\u0000c\u0000v\u00002",
+        "id": "19:11223344aabb@thread.tacv2",
+        "lastMessageTimeUtc": 1772448000000,
+        "teamId": "team-cs101-guid-0000",
+        "threadType": "channel",
+        "topic": "CS101 Algorithms - General",
+        "type": "Channel"
+      },
+      {
+        "__key": "\u0000\u0001\u0001\u0001\u0001\u001e\u00001\u00009\u0000:\u0000a\u00001\u0000b\u00002\u0000c\u00003\u0000d\u00004\u0000e\u00005\u0000f\u00006\u0000@\u0000u\u0000n\u0000q\u0000.\u0000g\u0000b\u0000l\u0000.\u0000s\u0000p\u0000a\u0000c\u0000e\u0000s",
+        "id": "19:a1b2c3d4e5f6@unq.gbl.spaces",
+        "lastMessageTimeUtc": 1772442600000,
+        "type": "Chat"
+      }
+    ],
+    "event": [
+      {
+        "__key": "\u0000\u0004\u0001\u0001\u0001\u0010\u0000e\u0000v\u0000t\u0000-\u0000a\u0000p\u0000p\u0000t\u0000-\u0000d\u0000e\u0000n\u0000t\u0000i\u0000s\u0000t",
+        "endTime": "2026-03-10T14:30:00.000Z",
+        "id": "evt-appt-dentist",
+        "myResponse": "Organizer",
+        "organizerEmail": "ada.lovelace@example.edu",
+        "organizerName": "Ada Lovelace",
+        "showAs": "Busy",
+        "startTime": "2026-03-10T14:00:00.000Z",
+        "subject": "Dentist appointment"
+      },
+      {
+        "__key": "\u0000\u0004\u0001\u0001\u0001\u0010\u0000e\u0000v\u0000t\u0000-\u0000s\u0000e\u0000r\u0000i\u0000e\u0000s\u0000-\u0000e\u0000x\u0000c\u0000-\u00001",
+        "endTime": "2026-03-20T10:15:00.000Z",
+        "eventType": "Exception",
+        "id": "evt-series-exc-1",
+        "myResponse": "Accepted",
+        "organizerEmail": "grace.hopper@example.edu",
+        "organizerName": "Grace Hopper",
+        "seriesId": "series-standup-001",
+        "showAs": "Busy",
+        "startTime": "2026-03-20T10:00:00.000Z",
+        "subject": "Daily Standup (moved)"
+      },
+      {
+        "__key": "\u0000\u0004\u0001\u0001\u0001\u0010\u0000e\u0000v\u0000t\u0000-\u0000s\u0000e\u0000r\u0000i\u0000e\u0000s\u0000-\u0000o\u0000c\u0000c\u0000-\u00001",
+        "endTime": "2026-03-16T09:30:00.000Z",
+        "eventType": "Occurrence",
+        "id": "evt-series-occ-1",
+        "myResponse": "Accepted",
+        "organizerEmail": "grace.hopper@example.edu",
+        "organizerName": "Grace Hopper",
+        "seriesId": "series-standup-001",
+        "showAs": "Busy",
+        "startTime": "2026-03-16T09:15:00.000Z",
+        "subject": "Daily Standup"
+      },
+      {
+        "__key": "\u0000\u0004\u0001\u0001\u0001\u0010\u0000e\u0000v\u0000t\u0000-\u0000s\u0000e\u0000r\u0000i\u0000e\u0000s\u0000-\u0000o\u0000c\u0000c\u0000-\u00002",
+        "endTime": "2026-03-17T09:30:00.000Z",
+        "eventType": "Occurrence",
+        "id": "evt-series-occ-2",
+        "myResponse": "Accepted",
+        "organizerEmail": "grace.hopper@example.edu",
+        "organizerName": "Grace Hopper",
+        "seriesId": "series-standup-001",
+        "showAs": "Busy",
+        "startTime": "2026-03-17T09:15:00.000Z",
+        "subject": "Daily Standup"
+      },
+      {
+        "__key": "\u0000\u0004\u0001\u0001\u0001\u0010\u0000e\u0000v\u0000t\u0000-\u0000s\u0000e\u0000r\u0000i\u0000e\u0000s\u0000-\u0000o\u0000c\u0000c\u0000-\u00003",
+        "endTime": "2026-03-18T09:30:00.000Z",
+        "eventType": "Occurrence",
+        "id": "evt-series-occ-3",
+        "myResponse": "Accepted",
+        "organizerEmail": "grace.hopper@example.edu",
+        "organizerName": "Grace Hopper",
+        "seriesId": "series-standup-001",
+        "showAs": "Busy",
+        "startTime": "2026-03-18T09:15:00.000Z",
+        "subject": "Daily Standup"
+      },
+      {
+        "__key": "\u0000\u0004\u0001\u0001\u0001\u0010\u0000e\u0000v\u0000t\u0000-\u0000s\u0000e\u0000r\u0000i\u0000e\u0000s\u0000-\u0000o\u0000c\u0000c\u0000-\u00004",
+        "endTime": "2026-03-19T09:30:00.000Z",
+        "eventType": "Occurrence",
+        "id": "evt-series-occ-4",
+        "myResponse": "Accepted",
+        "organizerEmail": "grace.hopper@example.edu",
+        "organizerName": "Grace Hopper",
+        "seriesId": "series-standup-001",
+        "showAs": "Busy",
+        "startTime": "2026-03-19T09:15:00.000Z",
+        "subject": "Daily Standup"
+      },
+      {
+        "__key": "\u0000\u0004\u0001\u0001\u0001\u0011\u0000e\u0000v\u0000t\u0000-\u0000s\u0000e\u0000r\u0000i\u0000e\u0000s\u0000-\u0000m\u0000a\u0000s\u0000t\u0000e\u0000r",
+        "endTime": "2026-03-16T09:30:00.000Z",
+        "eventType": "RecurringMaster",
+        "id": "evt-series-master",
+        "organizerEmail": "grace.hopper@example.edu",
+        "organizerName": "Grace Hopper",
+        "seriesId": "series-standup-001",
+        "showAs": "Busy",
+        "startTime": "2026-03-16T09:15:00.000Z",
+        "subject": "Daily Standup"
+      },
+      {
+        "__key": "\u0000\u0004\u0001\u0001\u0001\u0012\u0000e\u0000v\u0000t\u0000-\u0000a\u0000p\u0000p\u0000t\u0000-\u0000w\u0000i\u0000t\u0000h\u0000-\u0000b\u0000o\u0000d\u0000y",
+        "bodyContent": "<p>Room booked. Floor plan: https://example.invalid/floorplans/room3</p>",
+        "endTime": "2026-03-15T11:15:00.000Z",
+        "id": "evt-appt-with-body",
+        "myResponse": "Organizer",
+        "organizerEmail": "ada.lovelace@example.edu",
+        "organizerName": "Ada Lovelace",
+        "showAs": "Busy",
+        "startTime": "2026-03-15T11:00:00.000Z",
+        "subject": "Room Booking Confirmation"
+      },
+      {
+        "__key": "\u0000\u0004\u0001\u0001\u0001\u0012\u0000e\u0000v\u0000t\u0000-\u0000m\u0000e\u0000e\u0000t\u0000i\u0000n\u0000g\u0000-\u0000c\u0000a\u0000c\u0000h\u0000e\u0000d",
+        "attendees": [
+          {
+            "address": "ada.lovelace@example.edu",
+            "name": "Ada Lovelace",
+            "role": "User",
+            "status": {
+              "response": "Accepted"
+            },
+            "type": "Organizer"
+          },
+          {
+            "address": "alan.turing@example.edu",
+            "name": "Alan Turing",
+            "role": "User",
+            "status": {
+              "response": "Accepted"
+            },
+            "type": "Required"
+          },
+          {
+            "address": "grace.hopper@example.edu",
+            "name": "Grace Hopper",
+            "role": "User",
+            "status": {
+              "response": "Tentative"
+            },
+            "type": "Required"
+          },
+          {
+            "address": "room-cs101@example.edu",
+            "name": "Room CS-101",
+            "role": "User",
+            "status": {
+              "response": "Accepted"
+            },
+            "type": "Resource"
+          }
+        ],
+        "cid": "19:meeting_998877@thread.v2",
+        "endTime": "2026-03-11T15:30:00.000Z",
+        "id": "evt-meeting-cached",
+        "isOnlineMeeting": true,
+        "myResponse": "Accepted",
+        "organizerEmail": "alan.turing@example.edu",
+        "organizerName": "Alan Turing",
+        "showAs": "Busy",
+        "startTime": "2026-03-11T15:00:00.000Z",
+        "subject": "CS101 Midterm Review Session"
+      },
+      {
+        "__key": "\u0000\u0004\u0001\u0001\u0001\u0013\u0000e\u0000v\u0000t\u0000-\u0000c\u0000a\u0000n\u0000c\u0000e\u0000l\u0000l\u0000e\u0000d\u0000-\u0000s\u0000t\u0000u\u0000d\u0000y",
+        "endTime": "2026-03-13T09:30:00.000Z",
+        "id": "evt-cancelled-study",
+        "isCancelled": true,
+        "organizerEmail": "barbara.liskov@example.edu",
+        "organizerName": "Barbara Liskov",
+        "showAs": "Free",
+        "startTime": "2026-03-13T09:00:00.000Z",
+        "subject": "Cancelled Study Session"
+      },
+      {
+        "__key": "\u0000\u0004\u0001\u0001\u0001\u0013\u0000e\u0000v\u0000t\u0000-\u0000m\u0000e\u0000e\u0000t\u0000i\u0000n\u0000g\u0000-\u0000n\u0000o\u0000c\u0000a\u0000c\u0000h\u0000e",
+        "attendees": [
+          {
+            "address": "ada.lovelace@example.edu",
+            "name": "Ada Lovelace",
+            "role": "User",
+            "status": {
+              "response": "None"
+            },
+            "type": "Required"
+          },
+          {
+            "address": "edsger.dijkstra@example.edu",
+            "name": "Edsger Dijkstra",
+            "role": "User",
+            "status": {
+              "response": "Accepted"
+            },
+            "type": "Organizer"
+          }
+        ],
+        "cid": "19:meeting_nomatch111@thread.v2",
+        "endTime": "2026-03-12T11:00:00.000Z",
+        "id": "evt-meeting-nocache",
+        "isOnlineMeeting": true,
+        "myResponse": "NotResponded",
+        "organizerEmail": "edsger.dijkstra@example.edu",
+        "organizerName": "Edsger Dijkstra",
+        "showAs": "Busy",
+        "startTime": "2026-03-12T10:00:00.000Z",
+        "subject": "Guest Lecture: Distributed Systems"
+      },
+      {
+        "__key": "\u0000\u0004\u0001\u0001\u0001\u0015\u0000e\u0000v\u0000t\u0000-\u0000c\u0000o\u0000n\u0000f\u0000i\u0000d\u0000e\u0000n\u0000t\u0000i\u0000a\u0000l\u0000-\u00001\u0000o\u0000n\u00001",
+        "bodyContent": "<p>Sensitive agenda: see https://example.invalid/secret-doc for details.</p>",
+        "doNotForward": true,
+        "endTime": "2026-03-14T13:30:00.000Z",
+        "id": "evt-confidential-1on1",
+        "myResponse": "Organizer",
+        "organizerEmail": "ada.lovelace@example.edu",
+        "organizerName": "Ada Lovelace",
+        "showAs": "Busy",
+        "startTime": "2026-03-14T13:00:00.000Z",
+        "subject": "Confidential 1:1"
+      }
+    ],
+    "message": [
+      {
+        "__key": "\u0000\u0002\u0001\u0001\u0001\u0019\u00001\u00009\u0000:\u0000f\u00001\u0000e\u00002\u0000d\u00003\u0000c\u00004\u0000b\u00005\u0000a\u00006\u0000@\u0000t\u0000h\u0000r\u0000e\u0000a\u0000d\u0000.\u0000v\u00002",
+        "content": "<addedMembers>Ada Lovelace, Alan Turing, Barbara Liskov, Edsger Dijkstra, Radia Perlman</addedMembers>",
+        "contentType": "text",
+        "conversationId": "19:f1e2d3c4b5a6@thread.v2",
+        "id": "1772442900000",
+        "isSentByCurrentUser": false,
+        "messageType": "ThreadActivity/AddMember",
+        "parentMessageId": "1772442900000",
+        "senderId": "8:orgid:a1000000-0000-4000-8000-000000000003",
+        "senderName": "Grace Hopper",
+        "time": "2026-03-02T09:15:00.000Z",
+        "version": 1
+      },
+      {
+        "__key": "\u0000\u0002\u0001\u0001\u0001\u0019\u00001\u00009\u0000:\u0000f\u00001\u0000e\u00002\u0000d\u00003\u0000c\u00004\u0000b\u00005\u0000a\u00006\u0000@\u0000t\u0000h\u0000r\u0000e\u0000a\u0000d\u0000.\u0000v\u00002",
+        "content": "<p>Welcome to the <b>CS101</b> study group!</p>",
+        "contentType": "text",
+        "conversationId": "19:f1e2d3c4b5a6@thread.v2",
+        "files": [
+          "https://example.invalid/files/syllabus.pdf"
+        ],
+        "id": "1772443200000",
+        "isSentByCurrentUser": false,
+        "messageType": "RichText/Html",
+        "parentMessageId": "1772443200000",
+        "reactions": [
+          {
+            "key": "heart",
+            "users": [
+              {
+                "mri": "8:orgid:a1000000-0000-4000-8000-000000000006",
+                "time": 1772454060000
+              }
+            ]
+          },
+          {
+            "key": "1f389_partypopper",
+            "users": [
+              {
+                "mri": "8:orgid:a1000000-0000-4000-8000-000000000005",
+                "time": 1772454120000
+              },
+              {
+                "mri": "8:orgid:a1000000-0000-4000-8000-000000000004",
+                "time": 1772454180000
+              }
+            ]
+          },
+          {
+            "key": "surprised",
+            "users": [
+              {
+                "mri": "8:orgid:a1000000-0000-4000-8000-000000000007",
+                "time": 1772454240000
+              }
+            ]
+          }
+        ],
+        "senderId": "8:orgid:a1000000-0000-4000-8000-000000000004",
+        "senderName": "Barbara Liskov",
+        "time": "2026-03-02T09:20:00.000Z",
+        "version": 1
+      },
+      {
+        "__key": "\u0000\u0002\u0001\u0001\u0001\u0019\u00001\u00009\u0000:\u0000f\u00001\u0000e\u00002\u0000d\u00003\u0000c\u00004\u0000b\u00005\u0000a\u00006\u0000@\u0000t\u0000h\u0000r\u0000e\u0000a\u0000d\u0000.\u0000v\u00002",
+        "content": "Can someone explain memoization vs dynamic programming?",
+        "contentType": "text",
+        "conversationId": "19:f1e2d3c4b5a6@thread.v2",
+        "id": "1772443500000",
+        "isSentByCurrentUser": false,
+        "messageType": "RichText/Html",
+        "parentMessageId": "1772443500000",
+        "senderId": "8:orgid:a1000000-0000-4000-8000-000000000005",
+        "senderName": "Edsger Dijkstra",
+        "time": "2026-03-02T09:25:00.000Z",
+        "version": 1
+      },
+      {
+        "__key": "\u0000\u0002\u0001\u0001\u0001\u0019\u00001\u00009\u0000:\u0000f\u00001\u0000e\u00002\u0000d\u00003\u0000c\u00004\u0000b\u00005\u0000a\u00006\u0000@\u0000t\u0000h\u0000r\u0000e\u0000a\u0000d\u0000.\u0000v\u00002",
+        "content": "Reminder: Assignment 4 is due Friday at 11:59pm.",
+        "contentType": "text",
+        "conversationId": "19:f1e2d3c4b5a6@thread.v2",
+        "id": "1772443800000",
+        "isSentByCurrentUser": false,
+        "messageType": "RichText/Html",
+        "parentMessageId": "1772443800000",
+        "reactions": [
+          {
+            "key": "laugh",
+            "users": [
+              {
+                "mri": "8:orgid:a1000000-0000-4000-8000-000000000002",
+                "time": 1772454300000
+              },
+              {
+                "mri": "8:orgid:a1000000-0000-4000-8000-000000000003",
+                "time": 1772454360000
+              },
+              {
+                "mri": "8:orgid:a1000000-0000-4000-8000-000000000004",
+                "time": 1772454420000
+              },
+              {
+                "mri": "8:orgid:a1000000-0000-4000-8000-000000000005",
+                "time": 1772454480000
+              },
+              {
+                "mri": "8:orgid:a1000000-0000-4000-8000-000000000001",
+                "time": 1772454540000
+              }
+            ]
+          }
+        ],
+        "senderId": "28:b0000000-0000-4000-8000-000000000001",
+        "senderName": "CS101 Course Bot",
+        "time": "2026-03-02T09:30:00.000Z",
+        "version": 1
+      },
+      {
+        "__key": "\u0000\u0002\u0001\u0001\u0001\u0019\u00001\u00009\u0000:\u0000f\u00001\u0000e\u00002\u0000d\u00003\u0000c\u00004\u0000b\u00005\u0000a\u00006\u0000@\u0000t\u0000h\u0000r\u0000e\u0000a\u0000d\u0000.\u0000v\u00002",
+        "content": "Sure, sharing now.",
+        "contentType": "text",
+        "conversationId": "19:f1e2d3c4b5a6@thread.v2",
+        "id": "1772444400000",
+        "isSentByCurrentUser": true,
+        "messageType": "RichText/Html",
+        "parentMessageId": "1772444400000",
+        "senderId": "8:orgid:a1000000-0000-4000-8000-000000000001",
+        "senderName": "Ada Lovelace",
+        "time": "2026-03-02T09:40:00.000Z",
+        "version": 1
+      },
+      {
+        "__key": "\u0000\u0002\u0001\u0001\u0001\u0019\u00001\u00009\u0000:\u0000f\u00001\u0000e\u00002\u0000d\u00003\u0000c\u00004\u0000b\u00005\u0000a\u00006\u0000@\u0000t\u0000h\u0000r\u0000e\u0000a\u0000d\u0000.\u0000v\u00002",
+        "content": "Thanks bot! @Ada Lovelace can you share your notes?",
+        "contentType": "text",
+        "conversationId": "19:f1e2d3c4b5a6@thread.v2",
+        "id": "1772444100000",
+        "isSentByCurrentUser": false,
+        "mentions": "[{\"mri\":\"8:orgid:a1000000-0000-4000-8000-000000000001\",\"displayName\":\"Ada Lovelace\"}]",
+        "messageType": "RichText/Html",
+        "parentMessageId": "1772444100000",
+        "senderId": "8:orgid:a1000000-0000-4000-8000-000000000006",
+        "senderName": "Radia Perlman",
+        "time": "2026-03-02T09:35:00.000Z",
+        "version": 1
+      },
+      {
+        "__key": "\u0000\u0002\u0001\u0001\u0001\u001b\u00001\u00009\u0000:\u0000m\u0000e\u0000e\u0000t\u0000i\u0000n\u0000g\u0000_\u00009\u00009\u00008\u00008\u00007\u00007\u0000@\u0000t\u0000h\u0000r\u0000e\u0000a\u0000d\u0000.\u0000v\u00002",
+        "content": "Looking forward to the midterm review!",
+        "contentType": "text",
+        "conversationId": "19:meeting_998877@thread.v2",
+        "id": "1772448300000",
+        "isSentByCurrentUser": false,
+        "messageType": "RichText/Html",
+        "parentMessageId": "1772448300000",
+        "senderId": "8:orgid:a1000000-0000-4000-8000-000000000002",
+        "senderName": "Alan Turing",
+        "time": "2026-03-02T10:45:00.000Z",
+        "version": 1
+      },
+      {
+        "__key": "\u0000\u0002\u0001\u0001\u0001\u001b\u00001\u00009\u0000:\u0000m\u0000e\u0000e\u0000t\u0000i\u0000n\u0000g\u0000_\u00009\u00009\u00008\u00008\u00007\u00007\u0000@\u0000t\u0000h\u0000r\u0000e\u0000a\u0000d\u0000.\u0000v\u00002",
+        "content": "See everyone at 3pm.",
+        "contentType": "text",
+        "conversationId": "19:meeting_998877@thread.v2",
+        "id": "1772448600000",
+        "isSentByCurrentUser": true,
+        "messageType": "RichText/Html",
+        "parentMessageId": "1772448600000",
+        "senderId": "8:orgid:a1000000-0000-4000-8000-000000000001",
+        "senderName": "Ada Lovelace",
+        "time": "2026-03-02T10:50:00.000Z",
+        "version": 1
+      },
+      {
+        "__key": "\u0000\u0002\u0001\u0001\u0001\u001c\u00001\u00009\u0000:\u00001\u00001\u00002\u00002\u00003\u00003\u00004\u00004\u0000a\u0000a\u0000b\u0000b\u0000@\u0000t\u0000h\u0000r\u0000e\u0000a\u0000d\u0000.\u0000t\u0000a\u0000c\u0000v\u00002",
+        "content": "<topicUpdate>CS101 Algorithms - General</topicUpdate>",
+        "contentType": "text",
+        "conversationId": "19:11223344aabb@thread.tacv2",
+        "id": "1772448000000",
+        "isSentByCurrentUser": false,
+        "messageType": "ThreadActivity/TopicUpdate",
+        "parentMessageId": "1772448000000",
+        "senderId": "8:orgid:a1000000-0000-4000-8000-000000000003",
+        "senderName": "Grace Hopper",
+        "time": "2026-03-02T10:40:00.000Z",
+        "version": 1
+      },
+      {
+        "__key": "\u0000\u0002\u0001\u0001\u0001\u001c\u00001\u00009\u0000:\u00001\u00001\u00002\u00002\u00003\u00003\u00004\u00004\u0000a\u0000a\u0000b\u0000b\u0000@\u0000t\u0000h\u0000r\u0000e\u0000a\u0000d\u0000.\u0000t\u0000a\u0000c\u0000v\u00002",
+        "content": "Are the lectures recorded too?",
+        "contentType": "text",
+        "conversationId": "19:11223344aabb@thread.tacv2",
+        "id": "1772445300000",
+        "isSentByCurrentUser": false,
+        "messageType": "RichText/Html",
+        "parentMessageId": "1772444700000",
+        "senderId": "8:orgid:a1000000-0000-4000-8000-000000000002",
+        "senderName": "Alan Turing",
+        "time": "2026-03-02T09:55:00.000Z",
+        "version": 1
+      },
+      {
+        "__key": "\u0000\u0002\u0001\u0001\u0001\u001c\u00001\u00009\u0000:\u00001\u00001\u00002\u00002\u00003\u00003\u00004\u00004\u0000a\u0000a\u0000b\u0000b\u0000@\u0000t\u0000h\u0000r\u0000e\u0000a\u0000d\u0000.\u0000t\u0000a\u0000c\u0000v\u00002",
+        "content": "CLRS chapter 8 is the classic.",
+        "contentType": "text",
+        "conversationId": "19:11223344aabb@thread.tacv2",
+        "id": "1772446200000",
+        "isSentByCurrentUser": false,
+        "messageType": "RichText/Html",
+        "parentMessageId": "1772445600000",
+        "senderId": "8:orgid:a1000000-0000-4000-8000-000000000003",
+        "senderName": "Grace Hopper",
+        "time": "2026-03-02T10:10:00.000Z",
+        "version": 1
+      },
+      {
+        "__key": "\u0000\u0002\u0001\u0001\u0001\u001c\u00001\u00009\u0000:\u00001\u00001\u00002\u00002\u00003\u00003\u00004\u00004\u0000a\u0000a\u0000b\u0000b\u0000@\u0000t\u0000h\u0000r\u0000e\u0000a\u0000d\u0000.\u0000t\u0000a\u0000c\u0000v\u00002",
+        "content": "I'll pin these to the channel.",
+        "contentType": "text",
+        "conversationId": "19:11223344aabb@thread.tacv2",
+        "id": "1772447700000",
+        "isSentByCurrentUser": false,
+        "messageType": "RichText/Html",
+        "parentMessageId": "1772445600000",
+        "senderId": "8:orgid:a1000000-0000-4000-8000-000000000003",
+        "senderName": "Grace Hopper",
+        "time": "2026-03-02T10:35:00.000Z",
+        "version": 1
+      },
+      {
+        "__key": "\u0000\u0002\u0001\u0001\u0001\u001c\u00001\u00009\u0000:\u00001\u00001\u00002\u00002\u00003\u00003\u00004\u00004\u0000a\u0000a\u0000b\u0000b\u0000@\u0000t\u0000h\u0000r\u0000e\u0000a\u0000d\u0000.\u0000t\u0000a\u0000c\u0000v\u00002",
+        "content": "I'll post the recording link after class.",
+        "contentType": "text",
+        "conversationId": "19:11223344aabb@thread.tacv2",
+        "id": "1772445900000",
+        "isSentByCurrentUser": true,
+        "messageType": "RichText/Html",
+        "parentMessageId": "1772444700000",
+        "senderId": "8:orgid:a1000000-0000-4000-8000-000000000001",
+        "senderName": "Ada Lovelace",
+        "time": "2026-03-02T10:05:00.000Z",
+        "version": 1
+      },
+      {
+        "__key": "\u0000\u0002\u0001\u0001\u0001\u001c\u00001\u00009\u0000:\u00001\u00001\u00002\u00002\u00003\u00003\u00004\u00004\u0000a\u0000a\u0000b\u0000b\u0000@\u0000t\u0000h\u0000r\u0000e\u0000a\u0000d\u0000.\u0000t\u0000a\u0000c\u0000v\u00002",
+        "content": "Lecture slides for week 5 are posted.",
+        "contentType": "text",
+        "conversationId": "19:11223344aabb@thread.tacv2",
+        "files": [
+          "https://example.invalid/files/week5-slides.pdf"
+        ],
+        "id": "1772445000000",
+        "isSentByCurrentUser": false,
+        "messageType": "RichText/Html",
+        "parentMessageId": "1772445000000",
+        "senderId": "8:orgid:a1000000-0000-4000-8000-000000000003",
+        "senderName": "Grace Hopper",
+        "time": "2026-03-02T09:50:00.000Z",
+        "version": 1
+      },
+      {
+        "__key": "\u0000\u0002\u0001\u0001\u0001\u001c\u00001\u00009\u0000:\u00001\u00001\u00002\u00002\u00003\u00003\u00004\u00004\u0000a\u0000a\u0000b\u0000b\u0000@\u0000t\u0000h\u0000r\u0000e\u0000a\u0000d\u0000.\u0000t\u0000a\u0000c\u0000v\u00002",
+        "content": "Reading list for the sorting unit — suggestions? 📚",
+        "contentType": "text",
+        "conversationId": "19:11223344aabb@thread.tacv2",
+        "id": "1772445600000",
+        "isSentByCurrentUser": false,
+        "messageType": "RichText/Html",
+        "parentMessageId": "1772445600000",
+        "senderId": "8:orgid:a1000000-0000-4000-8000-000000000004",
+        "senderName": "Barbara Liskov",
+        "time": "2026-03-02T10:00:00.000Z",
+        "version": 1
+      },
+      {
+        "__key": "\u0000\u0002\u0001\u0001\u0001\u001c\u00001\u00009\u0000:\u00001\u00001\u00002\u00002\u00003\u00003\u00004\u00004\u0000a\u0000a\u0000b\u0000b\u0000@\u0000t\u0000h\u0000r\u0000e\u0000a\u0000d\u0000.\u0000t\u0000a\u0000c\u0000v\u00002",
+        "content": "Sedgewick has nice animations.",
+        "contentType": "text",
+        "conversationId": "19:11223344aabb@thread.tacv2",
+        "id": "1772446500000",
+        "isSentByCurrentUser": false,
+        "messageType": "RichText/Html",
+        "parentMessageId": "1772445600000",
+        "senderId": "8:orgid:a1000000-0000-4000-8000-000000000002",
+        "senderName": "Alan Turing",
+        "time": "2026-03-02T10:15:00.000Z",
+        "version": 1
+      },
+      {
+        "__key": "\u0000\u0002\u0001\u0001\u0001\u001c\u00001\u00009\u0000:\u00001\u00001\u00002\u00002\u00003\u00003\u00004\u00004\u0000a\u0000a\u0000b\u0000b\u0000@\u0000t\u0000h\u0000r\u0000e\u0000a\u0000d\u0000.\u0000t\u0000a\u0000c\u0000v\u00002",
+        "content": "Skiena for building intuition.",
+        "contentType": "text",
+        "conversationId": "19:11223344aabb@thread.tacv2",
+        "id": "1772446800000",
+        "isSentByCurrentUser": false,
+        "messageType": "RichText/Html",
+        "parentMessageId": "1772445600000",
+        "senderId": "8:orgid:a1000000-0000-4000-8000-000000000005",
+        "senderName": "Edsger Dijkstra",
+        "time": "2026-03-02T10:20:00.000Z",
+        "version": 1
+      },
+      {
+        "__key": "\u0000\u0002\u0001\u0001\u0001\u001c\u00001\u00009\u0000:\u00001\u00001\u00002\u00002\u00003\u00003\u00004\u00004\u0000a\u0000a\u0000b\u0000b\u0000@\u0000t\u0000h\u0000r\u0000e\u0000a\u0000d\u0000.\u0000t\u0000a\u0000c\u0000v\u00002",
+        "content": "Thanks all - great suggestions.",
+        "contentType": "text",
+        "conversationId": "19:11223344aabb@thread.tacv2",
+        "id": "1772447400000",
+        "isSentByCurrentUser": false,
+        "messageType": "RichText/Html",
+        "parentMessageId": "1772445600000",
+        "senderId": "8:orgid:a1000000-0000-4000-8000-000000000004",
+        "senderName": "Barbara Liskov",
+        "time": "2026-03-02T10:30:00.000Z",
+        "version": 1
+      },
+      {
+        "__key": "\u0000\u0002\u0001\u0001\u0001\u001c\u00001\u00009\u0000:\u00001\u00001\u00002\u00002\u00003\u00003\u00004\u00004\u0000a\u0000a\u0000b\u0000b\u0000@\u0000t\u0000h\u0000r\u0000e\u0000a\u0000d\u0000.\u0000t\u0000a\u0000c\u0000v\u00002",
+        "content": "The Knuth volume if you dare.",
+        "contentType": "text",
+        "conversationId": "19:11223344aabb@thread.tacv2",
+        "id": "1772447100000",
+        "isSentByCurrentUser": false,
+        "messageType": "RichText/Html",
+        "parentMessageId": "1772445600000",
+        "senderId": "8:orgid:a1000000-0000-4000-8000-000000000006",
+        "senderName": "Radia Perlman",
+        "time": "2026-03-02T10:25:00.000Z",
+        "version": 1
+      },
+      {
+        "__key": "\u0000\u0002\u0001\u0001\u0001\u001c\u00001\u00009\u0000:\u00001\u00001\u00002\u00002\u00003\u00003\u00004\u00004\u0000a\u0000a\u0000b\u0000b\u0000@\u0000t\u0000h\u0000r\u0000e\u0000a\u0000d\u0000.\u0000t\u0000a\u0000c\u0000v\u00002",
+        "content": "Welcome to CS101: Algorithms and Data Structures.",
+        "contentType": "text",
+        "conversationId": "19:11223344aabb@thread.tacv2",
+        "id": "1772444700000",
+        "isSentByCurrentUser": false,
+        "messageType": "RichText/Html",
+        "parentMessageId": "1772444700000",
+        "senderId": "8:orgid:a1000000-0000-4000-8000-000000000005",
+        "senderName": "Edsger Dijkstra",
+        "time": "2026-03-02T09:45:00.000Z",
+        "version": 1
+      },
+      {
+        "__key": "\u0000\u0002\u0001\u0001\u0001\u001e\u00001\u00009\u0000:\u0000a\u00001\u0000b\u00002\u0000c\u00003\u0000d\u00004\u0000e\u00005\u0000f\u00006\u0000@\u0000u\u0000n\u0000q\u0000.\u0000g\u0000b\u0000l\u0000.\u0000s\u0000p\u0000a\u0000c\u0000e\u0000s",
+        "content": "Almost! Stuck on the Dijkstra part. Here is my scratch work: <img src=\"https://example.invalid/img/pset3-scratch.png\">",
+        "contentType": "text",
+        "conversationId": "19:a1b2c3d4e5f6@unq.gbl.spaces",
+        "id": "1772442300000",
+        "isSentByCurrentUser": false,
+        "messageType": "RichText/Html",
+        "parentMessageId": "1772442300000",
+        "senderId": "8:orgid:a1000000-0000-4000-8000-000000000002",
+        "senderName": "Alan Turing",
+        "time": "2026-03-02T09:05:00.000Z",
+        "version": 1
+      },
+      {
+        "__key": "\u0000\u0002\u0001\u0001\u0001\u001e\u00001\u00009\u0000:\u0000a\u00001\u0000b\u00002\u0000c\u00003\u0000d\u00004\u0000e\u00005\u0000f\u00006\u0000@\u0000u\u0000n\u0000q\u0000.\u0000g\u0000b\u0000l\u0000.\u0000s\u0000p\u0000a\u0000c\u0000e\u0000s",
+        "content": "Haha fitting given the professor's name. Let's meet before class.",
+        "contentType": "text",
+        "conversationId": "19:a1b2c3d4e5f6@unq.gbl.spaces",
+        "id": "1772442600000",
+        "isSentByCurrentUser": true,
+        "messageType": "RichText/Html",
+        "parentMessageId": "1772442600000",
+        "reactions": [
+          {
+            "key": "like",
+            "users": [
+              {
+                "mri": "8:orgid:a1000000-0000-4000-8000-000000000002",
+                "time": 1772454000000
+              }
+            ]
+          }
+        ],
+        "senderId": "8:orgid:a1000000-0000-4000-8000-000000000001",
+        "senderName": "Ada Lovelace",
+        "time": "2026-03-02T09:10:00.000Z",
+        "version": 1
+      },
+      {
+        "__key": "\u0000\u0002\u0001\u0001\u0001\u001e\u00001\u00009\u0000:\u0000a\u00001\u0000b\u00002\u0000c\u00003\u0000d\u00004\u0000e\u00005\u0000f\u00006\u0000@\u0000u\u0000n\u0000q\u0000.\u0000g\u0000b\u0000l\u0000.\u0000s\u0000p\u0000a\u0000c\u0000e\u0000s",
+        "content": "Hey Alan, did you finish problem set 3?",
+        "contentType": "text",
+        "conversationId": "19:a1b2c3d4e5f6@unq.gbl.spaces",
+        "id": "1772442000000",
+        "isSentByCurrentUser": true,
+        "messageType": "RichText/Html",
+        "parentMessageId": "1772442000000",
+        "senderId": "8:orgid:a1000000-0000-4000-8000-000000000001",
+        "senderName": "Ada Lovelace",
+        "time": "2026-03-02T09:00:00.000Z",
+        "version": 1
+      }
+    ],
+    "profile": [
+      {
+        "__key": "\u0000\u0003\u0001\u0001\u0001'\u00002\u00008\u0000:\u0000b\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u0000-\u00000\u00000\u00000\u00000\u0000-\u00004\u00000\u00000\u00000\u0000-\u00008\u00000\u00000\u00000\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001",
+        "mri": "28:b0000000-0000-4000-8000-000000000001",
+        "name": "CS101 Course Bot"
+      },
+      {
+        "__key": "\u0000\u0003\u0001\u0001\u0001,\u00008\u0000:\u0000o\u0000r\u0000g\u0000i\u0000d\u0000:\u0000a\u00001\u00000\u00000\u00000\u00000\u00000\u00000\u0000-\u00000\u00000\u00000\u00000\u0000-\u00004\u00000\u00000\u00000\u0000-\u00008\u00000\u00000\u00000\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001",
+        "mri": "8:orgid:a1000000-0000-4000-8000-000000000001",
+        "name": "Ada Lovelace"
+      },
+      {
+        "__key": "\u0000\u0003\u0001\u0001\u0001,\u00008\u0000:\u0000o\u0000r\u0000g\u0000i\u0000d\u0000:\u0000a\u00001\u00000\u00000\u00000\u00000\u00000\u00000\u0000-\u00000\u00000\u00000\u00000\u0000-\u00004\u00000\u00000\u00000\u0000-\u00008\u00000\u00000\u00000\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00002",
+        "mri": "8:orgid:a1000000-0000-4000-8000-000000000002",
+        "name": "Alan Turing"
+      },
+      {
+        "__key": "\u0000\u0003\u0001\u0001\u0001,\u00008\u0000:\u0000o\u0000r\u0000g\u0000i\u0000d\u0000:\u0000a\u00001\u00000\u00000\u00000\u00000\u00000\u00000\u0000-\u00000\u00000\u00000\u00000\u0000-\u00004\u00000\u00000\u00000\u0000-\u00008\u00000\u00000\u00000\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00003",
+        "mri": "8:orgid:a1000000-0000-4000-8000-000000000003",
+        "name": "Grace Hopper"
+      },
+      {
+        "__key": "\u0000\u0003\u0001\u0001\u0001,\u00008\u0000:\u0000o\u0000r\u0000g\u0000i\u0000d\u0000:\u0000a\u00001\u00000\u00000\u00000\u00000\u00000\u00000\u0000-\u00000\u00000\u00000\u00000\u0000-\u00004\u00000\u00000\u00000\u0000-\u00008\u00000\u00000\u00000\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00004",
+        "mri": "8:orgid:a1000000-0000-4000-8000-000000000004",
+        "name": "Barbara Liskov"
+      },
+      {
+        "__key": "\u0000\u0003\u0001\u0001\u0001,\u00008\u0000:\u0000o\u0000r\u0000g\u0000i\u0000d\u0000:\u0000a\u00001\u00000\u00000\u00000\u00000\u00000\u00000\u0000-\u00000\u00000\u00000\u00000\u0000-\u00004\u00000\u00000\u00000\u0000-\u00008\u00000\u00000\u00000\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00005",
+        "mri": "8:orgid:a1000000-0000-4000-8000-000000000005",
+        "name": "Edsger Dijkstra"
+      },
+      {
+        "__key": "\u0000\u0003\u0001\u0001\u0001,\u00008\u0000:\u0000o\u0000r\u0000g\u0000i\u0000d\u0000:\u0000a\u00001\u00000\u00000\u00000\u00000\u00000\u00000\u0000-\u00000\u00000\u00000\u00000\u0000-\u00004\u00000\u00000\u00000\u0000-\u00008\u00000\u00000\u00000\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00006",
+        "mri": "8:orgid:a1000000-0000-4000-8000-000000000006",
+        "name": "Radia Perlman"
+      },
+      {
+        "__key": "\u0000\u0003\u0001\u0001\u0001,\u00008\u0000:\u0000o\u0000r\u0000g\u0000i\u0000d\u0000:\u0000a\u00001\u00000\u00000\u00000\u00000\u00000\u00000\u0000-\u00000\u00000\u00000\u00000\u0000-\u00004\u00000\u00000\u00000\u0000-\u00008\u00000\u00000\u00000\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00007",
+        "mri": "8:orgid:a1000000-0000-4000-8000-000000000007",
+        "name": "Margaret Hamilton"
+      }
+    ]
+  },
+  "fingerprint": "5adebe91cfc8fd35"
+}

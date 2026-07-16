@@ -1,0 +1,25 @@
+{
+  "fingerprint": "37938b9e38ad7c79",
+  "entities": {
+    "conversation": {
+      "count": 227,
+      "sha256": "adcf8ffb5749e40ea1628393bf52153a4167c91f4f9bde13e71ef31592014d7c"
+    },
+    "message": {
+      "count": 11821,
+      "sha256": "a486b0b67b56645d6b5604bc5a89219a0e4a9f3b23d2a80ea496f9bdb035d818"
+    },
+    "profile": {
+      "count": 378,
+      "sha256": "5ad606a37515c8127f150e1e81ef85e560a66b88dd1a9c7295c3b2b7020851a0"
+    },
+    "event": {
+      "count": 407,
+      "sha256": "6013a7ac7bbab55444167d9468d545aa114d8eebdd05233e47d03812f1816a23"
+    },
+    "call": {
+      "count": 95,
+      "sha256": "8978e00f84ee2d5ea8e2e6194a3568ba0cf761ca52fa640cb22d8855a8883040"
+    }
+  }
+}

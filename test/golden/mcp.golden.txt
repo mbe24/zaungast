@@ -1,0 +1,114 @@
+########## list_conversations {n:5} ##########
+as_of 06-01 12:00 (tz+0) · 4 conversations
+c:9da8c9 [meeting] "CS101 Midterm Review Session" · 2 msg · last 03-02 10:50
+c:f7edc6 [channel] "CS101 Algorithms - General" · 11 msg · last 03-02 10:40
+c:c3199c [group] "study-group-cs101" · 5 msg · last 03-02 09:40
+c:e7d8cd [1:1] "Alan Turing" · 3 msg · last 03-02 09:10
+
+########## list_conversations {kind:"channel", n:4} ##########
+as_of 06-01 12:00 (tz+0) · 1 conversations
+c:f7edc6 [channel] "CS101 Algorithms - General" · 11 msg · last 03-02 10:40
+
+########## read_messages {conversation:"c:e7d8cd", limit:6} ##########
+as_of 06-01 12:00 (tz+0)
+c:e7d8cd [1:1] "Alan Turing" · showing 3/3 · local cache 03-02 09:00–03-02 09:10
+viewer: Ada Lovelace — "(you)" marks this account's owner, not the assistant
+03-02 09:00 Ada Lovelace (you)> Hey Alan, did you finish problem set 3?
+03-02 09:05 Alan Turing> Almost! Stuck on the Dijkstra part. Here is my scratch work: [attachment]
+03-02 09:10 Ada Lovelace (you)> Haha fitting given the professor's name. Let's meet before class.
+      👍 1 · Alan Turing
+
+########## read_messages {conversation:"c:f7edc6", limit:40} (channel digest) ##########
+as_of 06-01 12:00 (tz+0)
+c:f7edc6 [channel] "CS101 Algorithms - General" · 11 msgs / 3 threads · showing 3 threads, 8 msgs · threads by last activity · local cache 03-02 09:45–03-02 10:35
+viewer: Ada Lovelace — "(you)" marks this account's owner, not the assistant
+03-02 09:50 Grace Hopper> Lecture slides for week 5 are posted. [attachment]
+
+03-02 09:45 Edsger Dijkstra> Welcome to CS101: Algorithms and Data Structures.  [thread m:1772444700000 · 2 replies · last 03-02 10:05]
+  03-02 09:55 Alan Turing> Are the lectures recorded too?
+  03-02 10:05 Ada Lovelace (you)> I'll post the recording link after class.
+
+03-02 10:00 Barbara Liskov> Reading list for the sorting unit — suggestions? 📚  [thread m:1772445600000 · 6 replies · last 03-02 10:35]
+  +3 earlier · read_messages(thread: m:1772445600000)
+  03-02 10:25 Radia Perlman> The Knuth volume if you dare.
+  03-02 10:30 Barbara Liskov> Thanks all - great suggestions.
+  03-02 10:35 Grace Hopper> I'll pin these to the channel.
+
+########## read_messages {conversation:"c:f7edc6", reactions:"full"} ##########
+as_of 06-01 12:00 (tz+0)
+c:f7edc6 [channel] "CS101 Algorithms - General" · 11 msgs / 3 threads · showing 3 threads, 8 msgs · threads by last activity · local cache 03-02 09:45–03-02 10:35
+viewer: Ada Lovelace — "(you)" marks this account's owner, not the assistant
+03-02 09:50 Grace Hopper> Lecture slides for week 5 are posted. [attachment]
+
+03-02 09:45 Edsger Dijkstra> Welcome to CS101: Algorithms and Data Structures.  [thread m:1772444700000 · 2 replies · last 03-02 10:05]
+  03-02 09:55 Alan Turing> Are the lectures recorded too?
+  03-02 10:05 Ada Lovelace (you)> I'll post the recording link after class.
+
+03-02 10:00 Barbara Liskov> Reading list for the sorting unit — suggestions? 📚  [thread m:1772445600000 · 6 replies · last 03-02 10:35]
+  +3 earlier · read_messages(thread: m:1772445600000)
+  03-02 10:25 Radia Perlman> The Knuth volume if you dare.
+  03-02 10:30 Barbara Liskov> Thanks all - great suggestions.
+  03-02 10:35 Grace Hopper> I'll pin these to the channel.
+
+########## read_messages {conversation:"c:f7edc6", thread:"m:1772444700000"} ##########
+as_of 06-01 12:00 (tz+0)
+c:f7edc6 [channel] "CS101 Algorithms - General" · thread m:1772444700000 · showing 3/3 · complete
+viewer: Ada Lovelace — "(you)" marks this account's owner, not the assistant
+03-02 09:45 Edsger Dijkstra> Welcome to CS101: Algorithms and Data Structures.
+  03-02 09:55 Alan Turing> Are the lectures recorded too?
+  03-02 10:05 Ada Lovelace (you)> I'll post the recording link after class.
+
+########## search {query:"the", limit:10} ##########
+as_of 06-01 12:00 (tz+0) · order:relevance · 10 hits
+viewer: Ada Lovelace — "(you)" marks this account's owner, not the assistant
+c:f7edc6="CS101 Algorithms - General" · c:c3199c="study-group-cs101" · c:9da8c9="CS101 Midterm Review Session" · c:e7d8cd="Alan Turing"
+c:f7edc6 03-02 09:55 m:1772445300000 Alan Turing> Are [the] lectures recorded too?
+c:c3199c 03-02 09:20 m:1772443200000 Barbara Liskov> Welcome to [the] CS101 study group!
+c:9da8c9 03-02 10:45 m:1772448300000 Alan Turing> Looking forward to [the] midterm review!
+c:f7edc6 03-02 10:10 m:1772446200000 Grace Hopper> CLRS chapter 8 is [the] classic.
+c:f7edc6 03-02 10:25 m:1772447100000 Radia Perlman> [The] Knuth volume if you dare.
+c:f7edc6 03-02 10:00 m:1772445600000 Barbara Liskov> Reading list for [the] sorting unit — suggestions? 📚
+c:f7edc6 03-02 10:35 m:1772447700000 Grace Hopper> I'll pin these to [the] channel.
+c:f7edc6 03-02 10:05 m:1772445900000 Ada Lovelace (you)> I'll post [the] recording link after class.
+c:e7d8cd 03-02 09:05 m:1772442300000 Alan Turing> Almost! Stuck on [the] Dijkstra part. Here is my scratch…
+c:e7d8cd 03-02 09:10 m:1772442600000 Ada Lovelace (you)> Haha fitting given [the] professor's name. Let's meet…
+
+########## search {mentions_me:true, limit:6} ##########
+as_of 06-01 12:00 (tz+0) · order:time · 1 hits
+c:c3199c="study-group-cs101"
+c:c3199c 03-02 09:35 m:1772444100000 Radia Perlman> Thanks bot! @Ada Lovelace can you share your notes?
+
+########## top_topics {since,until (all), n:6} ##########
+as_of 06-01 12:00 (tz+0) · range 2020-01-01 00:00..2030-01-01 00:00 · 20 msgs
+excluded 1 bot/app msgs · include_bots:true to include
+baseline sparse (0 msgs) — ×baseline is approximate
+(no distinctive topics)
+
+########## find_person {} (roster) ##########
+as_of 06-01 12:00 (tz+0) · roster — top 7 by volume
+p:31921f "Ada Lovelace" (you) · 5 msg · last 03-02 10:50
+p:f00977 "Alan Turing" · 4 msg · last 03-02 10:45
+p:c5bceb "Grace Hopper" · 3 msg · last 03-02 10:35
+p:7bcee1 "Barbara Liskov" · 3 msg · last 03-02 10:30
+p:5b4368 "Edsger Dijkstra" · 3 msg · last 03-02 10:20
+p:c2de76 "Radia Perlman" · 2 msg · last 03-02 10:25
+p:afd07b "CS101 Course Bot" [bot] · 1 msg · last 03-02 09:30
+
+########## list_events {since,until (all)} ##########
+as_of 06-01 12:00 (tz+0) · 11 events
+note: window extends past the newest cached occurrence (03-20 10:00) — the cache only holds materialized occurrences; recurring events further out may be under-reported
+03-10 14:00–14:30 [appointment] "Dentist appointment" · org: Ada Lovelace · no attendees · you: Organizer
+03-11 15:00–15:30 [meeting] "CS101 Midterm Review Session" · org: Alan Turing · 3 attendees (2 accepted): Ada Lovelace, Alan Turing, Grace Hopper · you: Accepted · chat c:9da8c9
+03-12 10:00–11:00 [meeting] "Guest Lecture: Distributed Systems" · org: Edsger Dijkstra · 2 attendees (1 accepted): Ada Lovelace, Edsger Dijkstra · you: NotResponded · chat (no cached chat)
+03-13 09:00–09:30 [appointment] [cancelled] "Cancelled Study Session" · org: Barbara Liskov · no attendees
+03-14 13:00–13:30 [appointment] [confidential] "Confidential 1:1" · org: Ada Lovelace · no attendees · you: Organizer
+03-15 11:00–11:15 [appointment] "Room Booking Confirmation" · org: Ada Lovelace · no attendees · you: Organizer
+03-16 09:15–09:30 [appointment] "Daily Standup" · org: Grace Hopper · no attendees · you: Accepted
+  ↻ Daily Standup ×4 more (next 03-17 09:15)
+
+########## list_calls {since,until (all)} ##########
+as_of 06-01 12:00 (tz+0) · 4 calls
+03-09 11:00 ← Radia Perlman · 1h05m · accepted [recorded] recorded → c:c3199c m:1772443200000
+03-09 10:00 → study-group-cs101 c:c3199c · 45s · accepted
+03-09 09:00 → Grace Hopper · missed
+03-09 08:00 ← Margaret Hamilton · 5m · accepted

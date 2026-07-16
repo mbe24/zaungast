@@ -28,6 +28,8 @@
     "test:fixture": "node --experimental-sqlite --import tsx test/fixture/verify.ts",
     "test:integration:ci": "node --experimental-sqlite --import tsx test/run-integration.ts",
     "test:integration": "node --experimental-sqlite --import tsx test/_inctest.ts && node --experimental-sqlite --import tsx test/_reusetest.ts && node --experimental-sqlite --import tsx test/_fbtest.ts",
+    "test:golden": "node --experimental-sqlite --import tsx test/golden/extract.ts && node --experimental-sqlite --import tsx test/golden/mcp.ts",
+    "test:golden:real": "node --experimental-sqlite --import tsx test/golden/real-digest.ts",
     "assets": "node scripts/render-assets.mjs",
     "prepublishOnly": "npm run build"
   },
