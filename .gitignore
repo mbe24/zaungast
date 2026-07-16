@@ -7,3 +7,5 @@ node_modules/
 dist/
 experiments/
 plan/
+# local profiling output (harness in scripts/ is committed; its output is not)
+profiling/
