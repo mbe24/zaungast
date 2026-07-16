@@ -4,6 +4,8 @@
 // text. The split is being done incrementally, one tool at a time, each proven byte-identical by
 // the G2 MCP-output golden. Nothing here knows about MCP, agents, or token budgets.
 import { isBotMri, type ChatStore } from './ingest/store.js';
+import { makeExtractor } from './util/topics.js';
+import { byCodeUnit } from './util/sort.js';
 
 type DB = ChatStore['db'];
 
@@ -406,6 +408,42 @@ export function maxEventStart(store: ChatStore): number {
 }
 
 // ---------- topics (analytics core) ----------
+// Build the (cached) per-message phrase extractor: name tokens are excluded from phrase candidates,
+// tokenization is cached per content string (the expensive part) on the store (persists across
+// calls / incremental refreshes, invalidated when the name-token set changes), and per-call
+// `exclude` words are applied by FILTERING the cached array after retrieval — never threaded into
+// the extractor, so one call's excludes can't contaminate another's cached phrases.
+export function buildPhraseExtractor(
+  store: ChatStore,
+  db: DB,
+  excludeWords: Set<string>,
+): (content: string) => string[] {
+  const nameTokens = new Set<string>();
+  for (const r of db.prepare('select name from people').all() as any[])
+    for (const w of String(r.name || '')
+      .toLowerCase()
+      .match(/[\p{L}\p{M}]{3,}/gu) || [])
+      nameTokens.add(w);
+  const { phrases: extract } = makeExtractor(nameTokens); // en+de merged (default)
+
+  const sig = `${nameTokens.size}:${[...nameTokens].sort(byCodeUnit).join(',').length}`;
+  if (store.phraseCacheSig !== sig) {
+    store.phraseCache.clear();
+    store.phraseCacheSig = sig;
+  }
+  const cache = store.phraseCache;
+  return (content: string): string[] => {
+    let p = cache.get(content);
+    if (!p) {
+      p = extract(content);
+      cache.set(content, p);
+    }
+    return excludeWords.size
+      ? p.filter((ph) => !ph.split(' ').some((w) => excludeWords.has(w)))
+      : p;
+  };
+}
+
 export interface TopicRow {
   ph: string;
   c: number;

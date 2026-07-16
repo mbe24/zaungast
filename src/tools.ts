@@ -1,5 +1,4 @@
 import { isBotMri, type ChatStore, type StoreMeta } from './ingest/store.js';
-import { makeExtractor } from './util/topics.js';
 import { byCodeUnit } from './util/sort.js';
 import { reactionGlyph } from './util/emoji.js';
 import { htmlToText } from './util/text.js';
@@ -18,6 +17,7 @@ import {
   senderFilter,
   runSearchQuery,
   queryMessageWindow,
+  buildPhraseExtractor,
 } from './query.js';
 import type { EventRow, TopicRow } from './query.js';
 import type {
@@ -878,36 +878,7 @@ export function search(
 // (persists across calls / incremental refreshes, invalidated when the name-token set changes),
 // and per-call `exclude` words are applied by FILTERING the cached array after retrieval — never
 // threaded into the extractor, so one call's excludes can't contaminate another's cached phrases.
-function buildPhraseExtractor(
-  store: ChatStore,
-  db: DB,
-  excludeWords: Set<string>,
-): (content: string) => string[] {
-  const nameTokens = new Set<string>();
-  for (const r of db.prepare('select name from people').all() as any[])
-    for (const w of String(r.name || '')
-      .toLowerCase()
-      .match(/[\p{L}\p{M}]{3,}/gu) || [])
-      nameTokens.add(w);
-  const { phrases: extract } = makeExtractor(nameTokens); // en+de merged (default)
-
-  const sig = `${nameTokens.size}:${[...nameTokens].sort(byCodeUnit).join(',').length}`;
-  if (store.phraseCacheSig !== sig) {
-    store.phraseCache.clear();
-    store.phraseCacheSig = sig;
-  }
-  const cache = store.phraseCache;
-  return (content: string): string[] => {
-    let p = cache.get(content);
-    if (!p) {
-      p = extract(content);
-      cache.set(content, p);
-    }
-    return excludeWords.size
-      ? p.filter((ph) => !ph.split(' ').some((w) => excludeWords.has(w)))
-      : p;
-  };
-}
+// buildPhraseExtractor now lives in ./query.js (imported above).
 
 // Restrict top_topics to a conversation or a person, plus always-applied excludes. A person/1:1
 // scope inherently has one speaker per phrase, so the ≥2-sender anti-spam gate relaxes to ≥1
