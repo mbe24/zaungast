@@ -144,6 +144,35 @@ export function queryThread(db: DB, convId: string, rootId: string): any[] {
     .all(convId, rootId) as any[];
 }
 
+// Per-reply-chain activity summaries (message count + last-activity ts per root) for the given
+// scope conds/params — drives which threads a channel digest surfaces.
+export function queryThreadSummaries(
+  db: DB,
+  conds: string[],
+  params: any[],
+): { root_id: any; n: number; last: number }[] {
+  return db
+    .prepare(
+      `select root_id, count(*) n, max(ts) last from messages where ${conds.join(' and ')} group by root_id`,
+    )
+    .all(...params) as any[];
+}
+
+// A conversation's non-system message count + oldest/newest cached ts — the "showing X/total,
+// local cache lo–hi" header stats, shared by the flat and channel-digest read paths.
+export function convMessageStats(
+  db: DB,
+  convId: string,
+): { total: number; earliest: number; newest: number } {
+  const total = (
+    db.prepare('select count(*) n from messages where conv_id=? and is_system=0').get(convId) as any
+  ).n;
+  const span = db
+    .prepare('select min(ts) lo, max(ts) hi from messages where conv_id=? and is_system=0 and ts>0')
+    .get(convId) as any;
+  return { total, earliest: span?.lo ?? 0, newest: span?.hi ?? 0 };
+}
+
 // ---------- people ----------
 export interface PersonRow {
   handle: string;

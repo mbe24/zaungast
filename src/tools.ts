@@ -18,6 +18,8 @@ import {
   runSearchQuery,
   queryMessageWindow,
   queryThread,
+  queryThreadSummaries,
+  convMessageStats,
   buildPhraseExtractor,
 } from './query.js';
 import type { EventRow, TopicRow } from './query.js';
@@ -402,11 +404,7 @@ function renderChannelDigest(
     sp.push(until);
   }
   // thread summaries (in-window activity decides which threads appear)
-  let summaries = db
-    .prepare(
-      `select root_id, count(*) n, max(ts) last from messages where ${sconds.join(' and ')} group by root_id`,
-    )
-    .all(...sp) as any[];
+  let summaries = queryThreadSummaries(db, sconds, sp);
   const threadTotal = summaries.length;
   const older = args.cursor && /^older:(\d+):(.+)$/.exec(String(args.cursor));
   if (older) {
@@ -438,15 +436,10 @@ function renderChannelDigest(
     summaries.length > picked.length && oldestShown
       ? ` · older: older:${oldestShown.last}:${oldestShown.root_id}`
       : '';
-  const total = (
-    db.prepare('select count(*) n from messages where conv_id=? and is_system=0').get(convId) as any
-  ).n;
-  const span = db
-    .prepare('select min(ts) lo, max(ts) hi from messages where conv_id=? and is_system=0 and ts>0')
-    .get(convId) as any;
+  const { total, earliest, newest } = convMessageStats(db, convId);
   const head = channelHead(
     conv,
-    `${total} msgs / ${threadTotal} threads · showing ${picked.length} threads, ${budget} msgs · threads by last activity · local cache ${fmtTs(span?.lo ?? 0)}–${fmtTs(span?.hi ?? 0)}${olderCur}`,
+    `${total} msgs / ${threadTotal} threads · showing ${picked.length} threads, ${budget} msgs · threads by last activity · local cache ${fmtTs(earliest)}–${fmtTs(newest)}${olderCur}`,
   );
   const body = blocks.join('\n\n') || '(no threads)';
   const legend = /\(you\)>/.test(body) ? viewerLegend(ownerNm) : '';
@@ -642,14 +635,7 @@ export function readMessages(
     return `message ${fetched.aroundNotFound} not found in this conversation`;
   const rows = fetched.rows;
 
-  const total = (
-    db.prepare('select count(*) n from messages where conv_id=? and is_system=0').get(id) as any
-  ).n;
-  const span = db
-    .prepare('select min(ts) lo, max(ts) hi from messages where conv_id=? and is_system=0 and ts>0')
-    .get(id) as any;
-  const earliest = span?.lo ?? 0,
-    newest = span?.hi ?? 0;
+  const { total, earliest, newest } = convMessageStats(db, id);
   // Only offer an older: cursor when there really are older messages (else the agent pages into nothing).
   const oldest = rows[0];
   const olderCursor = oldest && oldest.ts > earliest ? `older:${oldest.ts}:${oldest.id}` : '';
