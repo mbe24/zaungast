@@ -384,6 +384,13 @@ export function applyIncremental(
   if (!setEq(msgT, state.msgTargets) || !setEq(convT, state.convTargets))
     return { needFullRebuild: true, newMaxSeq: state.maxSeq, skipped: false };
 
+  // A6 no-op fast-exit (after the schema tripwire, so a genuine migration still forces a rebuild):
+  // `maxSeq` counts tombstones too, so newMax === state.maxSeq means NO writes AND no deletions
+  // have landed since the last apply — the store already equals a full rebuild. Skip the whole
+  // apply (extract + whole-store replace + recomputeDerived + refreshFts), the bulk of the ~1s
+  // no-op refresh cost. The store is untouched; the caller just re-stamps meta.asOf.
+  if (newMax === state.maxSeq) return { needFullRebuild: false, newMaxSeq: newMax, skipped: false };
+
   // Live keys of the message store (for whole-chain / compaction deletion reconcile) and the
   // changed message-store records (seq > maxSeq) to re-extract.
   const liveChainKeys = new Set<string>();
