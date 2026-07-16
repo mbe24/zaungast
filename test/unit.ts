@@ -42,6 +42,22 @@ console.log('=== snappy ===');
   const cp = Buffer.from([0x06, 0x08, 0x61, 0x62, 0x63, 0x0a, 0x03, 0x00]);
   eq('overlapping copy decompresses', Snappy.uncompress(cp).toString(), 'abcabc');
 }
+{
+  // Overlap-copy fidelity fixtures (offset < len) — the byte-feed-forward semantics that the A1
+  // chunked-copy optimization must preserve exactly. Covers offset 1..4 < len, a long single-byte
+  // run (fill fast-path), a non-overlapping copy (offset >= len → memmove path), and a long literal.
+  const dec = (b: number[]) => Snappy.uncompress(Buffer.from(b)).toString();
+  eq('overlap offset=1 len=5', dec([0x06, 0x00, 0x61, 0x05, 0x01]), 'aaaaaa');
+  eq('overlap offset=2 len=5', dec([0x07, 0x04, 0x61, 0x62, 0x05, 0x02]), 'abababa');
+  eq('overlap offset=3 len=8', dec([0x0b, 0x08, 0x61, 0x62, 0x63, 0x11, 0x03]), 'abcabcabcab');
+  eq('overlap offset=4 len=6', dec([0x0a, 0x0c, 0x61, 0x62, 0x63, 0x64, 0x09, 0x04]), 'abcdabcdab');
+  eq('non-overlap offset=4 len=4', dec([0x08, 0x0c, 0x61, 0x62, 0x63, 0x64, 0x01, 0x04]), 'abcdabcd');
+  // offset=1 run of length 64 (2-byte copy tag) → exercises the fill() fast-path on a long run.
+  eq('offset=1 run len=64', dec([0x41, 0x00, 0x61, 0xfe, 0x01, 0x00]), 'a'.repeat(65));
+  // long literal (len-1 >= 60 → 1 extra length byte): 130 'z' bytes.
+  const longLit = Buffer.concat([Buffer.from([0x82, 0x01, 0xf0, 0x81]), Buffer.alloc(130, 0x7a)]);
+  eq('long literal 130B', Snappy.uncompress(longLit).toString(), 'z'.repeat(130));
+}
 
 console.log('=== structured-clone (V8) ===');
 {
