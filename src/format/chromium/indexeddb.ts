@@ -255,6 +255,13 @@ export function readStringWithLength(buf: Buffer, off: number): [string, number]
   return [chars.join(''), pos + len * 2];
 }
 
+// Grow-only scratch for per-value Snappy decompression. Safe to reuse across calls because nothing
+// deserialize() returns retains a view into the decompressed buffer (strings → toString copy,
+// ArrayBuffers → Buffer.from copy; audited), and each decoded value is consumed synchronously
+// before the next decodeValue call. NOT used for sstable block decompression (those buffers must
+// persist as value backing — A2). Bounded by the largest single value ever decompressed.
+let ssvScratch: Buffer = Buffer.allocUnsafe(0);
+
 // Decode an IndexedDB object-store data VALUE into a JS object.
 // Format: varint value-version, then either the raw Blink/V8 blob, OR Chromium's
 // IndexedDB value-compression wrapper: header 0xFF 0x11 0x02 + a Snappy stream.
@@ -269,8 +276,10 @@ export function decodeValue(
   // large binaries) — not recoverable from leveldb alone, so return a marker.
   if (blob[0] === 0xff && blob[1] === 0x11) {
     const method = blob[2];
-    if (method === 0x02) blob = Snappy.uncompress(blob.subarray(3));
-    else return { __externalBlob: true, method };
+    if (method === 0x02) {
+      blob = Snappy.uncompress(blob.subarray(3), ssvScratch);
+      if (blob.length > ssvScratch.length) ssvScratch = blob; // adopt the larger buffer (grow-only)
+    } else return { __externalBlob: true, method };
   }
   return deserialize(blob, opts);
 }

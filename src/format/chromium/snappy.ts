@@ -8,7 +8,10 @@
 // semantics with growing non-overlapping copyWithin chunks (+ a fill fast-path for offset==1),
 // which lets V8 memmove instead of stepping byte-by-byte.
 
-export function uncompress(input: Buffer): Buffer {
+// `scratch`, when given and large enough, receives the output (grow-only reuse across calls for
+// hot per-value decompression — see indexeddb.ts::decodeValue). Callers whose output must persist
+// (sstable block buffers, A2) pass no scratch and get a fresh buffer.
+export function uncompress(input: Buffer, scratch?: Buffer): Buffer {
   let ip = 0;
   // uncompressed length (varint)
   let outLen = 0,
@@ -20,7 +23,7 @@ export function uncompress(input: Buffer): Buffer {
     shift += 7;
   }
 
-  const out = Buffer.allocUnsafe(outLen);
+  const out = scratch && scratch.length >= outLen ? scratch : Buffer.allocUnsafe(outLen);
   let op = 0;
 
   while (ip < input.length) {
@@ -75,5 +78,5 @@ export function uncompress(input: Buffer): Buffer {
     }
   }
   if (op !== outLen) throw new Error(`snappy: produced ${op} bytes, expected ${outLen}`);
-  return out;
+  return out.length === outLen ? out : out.subarray(0, outLen);
 }
