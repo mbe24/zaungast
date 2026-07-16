@@ -17,6 +17,7 @@ import {
   senderFilter,
   runSearchQuery,
   queryMessageWindow,
+  queryThread,
   buildPhraseExtractor,
 } from './query.js';
 import type { EventRow, TopicRow } from './query.js';
@@ -429,11 +430,7 @@ function renderChannelDigest(
   }
   // display oldest-active first so the most-recently-active thread sits at the bottom
   const blocks = [...picked].reverse().map((s) => {
-    const rows = db
-      .prepare(
-        `select * from messages where conv_id=? and root_id=? and is_system=0 order by ts asc, id asc`,
-      )
-      .all(convId, s.root_id) as any[];
+    const rows = queryThread(db, convId, s.root_id);
     return renderDigestThread(rows, String(s.root_id), ownerNm, rx).join('\n');
   });
   const oldestShown = picked[picked.length - 1];
@@ -472,11 +469,7 @@ function renderThreadView(
   hitId?: string,
 ): string {
   const db = store.db;
-  const rows = db
-    .prepare(
-      `select * from messages where conv_id=? and root_id=? and is_system=0 order by ts asc, id asc`,
-    )
-    .all(convId, rootId) as any[];
+  const rows = queryThread(db, convId, rootId);
   if (!rows.length)
     return `${envelope(meta, deferred)}\nthread m:${rootId} not found in this conversation`;
   const { root, replies } = splitThread(rows, rootId);

@@ -134,6 +134,16 @@ export function queryMessageWindow(
   return { rows };
 }
 
+// All non-system messages of one channel reply-chain (root + replies), chronological. Shared by the
+// channel digest and single-thread renderers.
+export function queryThread(db: DB, convId: string, rootId: string): any[] {
+  return db
+    .prepare(
+      `select * from messages where conv_id=? and root_id=? and is_system=0 order by ts asc, id asc`,
+    )
+    .all(convId, rootId) as any[];
+}
+
 // ---------- people ----------
 export interface PersonRow {
   handle: string;
