@@ -3,7 +3,15 @@ import { makeExtractor } from './util/topics.js';
 import { byCodeUnit } from './util/sort.js';
 import { reactionGlyph } from './util/emoji.js';
 import { htmlToText } from './util/text.js';
-import { likeEscape, queryPeople, queryCalls, queryConversations } from './query.js';
+import {
+  likeEscape,
+  queryPeople,
+  queryCalls,
+  queryConversations,
+  queryEvents,
+  maxEventStart,
+} from './query.js';
+import type { EventRow } from './query.js';
 import type {
   ListConversationsArgs,
   ReadMessagesArgs,
@@ -1241,23 +1249,7 @@ function elideUrlsToHostnames(text: string): string {
   return text.replace(/https?:\/\/([^\s/]+)(\/[^\s]*)?/gi, (_m, host) => `[link: ${host}]`);
 }
 
-interface EventRow {
-  id: string;
-  series_id: string | null;
-  kind: string;
-  subject: string | null;
-  start_ts: number;
-  end_ts: number;
-  is_all_day: number;
-  organizer_name: string | null;
-  cid: string | null;
-  my_response: string | null;
-  is_cancelled: number;
-  is_confidential: number;
-  has_attach: number;
-  attendees: string | null;
-  body_html: string | null;
-}
+// EventRow now lives in ./query.js (imported above).
 
 // One event row, fully rendered (subject/org/attendees/response/chat-pivot/tags).
 function renderEventLine(db: DB, r: EventRow): string {
@@ -1321,46 +1313,27 @@ export function listEvents(
   deferred: boolean,
   args: ListEventsArgs = {},
 ): string {
-  const db = store.db;
   const bt = badTime(args, ['since', 'until']);
   if (bt) return bt;
-  const limit = Math.min(Number(args.limit) || 30, 100);
   const now = Date.now();
   const sinceArg = parseTime(args.since);
   const untilArg = parseTime(args.until);
   const noWindowGiven = sinceArg == null && untilArg == null;
   // Forward default window: today..+7d — a calendar tool defaults to what's COMING UP, unlike
-  // messages tools which default to recent history.
+  // messages tools which default to recent history. (Window policy stays MCP-side.)
   const winSince = sinceArg ?? (noWindowGiven ? now : undefined);
   const winUntil = untilArg ?? (noWindowGiven ? now + 7 * 864e5 : undefined);
 
-  const where: string[] = [];
-  const params: any[] = [];
-  if (winSince != null) {
-    where.push('start_ts>=?');
-    params.push(winSince);
-  }
-  if (winUntil != null) {
-    where.push('start_ts<?');
-    params.push(winUntil);
-  }
-  if (args.type && args.type !== 'all') {
-    where.push('kind=?');
-    params.push(args.type);
-  }
-  if (args.query) {
-    where.push(String.raw`subject like ? escape '\'`);
-    params.push(`%${likeEscape(String(args.query))}%`);
-  }
-  if (args.attendee) {
-    where.push(String.raw`attendees like ? escape '\'`);
-    params.push(`%${likeEscape(String(args.attendee))}%`);
-  }
-  if (args.hide_cancelled) where.push('is_cancelled=0');
-  const w = where.length ? 'where ' + where.join(' and ') : '';
-  const rows = db
-    .prepare(`select * from events ${w} order by start_ts asc limit ?`)
-    .all(...params, limit) as unknown as EventRow[];
+  const rows = queryEvents(store, {
+    sinceTs: winSince,
+    untilTs: winUntil,
+    type: args.type,
+    query: args.query,
+    attendee: args.attendee,
+    hideCancelled: args.hide_cancelled,
+    limit: args.limit,
+  });
+  const db = store.db;
 
   const notes: string[] = [];
   // The cache only holds MATERIALIZED occurrences of a recurring series — a far-future window
@@ -1368,7 +1341,7 @@ export function listEvents(
   // effective window end against the newest occurrence the cache has for ANY event (not just
   // this query's matches), since that's the honest bound on what could possibly be materialized.
   if (winUntil != null) {
-    const maxStart = (db.prepare('select max(start_ts) t from events').get() as any)?.t ?? 0;
+    const maxStart = maxEventStart(store);
     if (winUntil > maxStart)
       notes.push(
         `note: window extends past the newest cached occurrence (${fmtTs(maxStart)}) — the cache only holds materialized occurrences; recurring events further out may be under-reported`,

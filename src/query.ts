@@ -210,3 +210,75 @@ export function queryCalls(
     label,
   }));
 }
+
+// ---------- events ----------
+// Raw event row shape (DB columns) — the recurrence-collapse renderer in the MCP layer reads these
+// fields directly; kept snake_case to match the events table (a camelCase remap is a later cleanup).
+export interface EventRow {
+  id: string;
+  series_id: string | null;
+  kind: string;
+  subject: string | null;
+  start_ts: number;
+  end_ts: number;
+  is_all_day: number;
+  organizer_name: string | null;
+  cid: string | null;
+  my_response: string | null;
+  is_cancelled: number;
+  is_confidential: number;
+  has_attach: number;
+  attendees: string | null;
+  body_html: string | null;
+}
+
+// list_events' data: events in the (already-computed) window, filtered, chronological, limited.
+// The forward-default window policy (today..+7d) and coverage notes stay in the MCP layer.
+export function queryEvents(
+  store: ChatStore,
+  opts: {
+    sinceTs?: number;
+    untilTs?: number;
+    type?: string;
+    query?: string;
+    attendee?: string;
+    hideCancelled?: boolean;
+    limit?: number;
+  } = {},
+): EventRow[] {
+  const db = store.db;
+  const limit = Math.min(Number(opts.limit) || 30, 100);
+  const where: string[] = [];
+  const params: any[] = [];
+  if (opts.sinceTs != null) {
+    where.push('start_ts>=?');
+    params.push(opts.sinceTs);
+  }
+  if (opts.untilTs != null) {
+    where.push('start_ts<?');
+    params.push(opts.untilTs);
+  }
+  if (opts.type && opts.type !== 'all') {
+    where.push('kind=?');
+    params.push(opts.type);
+  }
+  if (opts.query) {
+    where.push(String.raw`subject like ? escape '\'`);
+    params.push(`%${likeEscape(String(opts.query))}%`);
+  }
+  if (opts.attendee) {
+    where.push(String.raw`attendees like ? escape '\'`);
+    params.push(`%${likeEscape(String(opts.attendee))}%`);
+  }
+  if (opts.hideCancelled) where.push('is_cancelled=0');
+  const w = where.length ? 'where ' + where.join(' and ') : '';
+  return db
+    .prepare(`select * from events ${w} order by start_ts asc limit ?`)
+    .all(...params, limit) as unknown as EventRow[];
+}
+
+// Newest materialized occurrence start across ALL events — the honest bound for list_events'
+// "recurring events may be under-reported" coverage note.
+export function maxEventStart(store: ChatStore): number {
+  return (store.db.prepare('select max(start_ts) t from events').get() as any)?.t ?? 0;
+}
