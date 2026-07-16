@@ -553,24 +553,24 @@ export function queryCalls(
 }
 
 // ---------- events ----------
-// Raw event row shape (DB columns) — the recurrence-collapse renderer in the MCP layer reads these
-// fields directly; kept snake_case to match the events table (a camelCase remap is a later cleanup).
+// One calendar event, camelCase (queryEvents aliases the snake_case DB columns). Number fields that
+// are 0/1 flags stay `number` (SQLite has no boolean); the renderer treats them as truthy.
 export interface EventView {
   id: string;
-  series_id: string | null;
+  seriesId: string | null;
   kind: string;
   subject: string | null;
-  start_ts: number;
-  end_ts: number;
-  is_all_day: number;
-  organizer_name: string | null;
+  startTs: number;
+  endTs: number;
+  isAllDay: number;
+  organizerName: string | null;
   cid: string | null;
-  my_response: string | null;
-  is_cancelled: number;
-  is_confidential: number;
-  has_attach: number;
+  myResponse: string | null;
+  isCancelled: number;
+  isConfidential: number;
+  hasAttach: number;
   attendees: string | null;
-  body_html: string | null;
+  bodyHtml: string | null;
 }
 
 // list_events' data: events in the (already-computed) window, filtered, chronological, limited.
@@ -614,7 +614,13 @@ export function queryEvents(
   if (opts.hideCancelled) where.push('is_cancelled=0');
   const w = where.length ? 'where ' + where.join(' and ') : '';
   return db
-    .prepare(`select * from events ${w} order by start_ts asc limit ?`)
+    .prepare(
+      `select id, series_id as seriesId, kind, subject, start_ts as startTs, end_ts as endTs,
+        is_all_day as isAllDay, organizer_name as organizerName, cid, my_response as myResponse,
+        is_cancelled as isCancelled, is_confidential as isConfidential, has_attach as hasAttach,
+        attendees, body_html as bodyHtml
+      from events ${w} order by start_ts asc limit ?`,
+    )
     .all(...params, limit) as unknown as EventView[];
 }
 
@@ -662,11 +668,11 @@ export function buildPhraseExtractor(
 }
 
 export interface TopicView {
-  ph: string;
-  c: number;
-  ns: number;
-  lift: number;
-  ex: any;
+  phrase: string;
+  count: number; // window mentions
+  senderCount: number; // distinct senders in the window (anti-spam gate)
+  lift: number; // window rate ÷ smoothed baseline rate
+  example: any; // an example message (ts + content) for the phrase
 }
 
 // Load the in-scope messages and (by default) drop bot/app senders (28: MRI) — automated
@@ -790,10 +796,16 @@ export function computeTopicRows(
     .map(([ph, c]) => {
       const winRate = df.get(ph)! / Math.max(1, win.length);
       const baseRate = ((baseDf.get(ph) || 0) + 0.5) / (baseTotal + 1);
-      return { ph, c, ns: senders.get(ph)!.size, lift: winRate / baseRate, ex: example.get(ph) };
+      return {
+        phrase: ph,
+        count: c,
+        senderCount: senders.get(ph)!.size,
+        lift: winRate / baseRate,
+        example: example.get(ph),
+      };
     })
-    .filter((r) => r.c >= 3 && r.ns >= minSenders)
-    .sort((a, b) => b.lift * Math.log2(1 + b.c) - a.lift * Math.log2(1 + a.c))
+    .filter((r) => r.count >= 3 && r.senderCount >= minSenders)
+    .sort((a, b) => b.lift * Math.log2(1 + b.count) - a.lift * Math.log2(1 + a.count))
     .slice(0, n);
   return { rows, baseTotal, win };
 }

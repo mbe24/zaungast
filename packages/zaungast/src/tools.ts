@@ -737,7 +737,7 @@ export function search(
 function renderTopicRows(rows: TopicView[]): string[] {
   return rows.map(
     (r, i) =>
-      `${i + 1}. "${r.ph}" ×${r.c} (${r.lift.toFixed(1)}× baseline) · ${r.ns} people\n   e.g. ${fmtTs(r.ex.ts)}: ${clip(r.ex.content, 90)}`,
+      `${i + 1}. "${r.phrase}" ×${r.count} (${r.lift.toFixed(1)}× baseline) · ${r.senderCount} people\n   e.g. ${fmtTs(r.example.ts)}: ${clip(r.example.content, 90)}`,
   );
 }
 
@@ -871,13 +871,13 @@ function elideUrlsToHostnames(text: string): string {
 // One event row, fully rendered (subject/org/attendees/response/chat-pivot/tags).
 function renderEventLine(db: DB, r: EventView): string {
   const tags =
-    (r.is_cancelled ? ' [cancelled]' : '') +
-    (r.is_confidential ? ' [confidential]' : '') +
-    (r.has_attach ? ' [attachment]' : '');
-  const timeRange = eventTimeRange(r.start_ts, r.end_ts, !!r.is_all_day);
-  const org = r.organizer_name ? `org: ${r.organizer_name}` : 'org: (unknown)';
+    (r.isCancelled ? ' [cancelled]' : '') +
+    (r.isConfidential ? ' [confidential]' : '') +
+    (r.hasAttach ? ' [attachment]' : '');
+  const timeRange = eventTimeRange(r.startTs, r.endTs, !!r.isAllDay);
+  const org = r.organizerName ? `org: ${r.organizerName}` : 'org: (unknown)';
   const attendees = renderAttendees(r.attendees);
-  const you = r.my_response ? `you: ${r.my_response}` : '';
+  const you = r.myResponse ? `you: ${r.myResponse}` : '';
   let chat = '';
   if (r.kind === 'meeting') {
     const conv = r.cid
@@ -896,25 +896,25 @@ function renderEventGroups(db: DB, rows: EventView[]): string[] {
   // pre-sorted by start_ts asc, so a group's array is automatically in series order too).
   const bySeries = new Map<string, EventView[]>();
   for (const r of rows) {
-    if (!r.series_id) continue;
-    const g = bySeries.get(r.series_id);
+    if (!r.seriesId) continue;
+    const g = bySeries.get(r.seriesId);
     if (g) g.push(r);
-    else bySeries.set(r.series_id, [r]);
+    else bySeries.set(r.seriesId, [r]);
   }
 
   const collapsedHandled = new Set<string>();
   const lines: string[] = [];
   for (const r of rows) {
-    if (r.series_id) {
-      const group = bySeries.get(r.series_id)!;
+    if (r.seriesId) {
+      const group = bySeries.get(r.seriesId)!;
       if (group.length > 2) {
-        if (collapsedHandled.has(r.series_id)) continue; // already summarized
-        collapsedHandled.add(r.series_id);
+        if (collapsedHandled.has(r.seriesId)) continue; // already summarized
+        collapsedHandled.add(r.seriesId);
         lines.push(renderEventLine(db, r));
         const rest = group.length - 1;
         const next = group[1];
         lines.push(
-          `  ↻ ${r.subject || '(no subject)'} ×${rest} more (next ${fmtTs(next.start_ts)})`,
+          `  ↻ ${r.subject || '(no subject)'} ×${rest} more (next ${fmtTs(next.startTs)})`,
         );
         continue;
       }
@@ -973,10 +973,10 @@ export function listEvents(
       notes.push(
         `note: include_body ignored — narrow the query to a single event (add query:/since/until) to see its body`,
       );
-    else if (rows[0].is_confidential)
+    else if (rows[0].isConfidential)
       notes.push(`note: include_body ignored — this event is [confidential]`);
-    else if (rows[0].body_html) {
-      const text = elideUrlsToHostnames(htmlToText(rows[0].body_html));
+    else if (rows[0].bodyHtml) {
+      const text = elideUrlsToHostnames(htmlToText(rows[0].bodyHtml));
       bodyBlock = `\n  body: ${clip(text, 1000)}`;
     }
   }
