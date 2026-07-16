@@ -46,6 +46,51 @@ export function senderFilter(
   return { sql: String.raw`m.sender_name like ? escape '\'`, params: [`%${likeEscape(arg)}%`] };
 }
 
+// Build a safe FTS5 MATCH string: quote each term so user punctuation/operators can't throw a
+// syntax error. Returns null if there's nothing to match.
+export function ftsMatch(raw: string): string | null {
+  const toks = raw.toLowerCase().match(/[\p{L}\p{N}]+/gu) || [];
+  return toks.length ? toks.map((t) => `"${t}"`).join(' ') : null;
+}
+
+// ---------- search ----------
+// Execute the search: FTS5 MATCH+bm25 ranking when available and a query is given, else a plain
+// content LIKE scan ordered by recency. `conds`/`params` are extended in place: the LIKE path
+// appends the query as a where-clause (so callers must pass their OWN copy, not the shared scope
+// arrays, if those need to stay query-free — see the coverage note in the MCP layer).
+export function runSearchQuery(
+  db: DB,
+  ftsEnabled: boolean,
+  conds: string[],
+  params: any[],
+  limit: number,
+  query: string | undefined,
+): { rows: any[]; order: string } {
+  const match = query && String(query).trim() ? ftsMatch(String(query)) : null;
+  if (match && ftsEnabled) {
+    const rows = db
+      .prepare(
+        `select m.*, snippet(messages_fts,0,'[',']','…',10) snip
+      from messages_fts f join messages m on m.conv_id=f.conv_id and m.id=f.id
+      where messages_fts match ? and ${conds.join(' and ')}
+      order by bm25(messages_fts) limit ?`,
+      )
+      .all(match, ...params, limit) as any[];
+    return { rows, order: 'relevance' };
+  }
+  if (query && String(query).trim()) {
+    conds.push(String.raw`m.content like ? escape '\'`);
+    params.push(`%${likeEscape(String(query))}%`);
+  }
+  const rows = db
+    .prepare(
+      `select m.*, substr(m.content,1,120) snip from messages m
+      where ${conds.join(' and ')} order by m.ts desc, m.id desc limit ?`,
+    )
+    .all(...params, limit) as any[];
+  return { rows, order: 'time' };
+}
+
 // ---------- people ----------
 export interface PersonRow {
   handle: string;

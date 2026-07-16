@@ -11,7 +11,13 @@ import {
   queryEvents,
   maxEventStart,
 } from './query.js';
-import { loadTopicsMessages, computeTopicRows, convIdsFor, senderFilter } from './query.js';
+import {
+  loadTopicsMessages,
+  computeTopicRows,
+  convIdsFor,
+  senderFilter,
+  runSearchQuery,
+} from './query.js';
 import type { EventRow, TopicRow } from './query.js';
 import type {
   ListConversationsArgs,
@@ -63,12 +69,7 @@ function badTime(args: any, keys: string[]): string | null {
       return `error: cannot parse ${k}="${args[k]}" — use ISO (2026-07-01) or relative (-7d / +7d / -24h / -30m)`;
   return null;
 }
-// Build a safe FTS5 MATCH string: quote each term so user punctuation/operators can't
-// throw a syntax error. Returns null if there's nothing to match.
-function ftsMatch(raw: string): string | null {
-  const toks = raw.toLowerCase().match(/[\p{L}\p{N}]+/gu) || [];
-  return toks.length ? toks.map((t) => `"${t}"`).join(' ') : null;
-}
+// ftsMatch now lives in ./query.js (imported above).
 // Truncate with an ellipsis marker so the agent can tell a message was cut.
 function clip(s: string, n: number): string {
   s = (s || '').replace(/\s+/g, ' ').trim();
@@ -801,42 +802,7 @@ function buildSearchScope(
   return { conds, params, notes };
 }
 
-// Execute the search: FTS5 MATCH+bm25 ranking when available and a query is given, else a plain
-// content LIKE scan ordered by recency. `conds`/`params` are extended in place: the LIKE path
-// appends the query as a where-clause (so callers must pass their OWN copy, not the shared scope
-// arrays, if those need to stay query-free — see computeSearchCoverage).
-function runSearchQuery(
-  db: DB,
-  meta: StoreMeta,
-  conds: string[],
-  params: any[],
-  limit: number,
-  query: string | undefined,
-): { rows: any[]; order: string } {
-  const match = query && String(query).trim() ? ftsMatch(String(query)) : null;
-  if (match && meta.ftsEnabled) {
-    const rows = db
-      .prepare(
-        `select m.*, snippet(messages_fts,0,'[',']','…',10) snip
-      from messages_fts f join messages m on m.conv_id=f.conv_id and m.id=f.id
-      where messages_fts match ? and ${conds.join(' and ')}
-      order by bm25(messages_fts) limit ?`,
-      )
-      .all(match, ...params, limit) as any[];
-    return { rows, order: 'relevance' };
-  }
-  if (query && String(query).trim()) {
-    conds.push(String.raw`m.content like ? escape '\'`);
-    params.push(`%${likeEscape(String(query))}%`);
-  }
-  const rows = db
-    .prepare(
-      `select m.*, substr(m.content,1,120) snip from messages m
-      where ${conds.join(' and ')} order by m.ts desc, m.id desc limit ?`,
-    )
-    .all(...params, limit) as any[];
-  return { rows, order: 'time' };
-}
+// runSearchQuery now lives in ./query.js (imported above).
 
 // Build the per-hit lines and the (optional) conversation legend, resolving conv_id → handle
 // once per distinct conversation (memoized).
@@ -923,7 +889,7 @@ export function search(
     params.push(until);
   }
 
-  const { rows, order } = runSearchQuery(db, meta, conds, params, limit, args.query);
+  const { rows, order } = runSearchQuery(db, meta.ftsEnabled, conds, params, limit, args.query);
   const ownerNm = ownerDisplayName(store, meta);
   const { lines, legend } = buildSearchResults(db, rows, ownerNm);
   const coverage = computeSearchCoverage(db, scopeConds, scopeParams, rows, since);
