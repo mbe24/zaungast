@@ -5,6 +5,7 @@ import type {
   StoreView,
   StoreMeta,
   MessageView,
+  ReactionGroup,
   SearchHit,
   ConversationView,
   ThreadSummary,
@@ -177,44 +178,41 @@ function resolveConversationArg(
 // `+N more` (N = remaining reactor count, so the histogram total stays honest). `full` drops all
 // caps and names everyone — for "did person X react?". Returns '' when there are no reactions.
 function renderReactions(
-  reactionsJson: string | null | undefined,
+  reactions: ReactionGroup[],
   view: View,
   selfMri: string | null,
   full: boolean,
 ): string {
-  if (!reactionsJson) return '';
-  let groups: { k: string; u: [string, number][] }[];
-  try {
-    groups = JSON.parse(reactionsJson);
-  } catch {
-    return '';
-  }
-  if (!Array.isArray(groups) || groups.length === 0) return '';
+  if (!reactions.length) return '';
   const nameOf = (mri: string): string =>
     mri === selfMri ? 'you' : view.people.nameFor(mri) || '(unknown)';
   // Order reactors within a group: you first, then most-recent by reaction time.
-  const orderedNames = (u: [string, number][]): string[] => {
-    const sorted = u.slice().sort((a, b) => {
-      const aSelf = a[0] === selfMri,
-        bSelf = b[0] === selfMri;
+  const orderedNames = (users: ReactionGroup['users']): string[] => {
+    const sorted = users.slice().sort((a, b) => {
+      const aSelf = a.mri === selfMri,
+        bSelf = b.mri === selfMri;
       if (aSelf !== bSelf) return aSelf ? -1 : 1;
-      return b[1] - a[1];
+      return b.time - a.time;
     });
-    return sorted.map((x) => nameOf(x[0]));
+    return sorted.map((x) => nameOf(x.mri));
   };
   // Order emoji groups: most reactors first; ties broken by earliest reaction, then key.
-  const ranked = groups
-    .map((g) => ({ g, count: g.u.length, min: Math.min(...g.u.map((x) => x[1] || Infinity)) }))
-    .sort((a, b) => b.count - a.count || a.min - b.min || byCodeUnit(a.g.k, b.g.k));
+  const ranked = reactions
+    .map((g) => ({
+      g,
+      count: g.users.length,
+      min: Math.min(...g.users.map((x) => x.time || Infinity)),
+    }))
+    .sort((a, b) => b.count - a.count || a.min - b.min || byCodeUnit(a.g.key, b.g.key));
 
   const parts: string[] = [];
   let tail = 0;
   ranked.forEach(({ g, count }, i) => {
-    const glyph = reactionGlyph(g.k);
+    const glyph = reactionGlyph(g.key);
     if (full) {
-      parts.push(`${glyph} ${count} · ${orderedNames(g.u).join(', ')}`);
+      parts.push(`${glyph} ${count} · ${orderedNames(g.users).join(', ')}`);
     } else if (i < 3) {
-      const names = orderedNames(g.u).slice(0, 3);
+      const names = orderedNames(g.users).slice(0, 3);
       const extra = count - names.length;
       parts.push(`${glyph} ${count} · ${names.join(', ')}${extra > 0 ? ` +${extra}` : ''}`);
     } else if (i < 5) {
@@ -274,7 +272,7 @@ function msgText(
 ): string {
   const marks = (r.hasAttachment ? ' [attachment]' : '') + (r.mentionsMe ? ' [@me]' : '');
   const line = `${indent}${fmtTs(r.ts)} ${who}> ${clip(r.content, 280)}${marks}${suffix}`;
-  const rxLine = rx ? renderReactions(r.reactionsJson, rx.view, rx.selfMri, rx.full) : '';
+  const rxLine = rx ? renderReactions(r.reactions, rx.view, rx.selfMri, rx.full) : '';
   return rxLine ? `${line}\n${indent}      ${rxLine}` : line;
 }
 

@@ -96,9 +96,16 @@ export function ftsMatch(raw: string): string | null {
 }
 
 // ---------- message views ----------
+// One emoji reaction and who reacted. `key` is the raw Teams reaction shortcode (`like`, `heart`,
+// `1f389_partypopper`, `yes-tone2`, …) — deliberately NOT resolved to a glyph here (glyph rendering
+// is a presentation concern; keeping the raw key preserves skin-tone/gender variants for a future
+// exact-variant renderer, see plan/vision.md #6). `time` is the reaction time (epoch ms).
+export interface ReactionGroup {
+  key: string;
+  users: { mri: string; time: number }[];
+}
 // The engine-agnostic, camelCase shape of one message row as the facade hands it to consumers.
-// The 0/1 SQLite flags are booleanized at this boundary; `reactionsJson` is the raw compact JSON
-// string ([{k,u:[[mri,ts]]}]) left typed-but-unparsed (parsing is a deliberate #6-polish deferral).
+// The 0/1 SQLite flags are booleanized at this boundary; reactions are PARSED into typed groups.
 // `rootId === id` ⇒ this message is a thread root (joins ThreadSummary.rootId).
 export interface MessageView {
   id: string;
@@ -112,11 +119,28 @@ export interface MessageView {
   hasAttachment: boolean;
   mentionsMe: boolean;
   content: string;
-  reactionsJson: string | null;
+  reactions: ReactionGroup[];
 }
 // A search result row: a MessageView plus the highlighted `snippet` (the old raw-row `snip`).
 export interface SearchHit extends MessageView {
   snippet: string;
+}
+
+// Parse the stored compact reactions JSON (`[{k,u:[[mri,ts]]}]`) into typed ReactionGroups. Returns
+// [] for null/empty/unparseable input (reactions are best-effort metadata — a malformed blob is
+// absence, not an error).
+export function parseReactions(json: string | null | undefined): ReactionGroup[] {
+  if (!json) return [];
+  try {
+    const raw = JSON.parse(json);
+    if (!Array.isArray(raw)) return [];
+    return raw.map((g: any) => ({
+      key: g.k,
+      users: (g.u ?? []).map((x: [string, number]) => ({ mri: x[0], time: x[1] })),
+    }));
+  } catch {
+    return [];
+  }
 }
 
 // Map a raw `messages` row (snake_case, 0/1 flags) to a MessageView. The mappers live here (not in
@@ -135,7 +159,7 @@ export function toMessageView(r: any): MessageView {
     hasAttachment: !!r.has_attach,
     mentionsMe: !!r.mentions_me,
     content: r.content,
-    reactionsJson: r.reactions ?? null,
+    reactions: parseReactions(r.reactions),
   };
 }
 // Map a raw search row (a `messages` row + a `snip` column) to a SearchHit.

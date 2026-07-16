@@ -45,6 +45,7 @@ export type {
 export type {
   ConversationView,
   MessageView,
+  ReactionGroup,
   SearchHit,
   ThreadSummary,
   PersonView,
