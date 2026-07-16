@@ -85,7 +85,11 @@ function applyMessages(store: ChatStore, msgRows: any[], selfMri: string | null)
     store.insertMessage({
       convId,
       id: String(m.id),
-      chainKey: m.__key,
+      // hex-encode the chain key: it's a binary leveldb key (embedded NUL bytes), and node:sqlite
+      // truncates a TEXT value at the first NUL on read-back — so a raw latin1 chain_key reads back
+      // as '' for essentially every real key. hex is NUL-free, round-trips, and the reconcile stays
+      // correct as long as liveChainKeys/changedChainKeys use the same encoding (they do, below).
+      chainKey: Buffer.from(m.__key, 'latin1').toString('hex'),
       version: Number(m.version) || 0,
       ts,
       senderMri,
@@ -391,8 +395,9 @@ export function applyIncremental(
     }
     const sk = `${p.databaseId}:${p.objectStoreId}`;
     if (state.msgTargets.has(sk)) {
-      liveChainKeys.add(e.key.toString('latin1'));
-      if (e.seq > state.maxSeq) changedChainKeys.add(e.key.toString('latin1'));
+      // hex, matching the chain_key column encoding in applyMessages (NUL-safe read-back).
+      liveChainKeys.add(e.key.toString('hex'));
+      if (e.seq > state.maxSeq) changedChainKeys.add(e.key.toString('hex'));
     }
     if (e.seq > state.maxSeq) newLive.push(e);
   }

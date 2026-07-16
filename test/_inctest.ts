@@ -115,7 +115,10 @@ function msgStoreKey(live: any): Buffer | null {
     } catch {
       continue;
     }
-    if (targets.has(`${p.databaseId}:${p.objectStoreId}`)) return e.key;
+    // MUST require indexId===1: only data records carry messages. The first entry in the store's
+    // (db:os) is often a metadata / secondary-index record (e.g. indexId 32) owning zero messages,
+    // so tombstoning it removes nothing and a "count dropped" assertion would spuriously fail.
+    if (p.indexId === 1 && targets.has(`${p.databaseId}:${p.objectStoreId}`)) return e.key;
   }
   return null;
 }
@@ -184,31 +187,62 @@ console.log('\n=== C. idempotency: incremental twice ===');
 }
 
 console.log(
-  '\n=== D. deletion: crafted tombstone for a chain → incremental deletes it == full of modified ===',
+  '\n=== D. deletion sweep: tombstone chains of size 1 / mid / max → count drops by EXACTLY N, == full ===',
 );
 {
-  const modified = copyDir(DIR);
   const { live, maxSeq } = loadEntries(DIR);
-  const victimKey = msgStoreKey(live);
-  fs.writeFileSync(path.join(modified, 'zzz999.log'), craftDeletionLog(victimKey!, maxSeq + 1000n));
-
-  const partial = ingest(DIR);
-  const nBefore = (partial.store.db.prepare('select count(*) n from messages').get() as any).n;
-  applyIncremental(partial.store, partial.state!, modified);
-  const nAfter = (partial.store.db.prepare('select count(*) n from messages').get() as any).n;
-  const fullMod = ingest(modified);
-  const nFull = (fullMod.store.db.prepare('select count(*) n from messages').get() as any).n;
-  console.log(`  tombstoned 1 chain; messages ${nBefore} → ${nAfter}; full-of-modified → ${nFull}`);
-  ok('full-of-modified is still valid (schema intact)', fullMod.meta.schemaMatched && nFull > 0);
-  ok('incremental deleted the tombstoned chain', nAfter < nBefore);
-  ok(
-    'incremental (after deletion) == full rebuild of modified',
-    dump(partial.store) === dump(fullMod.store),
+  const targets = entityTargets(live, getMapping(live), 'message');
+  // Discover each message-store DATA record's chain size (rows it owns) from one ingest, so the
+  // sweep adapts to whatever capture is pointed at it. chain_key is hex-encoded in the store, so
+  // match on e.key.toString('hex'). Only indexId===1 records are real chains.
+  const disc = ingest(DIR);
+  const owns = disc.store.db.prepare('select count(*) n from messages where chain_key=?');
+  const cands: { key: Buffer; n: number }[] = [];
+  for (const e of live) {
+    let p: any;
+    try {
+      p = decodePrefix(e.key);
+    } catch {
+      continue;
+    }
+    if (p.indexId !== 1 || !targets.has(`${p.databaseId}:${p.objectStoreId}`)) continue;
+    const n = (owns.get(e.key.toString('hex')) as any).n;
+    if (n > 0) cands.push({ key: e.key, n });
+  }
+  disc.store.close();
+  cands.sort((a, b) => a.n - b.n);
+  const multi = cands.filter((c) => c.n > 1);
+  // size 1, a representative MULTI-message chain (median of the >1 set — NOT the numeric median,
+  // which is 1 since ~98% of chains hold a single message), and the largest chain present.
+  const picks: [string, { key: Buffer; n: number }][] = [
+    ['size-1', cands[0]],
+    ['mid', multi[Math.floor(multi.length / 2)] ?? cands[cands.length - 1]],
+    ['max', cands[cands.length - 1]],
+  ];
+  console.log(
+    `  ${cands.length} chains; deleting sizes → 1:${picks[0][1].n} mid:${picks[1][1].n} max:${picks[2][1].n}`,
   );
-  ok('FTS consistent after deletion', ftsConsistent(partial.store));
-  partial.store.close();
-  fullMod.store.close();
-  fs.rmSync(modified, { recursive: true, force: true });
+  for (const [label, v] of picks) {
+    const modified = copyDir(DIR);
+    fs.writeFileSync(path.join(modified, 'zzz999.log'), craftDeletionLog(v.key, maxSeq + 1000n));
+    const partial = ingest(DIR);
+    const before = (partial.store.db.prepare('select count(*) n from messages').get() as any).n;
+    applyIncremental(partial.store, partial.state!, modified);
+    const after = (partial.store.db.prepare('select count(*) n from messages').get() as any).n;
+    const full = ingest(modified);
+    ok(
+      `[${label}] tombstoned a chain owning ${v.n} → count drops by exactly ${v.n} (${before}→${after})`,
+      before - after === v.n,
+    );
+    ok(
+      `[${label}] incremental == full rebuild of modified`,
+      dump(partial.store) === dump(full.store),
+    );
+    ok(`[${label}] FTS consistent after deletion`, ftsConsistent(partial.store));
+    partial.store.close();
+    full.store.close();
+    fs.rmSync(modified, { recursive: true, force: true });
+  }
 }
 
 console.log('\n=== E. Session end-to-end: warm full → mutate → incremental refresh ===');

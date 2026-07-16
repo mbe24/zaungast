@@ -340,6 +340,20 @@ eq('deleted call isDeleted decodes', deletedCallRow?.isDeleted, true);
 console.log('\n=== end-to-end: ingest() + ChatStore + search ===');
 const { store, meta } = ingest(dir);
 ok('ingest schemaMatched', meta.schemaMatched === true);
+// Regression guard: chain_key must survive a plain SELECT read-back. Message keys are binary
+// leveldb keys with embedded NUL bytes; if chain_key were stored as raw latin1, node:sqlite would
+// truncate it at the first NUL and every value would read back as ''. It's hex-encoded to avoid
+// that — this asserts a real message's chain_key is non-empty and hex-shaped (would fail on revert).
+{
+  const ck = (
+    store.db.prepare(`select chain_key from messages where chain_key<>'' limit 1`).get() as any
+  )?.chain_key;
+  ok(
+    'chain_key reads back non-empty + hex-encoded (NUL-safe)',
+    typeof ck === 'string' && ck.length > 0 && /^[0-9a-f]+$/.test(ck),
+    `got ${JSON.stringify(ck)}`,
+  );
+}
 eq('ingest counts.conversations', meta.counts.conversations, CONVERSATIONS.length);
 eq('ingest counts.messages', meta.counts.messages, wantMsgCount);
 const ingestedEventCount = (store.db.prepare('select count(*) n from events').get() as any).n;

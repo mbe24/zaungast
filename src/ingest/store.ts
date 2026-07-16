@@ -55,6 +55,11 @@ export class ChatStore {
       -- people row — profiles fills that gap (26% of reactors in real data). Never cleared by the
       -- derived recompute; reconciled directly by the ingest profiles pass.
       create table profiles(mri text primary key, name text);
+      -- chain_key: the owning reply-chain record's leveldb key, HEX-encoded. It must be hex, not
+      -- the raw latin1 bytes: leveldb keys contain embedded NUL bytes, and node:sqlite truncates a
+      -- TEXT value at the first NUL on JS read-back (a plain SELECT would return '' for real keys).
+      -- Hex is NUL-free so it round-trips; ingest encodes both this column and the reconcile's
+      -- live-key set the same way. (Regression-guarded in test/fixture/verify.ts.)
       create table messages(
         conv_id text, id text, chain_key text, version integer default 0, ts integer,
         sender_mri text, sender_name text, kind text, is_mine integer default 0,
