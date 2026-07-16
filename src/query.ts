@@ -63,6 +63,67 @@ export function queryPeople(
   return { mode: 'roster', query: '', rows };
 }
 
+// ---------- conversations ----------
+export interface ConversationRow {
+  handle: string;
+  kind: string;
+  topic: string | null;
+  participantNames: string | null;
+  lastTs: number;
+  msgCount: number;
+}
+
+// list_conversations' data: activity-ranked conversations, filtered by kind/query/participant/since.
+// sinceTs arrives already parsed. query/participant are matched RAW (unescaped), as the tool did.
+export function queryConversations(
+  store: ChatStore,
+  opts: {
+    n?: number;
+    kind?: string;
+    query?: string;
+    participant?: string;
+    sinceTs?: number;
+    includeEmpty?: boolean;
+  } = {},
+): ConversationRow[] {
+  const db = store.db;
+  const n = Math.min(Number(opts.n) || 12, 30);
+  const where: string[] = [];
+  const params: any[] = [];
+  if (!opts.includeEmpty) where.push('msg_count>0'); // hide 0-message team roots by default
+  if (opts.kind) {
+    where.push('kind=?');
+    params.push(opts.kind);
+  }
+  if (opts.query) {
+    where.push('(topic like ? or participant_names like ?)');
+    params.push(`%${opts.query}%`, `%${opts.query}%`);
+  }
+  if (opts.participant) {
+    where.push('participant_names like ?');
+    params.push(`%${opts.participant}%`);
+  }
+  if (opts.sinceTs) {
+    where.push('last_ts>=?');
+    params.push(opts.sinceTs);
+  }
+  const w = where.length ? 'where ' + where.join(' and ') : '';
+  const rows = db
+    .prepare(
+      `select handle,kind,topic,participant_names,last_ts,msg_count
+     from conversations ${w} order by last_ts desc limit ?`,
+    )
+    .all(...params, n) as any[];
+  return rows.map((r) => ({
+    handle: r.handle,
+    kind: r.kind,
+    topic: r.topic,
+    participantNames: r.participant_names,
+    lastTs: r.last_ts,
+    msgCount: r.msg_count,
+  }));
+}
+
 // ---------- calls ----------
 export interface CallRow {
   startTs: number;

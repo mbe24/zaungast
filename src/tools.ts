@@ -3,7 +3,7 @@ import { makeExtractor } from './util/topics.js';
 import { byCodeUnit } from './util/sort.js';
 import { reactionGlyph } from './util/emoji.js';
 import { htmlToText } from './util/text.js';
-import { likeEscape, queryPeople, queryCalls } from './query.js';
+import { likeEscape, queryPeople, queryCalls, queryConversations } from './query.js';
 import type {
   ListConversationsArgs,
   ReadMessagesArgs,
@@ -143,46 +143,26 @@ function convAmbiguityNote(db: DB, arg: string, ids: string[]): string {
 
 // ================= TOOLS =================
 
+// list_conversations = render(queryConversations(...)).
 export function listConversations(
   store: ChatStore,
   meta: StoreMeta,
   deferred: boolean,
   args: ListConversationsArgs = {},
 ): string {
-  const db = store.db;
   const bt = badTime(args, ['since']);
   if (bt) return bt;
-  const n = Math.min(Number(args.n) || 12, 30);
-  const where: string[] = [];
-  const params: any[] = [];
-  if (!args.include_empty) where.push('msg_count>0'); // hide 0-message team roots by default
-  if (args.kind) {
-    where.push('kind=?');
-    params.push(args.kind);
-  }
-  if (args.query) {
-    where.push('(topic like ? or participant_names like ?)');
-    params.push(`%${args.query}%`, `%${args.query}%`);
-  }
-  if (args.participant) {
-    where.push('participant_names like ?');
-    params.push(`%${args.participant}%`);
-  }
-  const since = parseTime(args.since);
-  if (since) {
-    where.push('last_ts>=?');
-    params.push(since);
-  }
-  const w = where.length ? 'where ' + where.join(' and ') : '';
-  const rows = db
-    .prepare(
-      `select handle,kind,topic,participant_names,last_ts,msg_count
-     from conversations ${w} order by last_ts desc limit ?`,
-    )
-    .all(...params, n) as any[];
+  const rows = queryConversations(store, {
+    n: args.n,
+    kind: args.kind,
+    query: args.query,
+    participant: args.participant,
+    sinceTs: parseTime(args.since),
+    includeEmpty: args.include_empty,
+  });
   const lines = rows.map((r) => {
-    const title = r.topic || r.participant_names || '(untitled)';
-    return `${r.handle} [${r.kind}] "${title}" · ${r.msg_count} msg · last ${fmtTs(r.last_ts)}`;
+    const title = r.topic || r.participantNames || '(untitled)';
+    return `${r.handle} [${r.kind}] "${title}" · ${r.msgCount} msg · last ${fmtTs(r.lastTs)}`;
   });
   const extra = `${rows.length} conversations`;
   return `${envelope(meta, deferred, extra)}\n${lines.join('\n') || '(none)'}`;
