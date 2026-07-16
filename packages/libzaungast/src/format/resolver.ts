@@ -6,12 +6,12 @@ import fs from 'node:fs';
 // are resolved by the loader into the Snapshot). This is the documented, deferred value-decode seam.
 import { decodeValue } from './chromium/indexeddb.js';
 import type {
-  Entry,
-  ExtractedRow,
-  FingerprintResult,
+  SnapshotRecord,
+  EntityRecord,
+  Fingerprint,
   Mapping,
   Snapshot,
-  SelectMappingResult,
+  MappingMatch,
 } from './types.js';
 
 // Resolve a mapping file against a fingerprint, then extract entities generically.
@@ -21,7 +21,7 @@ export function loadMapping(path: string): Mapping {
 }
 
 // Pick a mapping for the given fingerprint: exact hash match, else store-presence match.
-export function selectMapping(mappings: Mapping[], fp: FingerprintResult): SelectMappingResult {
+export function selectMapping(mappings: Mapping[], fp: Fingerprint): MappingMatch {
   const storeSet = new Set(fp.stores.map((s) => s.store));
   for (const m of mappings)
     if (m.knownFingerprints?.includes(fp.hash)) return { mapping: m, via: 'fingerprint' };
@@ -79,19 +79,19 @@ export function entityTargets(
 // Each row carries __key = the source record's leveldb user-key (latin1) so callers can group
 // messages by their reply-chain record. Shared by extractEntity (whole target buckets) and
 // extractRecords (an incremental changed-subset).
-function recordsToRows(records: Entry[], def: Mapping['entities'][string]): ExtractedRow[] {
-  const mapFields = (src: unknown, recKey: string): ExtractedRow => {
-    const r: ExtractedRow = { __key: recKey };
+function recordsToRows(records: SnapshotRecord[], def: Mapping['entities'][string]): EntityRecord[] {
+  const mapFields = (src: unknown, recKey: string): EntityRecord => {
+    const r: EntityRecord = { __key: recKey };
     for (const [out, spec] of Object.entries(def.fields)) r[out] = firstDefined(src, spec);
     return r;
   };
   // One decoded record → 0..n rows. A def may `iterate` a container of sub-items (optionally
   // `keep`-filtered); otherwise the whole record is one row.
-  const rowsFromRecord = (obj: unknown, recKey: string): ExtractedRow[] => {
+  const rowsFromRecord = (obj: unknown, recKey: string): EntityRecord[] => {
     if (!def.iterate) return [mapFields(obj, recKey)];
     const container = getPath(obj, def.iterate.replace(/\.\*$/, ''));
     if (!container || typeof container !== 'object') return [];
-    const out: ExtractedRow[] = [];
+    const out: EntityRecord[] = [];
     for (const item of Object.values(container as Record<string, unknown>)) {
       if (
         def.keep &&
@@ -103,7 +103,7 @@ function recordsToRows(records: Entry[], def: Mapping['entities'][string]): Extr
     return out;
   };
 
-  const rows: ExtractedRow[] = [];
+  const rows: EntityRecord[] = [];
   for (const rec of records) {
     let obj: unknown;
     try {
@@ -125,10 +125,10 @@ export function extractEntity(
   mapping: Mapping | null,
   entityName: string,
   targets?: Set<string>,
-): ExtractedRow[] {
+): EntityRecord[] {
   const def = (mapping as Mapping).entities[entityName];
   targets ??= entityTargets(snap, mapping, entityName);
-  const rows: ExtractedRow[] = [];
+  const rows: EntityRecord[] = [];
   for (const sk of targets) {
     const b = snap.buckets.get(sk);
     if (b) rows.push(...recordsToRows(b.records, def));
@@ -139,9 +139,9 @@ export function extractEntity(
 // Extract rows from an explicit record set (the incremental path isolates the changed subset of one
 // entity's store and maps just those, avoiding a whole-store re-extract).
 export function extractRecords(
-  records: Entry[],
+  records: SnapshotRecord[],
   mapping: Mapping | null,
   entityName: string,
-): ExtractedRow[] {
+): EntityRecord[] {
   return recordsToRows(records, (mapping as Mapping).entities[entityName]);
 }

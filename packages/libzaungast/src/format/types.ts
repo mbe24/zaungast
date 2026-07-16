@@ -43,7 +43,7 @@ export interface WalBatch {
 
 // A single live (post-dedup) IndexedDB record, keyed by the raw Chromium
 // user-key (WITHOUT the 8-byte seq/type trailer) plus the winning sequence/type.
-export interface Entry {
+export interface SnapshotRecord {
   seq: number;
   type: number;
   key: Buffer;
@@ -56,7 +56,7 @@ export interface LoadEntriesOptions {
 }
 
 export interface LoadEntriesResult {
-  live: Entry[];
+  live: SnapshotRecord[];
   rawCount: number;
   uniqueCount: number;
   maxSeq: number;
@@ -64,7 +64,7 @@ export interface LoadEntriesResult {
 }
 
 export interface LoadEntriesReuseResult {
-  live: Entry[];
+  live: SnapshotRecord[];
   maxSeq: number;
   lossy: boolean;
   compacted: boolean;
@@ -85,7 +85,7 @@ export interface StoreBucket {
   osId: number;
   dbName: string | null; // resolved by the loader from the db-name catalog rows
   storeName: string | null;
-  records: Entry[]; // dedup-insertion order (fingerprint sampling depends on it)
+  records: SnapshotRecord[]; // dedup-insertion order (fingerprint sampling depends on it)
   maxSeq: number; // high-water over this store's live records (see api-design §2.6)
 }
 
@@ -157,16 +157,16 @@ export interface PartialObjectMarker {
 
 // ---- fingerprint.ts ----
 
-export interface FingerprintStore {
+export interface SchemaStore {
   db: string;
   store: string;
   fields: string[];
 }
 
-export interface FingerprintResult {
+export interface Fingerprint {
   hash: string;
   storeCount: number;
-  stores: FingerprintStore[];
+  stores: SchemaStore[];
   dbCount: number;
 }
 
@@ -176,7 +176,7 @@ export interface DiscoverOptions {
   override?: string;
 }
 
-export interface DiscoverCandidate {
+export interface DiscoveredStore {
   dir: string;
   source: 'override' | 'auto';
   mtime: number;
@@ -204,14 +204,14 @@ export interface Mapping {
   entities: Record<string, EntityDef>;
 }
 
-export interface SelectMappingResult {
+export interface MappingMatch {
   mapping: Mapping | null;
   via: string;
 }
 
 // A row extracted from a mapped entity: the mapped fields plus `__key`, the
 // source record's raw leveldb user-key (latin1), for grouping by chain.
-export interface ExtractedRow {
+export interface EntityRecord {
   __key: string;
   [field: string]: unknown;
 }

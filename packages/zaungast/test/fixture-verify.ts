@@ -22,7 +22,7 @@ import {
   utf16be,
   decodeValue,
 } from 'libzaungast/format/index.js';
-import type { Entry } from 'libzaungast/format/types.js';
+import type { SnapshotRecord } from 'libzaungast/format/types.js';
 import { ingest } from 'libzaungast/ingest/ingest.js';
 import {
   search,
@@ -261,7 +261,7 @@ ok(
 // src/format/index.ts). This is an independent check of the raw store; ingest itself now reads
 // it via the 'profile' mapping entity (used above for reactor-name resolution).
 console.log('\n=== profiles (direct extraction — no mapping entity) ===');
-function extractProfiles(entries: Entry[]): Record<string, unknown>[] {
+function extractProfiles(entries: SnapshotRecord[]): Record<string, unknown>[] {
   const storeNames = new Map<string, string>();
   for (const { key, value } of entries) {
     if (key.length < 1) continue;

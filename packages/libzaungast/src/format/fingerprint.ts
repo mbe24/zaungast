@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import { readVarint } from './chromium/indexeddb.js';
 import { deserialize } from './chromium/structured-clone.js';
 import { byCodeUnit } from '../util/sort.js';
-import type { FingerprintResult, FingerprintStore, Snapshot } from './types.js';
+import type { Fingerprint, SchemaStore, Snapshot } from './types.js';
 
 // Build a stable, PII-free fingerprint of the Teams IndexedDB schema:
 //   - normalized database "kind" names (GUIDs / build tokens / locale stripped)
@@ -28,8 +28,8 @@ function buildStores(
   dbNames: Map<number, string>,
   storeNames: Map<string, string>,
   sampleKeys: Map<string, Set<string>>,
-): FingerprintStore[] {
-  const stores: FingerprintStore[] = [];
+): SchemaStore[] {
+  const stores: SchemaStore[] = [];
   for (const [sk, storeName] of storeNames) {
     const dbId = Number(sk.split(':')[0]);
     const dbName = dbNames.get(dbId);
@@ -47,7 +47,7 @@ function buildStores(
 export function fingerprint(
   snap: Snapshot,
   { samplePerStore = 5 }: { samplePerStore?: number } = {},
-): FingerprintResult {
+): Fingerprint {
   // Sample the first `samplePerStore` records of each store's bucket (dedup-insertion order — the
   // same records, in the same order, the old live-scan sampled → byte-identical hash). Decode WITHOUT
   // the value-compression wrapper (deserialize on value.subarray(vpos), NOT decodeValue): a
@@ -58,7 +58,7 @@ export function fingerprint(
     const set = new Set<string>();
     const lim = Math.min(samplePerStore, bucket.records.length);
     for (let i = 0; i < lim; i++) {
-      const value = bucket.records[i].value; // non-tombstone → non-null; Entry.value type is Buffer|null
+      const value = bucket.records[i].value; // non-tombstone → non-null; SnapshotRecord.value type is Buffer|null
       try {
         const [, vpos] = readVarint(value, 0);
         const obj = deserialize((value as Buffer).subarray(vpos));

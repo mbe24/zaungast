@@ -22,7 +22,7 @@ import {
   buildPhraseExtractor,
   computeTopicsWindow,
 } from 'libzaungast/query.js';
-import type { EventRow, TopicRow, QueryMiss } from 'libzaungast/query.js';
+import type { EventView, TopicView, QueryMiss } from 'libzaungast/query.js';
 import type {
   ListConversationsArgs,
   ReadMessagesArgs,
@@ -734,7 +734,7 @@ export function search(
 
 // computeTopicRows moved to ./query.js (imported above).
 
-function renderTopicRows(rows: TopicRow[]): string[] {
+function renderTopicRows(rows: TopicView[]): string[] {
   return rows.map(
     (r, i) =>
       `${i + 1}. "${r.ph}" ×${r.c} (${r.lift.toFixed(1)}× baseline) · ${r.ns} people\n   e.g. ${fmtTs(r.ex.ts)}: ${clip(r.ex.content, 90)}`,
@@ -866,10 +866,10 @@ function elideUrlsToHostnames(text: string): string {
   return text.replace(/https?:\/\/([^\s/]+)(\/[^\s]*)?/gi, (_m, host) => `[link: ${host}]`);
 }
 
-// EventRow now lives in ./query.js (imported above).
+// EventView now lives in ./query.js (imported above).
 
 // One event row, fully rendered (subject/org/attendees/response/chat-pivot/tags).
-function renderEventLine(db: DB, r: EventRow): string {
+function renderEventLine(db: DB, r: EventView): string {
   const tags =
     (r.is_cancelled ? ' [cancelled]' : '') +
     (r.is_confidential ? ' [confidential]' : '') +
@@ -891,10 +891,10 @@ function renderEventLine(db: DB, r: EventRow): string {
 
 // Recurrence run-collapse: rows sharing a series_id, in the window, beyond the first 2 collapse
 // to one summary line (the chat handle prints once — on the fully-rendered first occurrence).
-function renderEventGroups(db: DB, rows: EventRow[]): string[] {
+function renderEventGroups(db: DB, rows: EventView[]): string[] {
   // Group by series_id, preserving each row's relative chronological position (rows arrive
   // pre-sorted by start_ts asc, so a group's array is automatically in series order too).
-  const bySeries = new Map<string, EventRow[]>();
+  const bySeries = new Map<string, EventView[]>();
   for (const r of rows) {
     if (!r.series_id) continue;
     const g = bySeries.get(r.series_id);

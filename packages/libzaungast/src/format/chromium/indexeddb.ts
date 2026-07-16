@@ -9,7 +9,7 @@ import { byCodeUnit } from '../../util/sort.js';
 import type {
   DecodedPrefix,
   DeserializeOptions,
-  Entry,
+  SnapshotRecord,
   ExternalBlobMarker,
   LdbCache,
   LoadEntriesOptions,
@@ -100,8 +100,8 @@ function readLogsInto(dir: string, logFiles: string[], consider: Consider): bool
 }
 
 // Collect the surviving (non-tombstone) entries plus the global high-water sequence.
-function collectLive(map: Map<string, Entry>): { live: Entry[]; maxSeq: number } {
-  const live: Entry[] = [];
+function collectLive(map: Map<string, SnapshotRecord>): { live: SnapshotRecord[]; maxSeq: number } {
+  const live: SnapshotRecord[] = [];
   let maxSeq = 0;
   for (const e of map.values()) {
     if (e.seq > maxSeq) maxSeq = e.seq; // global high-water mark (incl. tombstones)
@@ -114,7 +114,7 @@ function collectLive(map: Map<string, Entry>): { live: Entry[]; maxSeq: number }
 // db-name / store-name catalog rows into the name maps, and append indexId===1 data records to
 // their object-store bucket (in dedup-insertion order — fingerprint sampling depends on it). This
 // is the engine-seam producer: everything downstream reads `Snapshot`, not raw Chromium keys.
-function collectSnapshot(map: Map<string, Entry>, raw: number, lossy: boolean): Snapshot {
+function collectSnapshot(map: Map<string, SnapshotRecord>, raw: number, lossy: boolean): Snapshot {
   const dbNames = new Map<number, string>();
   const storeNames = new Map<string, string>();
   const buckets = new Map<string, StoreBucket>();
@@ -167,17 +167,17 @@ function collectSnapshot(map: Map<string, Entry>, raw: number, lossy: boolean): 
 // `seqCap` (tests) ignores entries above a sequence, so the map holds OLDER versions of
 // later-rewritten chains — letting an incremental genuinely exercise edits, not just inserts.
 // `lossy` is true if any table/log failed to read fully (→ callers must not trust deletions).
-// Build the deduped `userKeyHex -> Entry` map by scanning every .ldb table + the .log WAL.
+// Build the deduped `userKeyHex -> SnapshotRecord` map by scanning every .ldb table + the .log WAL.
 // Shared by loadEntries (→ flat live[]) and loadSnapshot (→ grouped buckets).
 function buildDedupMap(
   dir: string,
   { includeLog = true, seqCap }: LoadEntriesOptions = {},
-): { map: Map<string, Entry>; raw: number; lossy: boolean } {
+): { map: Map<string, SnapshotRecord>; raw: number; lossy: boolean } {
   const files = fs
     .readdirSync(dir)
     .filter((f) => f.endsWith('.ldb'))
     .sort(byCodeUnit);
-  const map = new Map<string, Entry>(); // userKeyHex -> { seq, type, key, value }
+  const map = new Map<string, SnapshotRecord>(); // userKeyHex -> { seq, type, key, value }
   let raw = 0,
     lossy = false;
 
@@ -233,7 +233,7 @@ export function loadSnapshot(dir: string, opts: LoadEntriesOptions = {}): Snapsh
 function buildReuseMap(
   dir: string,
   ldbCache: LdbCache,
-): { map: Map<string, Entry>; raw: number; lossy: boolean; compacted: boolean } {
+): { map: Map<string, SnapshotRecord>; raw: number; lossy: boolean; compacted: boolean } {
   const all = fs.readdirSync(dir);
   const ldbNow = new Set(all.filter((f) => f.endsWith('.ldb')));
   const logNow = all.filter((f) => f.endsWith('.log')).sort(byCodeUnit);
@@ -246,7 +246,7 @@ function buildReuseMap(
       break;
     }
 
-  const map = new Map<string, Entry>();
+  const map = new Map<string, SnapshotRecord>();
   let raw = 0,
     lossy = false;
   const consider: Consider = (userKey, value, seq, type) => {
@@ -310,7 +310,7 @@ export function decodePrefix(buf: Buffer): DecodedPrefix {
   return { databaseId, objectStoreId, indexId, headerLen: p };
 }
 
-// `buf` is typed to also accept `null` because callers commonly pass an `Entry.value`
+// `buf` is typed to also accept `null` because callers commonly pass an `SnapshotRecord.value`
 // (which is `Buffer | null` for the tombstone case) straight through without a guard, exactly
 // as the untyped original did. The cast below has no runtime effect — a null `buf` still
 // throws the same TypeError on first access as the original unguarded `buf[pos++]` did.

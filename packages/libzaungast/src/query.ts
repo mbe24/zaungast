@@ -352,7 +352,7 @@ export function convMessageStats(
 }
 
 // ---------- people ----------
-export interface PersonRow {
+export interface PersonView {
   handle: string;
   mri: string;
   name: string;
@@ -362,10 +362,10 @@ export interface PersonRow {
 export interface PeopleResult {
   mode: 'handle' | 'search' | 'roster'; // how the query resolved (drives the renderer's header)
   query: string; // the trimmed query, '' for roster
-  rows: PersonRow[];
+  rows: PersonView[];
 }
 
-const toPersonRow = (r: any): PersonRow => ({
+const toPersonRow = (r: any): PersonView => ({
   handle: r.handle,
   mri: r.mri,
   name: r.name,
@@ -405,7 +405,7 @@ export function queryPeople(
 }
 
 // ---------- conversations ----------
-export interface ConversationRow {
+export interface ConversationView {
   handle: string;
   kind: string;
   topic: string | null;
@@ -426,7 +426,7 @@ export function queryConversations(
     sinceTs?: number;
     includeEmpty?: boolean;
   } = {},
-): ConversationRow[] {
+): ConversationView[] {
   const db = store.db;
   const n = Math.min(Number(opts.n) || 12, 30);
   const where: string[] = [];
@@ -466,7 +466,7 @@ export function queryConversations(
 }
 
 // ---------- calls ----------
-export interface CallRow {
+export interface CallView {
   startTs: number;
   direction: string | null;
   isMissed: number;
@@ -492,7 +492,7 @@ export function queryCalls(
     participant?: string;
     limit?: number;
   } = {},
-): CallRow[] {
+): CallView[] {
   const db = store.db;
   const limit = Math.min(Number(opts.limit) || 30, 100);
   const where: string[] = ['is_deleted=0']; // filtered out by default
@@ -555,7 +555,7 @@ export function queryCalls(
 // ---------- events ----------
 // Raw event row shape (DB columns) — the recurrence-collapse renderer in the MCP layer reads these
 // fields directly; kept snake_case to match the events table (a camelCase remap is a later cleanup).
-export interface EventRow {
+export interface EventView {
   id: string;
   series_id: string | null;
   kind: string;
@@ -586,7 +586,7 @@ export function queryEvents(
     hideCancelled?: boolean;
     limit?: number;
   } = {},
-): EventRow[] {
+): EventView[] {
   const db = store.db;
   const limit = Math.min(Number(opts.limit) || 30, 100);
   const where: string[] = [];
@@ -615,7 +615,7 @@ export function queryEvents(
   const w = where.length ? 'where ' + where.join(' and ') : '';
   return db
     .prepare(`select * from events ${w} order by start_ts asc limit ?`)
-    .all(...params, limit) as unknown as EventRow[];
+    .all(...params, limit) as unknown as EventView[];
 }
 
 // Newest materialized occurrence start across ALL events — the honest bound for list_events'
@@ -661,7 +661,7 @@ export function buildPhraseExtractor(
   };
 }
 
-export interface TopicRow {
+export interface TopicView {
   ph: string;
   c: number;
   ns: number;
@@ -760,7 +760,7 @@ export function computeTopicRows(
   untilTs: number,
   minSenders: number,
   n: number,
-): { rows: TopicRow[]; baseTotal: number; win: any[] } {
+): { rows: TopicView[]; baseTotal: number; win: any[] } {
   const baseDf = new Map<string, number>();
   let baseTotal = 0;
   for (const m of all)

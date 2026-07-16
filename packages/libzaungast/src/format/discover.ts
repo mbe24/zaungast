@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import type { DiscoverCandidate, DiscoverOptions } from './types.js';
+import type { DiscoveredStore, DiscoverOptions } from './types.js';
 
 // Auto-detect the Teams IndexedDB leveldb dir. Returns ranked candidates (newest first).
 // Manual override always wins: env TEAMS_LEVELDB_DIR or config.dir.
@@ -52,10 +52,10 @@ function isLevelDb(dir: string): boolean {
 
 // Collect candidate leveldb stores under one profile dir (WV2Profile_tfw, WV2Profile_*, "Default",
 // …) — the innermost step of the discovery walk, pulled out to keep discoverTeamsDbs flat.
-function candidatesInProfile(pkg: string, profile: string): DiscoverCandidate[] {
+function candidatesInProfile(pkg: string, profile: string): DiscoveredStore[] {
   const idbRoot = path.join(profile, 'IndexedDB');
   if (!existsDir(idbRoot)) return [];
-  const found: DiscoverCandidate[] = [];
+  const found: DiscoveredStore[] = [];
   for (const store of children(idbRoot, (n) => /^https_teams\..*\.indexeddb\.leveldb$/i.test(n))) {
     if (isLevelDb(store)) {
       found.push({
@@ -108,7 +108,7 @@ function ebWebViewRoots(
 export function discoverTeamsDbs(
   { override }: DiscoverOptions = {},
   env: { platform?: NodeJS.Platform; home?: string; localAppData?: string } = {},
-): DiscoverCandidate[] {
+): DiscoveredStore[] {
   if (override)
     return [
       { dir: override, source: 'override', mtime: mtime(override), valid: isLevelDb(override) },
@@ -119,7 +119,7 @@ export function discoverTeamsDbs(
   const localAppData =
     env.localAppData ?? process.env.LOCALAPPDATA ?? path.join(home, 'AppData', 'Local');
 
-  const candidates: DiscoverCandidate[] = [];
+  const candidates: DiscoveredStore[] = [];
   for (const { pkg, ebweb } of ebWebViewRoots(platform, home, localAppData)) {
     // profile dirs (WV2Profile_tfw, WV2Profile_*, "Default", …)
     for (const profile of children(ebweb, (n) => !n.startsWith('.')))

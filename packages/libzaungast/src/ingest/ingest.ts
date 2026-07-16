@@ -10,7 +10,7 @@ import {
   extractRecords,
   entityTargets,
 } from '../format/index.js';
-import type { Entry, Snapshot } from '../format/types.js';
+import type { SnapshotRecord, Snapshot } from '../format/types.js';
 import { ChatStore, type StoreMeta } from './store.js';
 import { htmlToText, isSystemMessage, mentionedMris, hasAttachment } from '../util/text.js';
 
@@ -393,7 +393,7 @@ export function applyIncremental(
   // buckets — already grouped by store, no per-entry prefix decode.
   const liveChainKeys = new Set<string>();
   const changedChainKeys = new Set<string>();
-  const changedMsgRecords: Entry[] = [];
+  const changedMsgRecords: SnapshotRecord[] = [];
   for (const sk of state.msgTargets) {
     const b = snap.buckets.get(sk);
     if (!b) continue;
