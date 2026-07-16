@@ -18,7 +18,7 @@ import inspector from 'node:inspector';
 import { spawnSync } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 
-import { ingest, applyIncremental } from '../dist/ingest/ingest.js';
+import { ingest, applyIncremental } from 'libzaungast/ingest/ingest.js';
 import {
   loadEntries,
   fingerprint,
@@ -26,8 +26,8 @@ import {
   loadMapping,
   extractEntity,
   entityTargets,
-} from '../dist/format/index.js';
-import { Session } from '../dist/session.js';
+} from 'libzaungast/format/index.js';
+import { Session } from 'libzaungast/session.js';
 import {
   readMessages,
   search,
@@ -36,7 +36,7 @@ import {
   findPerson,
   listEvents,
   listCalls,
-} from '../dist/tools.js';
+} from 'zaungast/tools.js';
 
 const gc = typeof global.gc === 'function' ? global.gc : null;
 
@@ -153,7 +153,7 @@ if (gc) {
 }
 
 // ---- 2. format-layer phase breakdown (the API-reshape target) ----
-const VDIR = path.join('dist', 'schema', 'versions');
+const VDIR = path.join('packages', 'libzaungast', 'dist', 'schema', 'versions');
 const mappings = fs
   .readdirSync(VDIR)
   .filter((f) => f.endsWith('.json'))

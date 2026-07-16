@@ -1,0 +1,51 @@
+{
+  "name": "zaungast",
+  "version": "0.3.0",
+  "description": "Read-only, offline MCP server for Teams: search chats, read conversations, surface trending topics, find people, and browse meetings & calls — straight from the local on-disk cache, with no Graph API, no cloud, no credentials, and token-economical output for coding agents. Built on libzaungast. Not affiliated with or endorsed by Microsoft.",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mbe24/zaungast.git"
+  },
+  "homepage": "https://github.com/mbe24/zaungast#readme",
+  "bugs": "https://github.com/mbe24/zaungast/issues",
+  "bin": {
+    "zaungast": "dist/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./*.js": {
+      "types": "./src/*.ts",
+      "development": "./src/*.ts",
+      "default": "./dist/*.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "microsoft-teams",
+    "indexeddb",
+    "leveldb",
+    "offline",
+    "read-only"
+  ],
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "libzaungast": "*",
+    "zod": "^4.4.3"
+  }
+}

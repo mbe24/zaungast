@@ -1,7 +1,8 @@
 {
-  "name": "zaungast",
+  "name": "zaungast-monorepo",
   "version": "0.3.0",
-  "description": "Read-only, offline MCP server for Teams: search chats, read conversations, surface trending topics, find people, and browse meetings & calls — straight from the local on-disk cache, with no Graph API, no cloud, no credentials, and token-economical output for coding agents. Not affiliated with or endorsed by Microsoft.",
+  "private": true,
+  "description": "Monorepo for libzaungast (read-only offline Teams-cache reader) and zaungast (its MCP server). Not affiliated with or endorsed by Microsoft.",
   "type": "module",
   "repository": {
     "type": "git",
@@ -9,47 +10,32 @@
   },
   "homepage": "https://github.com/mbe24/zaungast#readme",
   "bugs": "https://github.com/mbe24/zaungast/issues",
-  "bin": {
-    "zaungast": "dist/index.js"
-  },
-  "files": [
-    "dist"
+  "workspaces": [
+    "packages/libzaungast",
+    "packages/zaungast"
   ],
   "scripts": {
-    "build": "tsc && node -e \"require('fs').cpSync('src/schema/versions','dist/schema/versions',{recursive:true})\"",
-    "start": "node --experimental-sqlite dist/index.js",
-    "dev": "node --experimental-sqlite --import tsx src/index.ts",
-    "tsx": "node --experimental-sqlite --import tsx",
-    "typecheck": "tsc --noEmit",
-    "typecheck:test": "tsc -p test/tsconfig.json",
-    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
-    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
-    "test": "node --experimental-sqlite --import tsx test/unit.ts",
-    "test:fixture": "node --experimental-sqlite --import tsx test/fixture/verify.ts",
-    "test:integration:ci": "node --experimental-sqlite --import tsx test/run-integration.ts",
-    "test:integration": "node --experimental-sqlite --import tsx test/_inctest.ts && node --experimental-sqlite --import tsx test/_reusetest.ts && node --experimental-sqlite --import tsx test/_fbtest.ts",
-    "test:golden": "node --experimental-sqlite --import tsx test/golden/extract.ts && node --experimental-sqlite --import tsx test/golden/mcp.ts",
-    "test:golden:real": "node --experimental-sqlite --import tsx test/golden/real-digest.ts && node --experimental-sqlite --import tsx test/golden/htmltext.ts",
-    "assets": "node scripts/render-assets.mjs",
-    "prepublishOnly": "npm run build"
+    "build": "npm run build --workspace libzaungast && npm run build --workspace zaungast",
+    "start": "node --experimental-sqlite packages/zaungast/dist/index.js",
+    "dev": "node --conditions=development --experimental-sqlite --import tsx packages/zaungast/src/index.ts",
+    "tsx": "node --conditions=development --experimental-sqlite --import tsx",
+    "typecheck": "tsc -p packages/libzaungast/tsconfig.json --noEmit && tsc -p packages/zaungast/tsconfig.json --noEmit",
+    "typecheck:test": "tsc -p packages/libzaungast/test/tsconfig.json && tsc -p packages/zaungast/test/tsconfig.json",
+    "check:deps": "node scripts/check-deps.mjs",
+    "format": "prettier --write \"packages/*/src/**/*.ts\" \"packages/*/test/**/*.ts\"",
+    "format:check": "prettier --check \"packages/*/src/**/*.ts\" \"packages/*/test/**/*.ts\"",
+    "test": "node --conditions=development --experimental-sqlite --import tsx packages/libzaungast/test/unit.ts && node --conditions=development --experimental-sqlite --import tsx packages/zaungast/test/unit.ts",
+    "test:fixture": "node --conditions=development --experimental-sqlite --import tsx packages/zaungast/test/fixture-verify.ts",
+    "test:integration:ci": "node --conditions=development --experimental-sqlite --import tsx packages/libzaungast/test/run-integration.ts",
+    "test:integration": "node --conditions=development --experimental-sqlite --import tsx packages/libzaungast/test/_inctest.ts && node --conditions=development --experimental-sqlite --import tsx packages/libzaungast/test/_reusetest.ts && node --conditions=development --experimental-sqlite --import tsx packages/zaungast/test/_fbtest.ts",
+    "test:golden": "node --conditions=development --experimental-sqlite --import tsx packages/libzaungast/test/golden/extract.ts && node --conditions=development --experimental-sqlite --import tsx packages/zaungast/test/golden/mcp.ts",
+    "test:golden:real": "node --conditions=development --experimental-sqlite --import tsx packages/libzaungast/test/golden/real-digest.ts && node --conditions=development --experimental-sqlite --import tsx packages/libzaungast/test/golden/htmltext.ts",
+    "assets": "node scripts/render-assets.mjs"
   },
   "engines": {
     "node": ">=22.5.0"
   },
-  "keywords": [
-    "mcp",
-    "model-context-protocol",
-    "microsoft-teams",
-    "indexeddb",
-    "leveldb",
-    "offline",
-    "read-only"
-  ],
   "license": "Apache-2.0",
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "zod": "^4.4.3"
-  },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
     "@types/node": "^26.1.1",

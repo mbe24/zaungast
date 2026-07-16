@@ -1,0 +1,9 @@
+// Type-checking config for zaungast's tests. Extends the root base (module settings +
+// customConditions so the workspace packages resolve to source). noEmit: run via tsx, never built.
+{
+  "extends": "../../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["**/*.ts"]
+}
