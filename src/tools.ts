@@ -21,6 +21,7 @@ import {
   queryThreadSummaries,
   convMessageStats,
   buildPhraseExtractor,
+  computeTopicsWindow,
 } from './query.js';
 import type { EventRow, TopicRow } from './query.js';
 import type {
@@ -904,21 +905,8 @@ function buildTopicsScope(
 // the messages BEFORE the window ("new vs history") — never after — so a topic that persists
 // past the window isn't penalised. The default window anchors to the newest message actually IN
 // SCOPE (`all`), not wall-clock "now".
-function computeTopicsWindow(
-  all: any[],
-  args: TopTopicsArgs,
-): { sinceTs: number; untilTs: number; explicit: boolean } {
-  const explicit = args.since != null || args.until != null;
-  let maxTs = 0;
-  for (const m of all) if (m.ts > maxTs) maxTs = m.ts;
-  const windowMs =
-    { '1d': 864e5, '7d': 7 * 864e5, '30d': 30 * 864e5 }[String(args.window || '7d')] ?? 7 * 864e5;
-  const sinceTs = explicit ? (parseTime(args.since) ?? 0) : maxTs - windowMs;
-  const untilTs = explicit
-    ? (parseTime(args.until) ?? Number.MAX_SAFE_INTEGER)
-    : Number.MAX_SAFE_INTEGER;
-  return { sinceTs, untilTs, explicit };
-}
+// computeTopicsWindow (window policy) now lives in ./query.js; the MCP layer computes `explicit`
+// from arg presence and parses since/until before calling it.
 
 // computeTopicRows moved to ./query.js (imported above).
 
@@ -951,7 +939,13 @@ export function topTopics(
   const { all, botExcluded } = loadTopicsMessages(db, conds, params, args.include_bots);
   if (!all.length) return `${envelope(meta, deferred)}\n(no messages in scope)`;
 
-  const { sinceTs, untilTs, explicit } = computeTopicsWindow(all, args);
+  const explicit = args.since != null || args.until != null;
+  const { sinceTs, untilTs } = computeTopicsWindow(all, {
+    explicit,
+    sinceTs: parseTime(args.since),
+    untilTs: parseTime(args.until),
+    windowKey: args.window,
+  });
   const { rows, baseTotal, win } = computeTopicRows(all, phrases, sinceTs, untilTs, minSenders, n);
 
   if (botExcluded)

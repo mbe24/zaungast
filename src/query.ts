@@ -559,3 +559,21 @@ export function computeTopicRows(
     .slice(0, n);
   return { rows, baseTotal, win };
 }
+
+// Topics window policy: an explicit range (already-parsed sinceTs/untilTs) overrides the enum
+// window. Baseline is always messages BEFORE the window ("new vs history"); the default window
+// anchors to the newest message actually IN SCOPE (`all`), not wall-clock now. `explicit` is passed
+// in (the MCP layer computes it from arg presence + does the parseTime/validation).
+export function computeTopicsWindow(
+  all: any[],
+  opts: { explicit: boolean; sinceTs?: number; untilTs?: number; windowKey?: string },
+): { sinceTs: number; untilTs: number } {
+  let maxTs = 0;
+  for (const m of all) if (m.ts > maxTs) maxTs = m.ts;
+  const windowMs =
+    { '1d': 864e5, '7d': 7 * 864e5, '30d': 30 * 864e5 }[String(opts.windowKey || '7d')] ??
+    7 * 864e5;
+  const sinceTs = opts.explicit ? (opts.sinceTs ?? 0) : maxTs - windowMs;
+  const untilTs = opts.explicit ? (opts.untilTs ?? Number.MAX_SAFE_INTEGER) : Number.MAX_SAFE_INTEGER;
+  return { sinceTs, untilTs };
+}
