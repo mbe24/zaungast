@@ -3,7 +3,7 @@ import { makeExtractor } from './util/topics.js';
 import { byCodeUnit } from './util/sort.js';
 import { reactionGlyph } from './util/emoji.js';
 import { htmlToText } from './util/text.js';
-import { likeEscape, queryPeople } from './query.js';
+import { likeEscape, queryPeople, queryCalls } from './query.js';
 import type {
   ListConversationsArgs,
   ReadMessagesArgs,
@@ -1447,77 +1447,38 @@ function renderRecordingPivot(db: DB, recordingLinkJson: string | null | undefin
   return ` recorded → ${conv.handle} m:${link.linkedMessageId}`;
 }
 
+// list_calls = render(queryCalls(...)). Library resolves + filters + limits the rows; this
+// renderer owns arg validation and the arrow/tail/tags/pivot layout.
 export function listCalls(
   store: ChatStore,
   meta: StoreMeta,
   deferred: boolean,
   args: ListCallsArgs = {},
 ): string {
-  const db = store.db;
   const bt = badTime(args, ['since', 'until']);
   if (bt) return bt;
-  const limit = Math.min(Number(args.limit) || 30, 100);
-
-  const where: string[] = ['is_deleted=0']; // filtered out by default, no flag needed
-  const params: any[] = [];
-  if (args.direction) {
-    where.push('direction=?');
-    params.push(args.direction);
-  }
-  if (args.missed) where.push('is_missed=1');
-  const since = parseTime(args.since);
-  if (since != null) {
-    where.push('start_ts>=?');
-    params.push(since);
-  }
-  const until = parseTime(args.until);
-  if (until != null) {
-    where.push('start_ts<?');
-    params.push(until);
-  }
-  const rowsAll = db
-    .prepare(`select * from calls where ${where.join(' and ')} order by start_ts desc`)
-    .all(...params) as any[];
-
-  // Resolve each call's display label (counterpart name / group name+handle) in JS — the table
-  // is tiny (~100 rows total), so this is far simpler than threading name resolution into SQL,
-  // and it's what lets `participant` filter on the RESOLVED name (TwoParty target.displayName is
-  // often null in the raw data; nameForMri via the profiles table is the actual fix).
-  const resolved = rowsAll.map((r) => {
-    let label: string;
-    if (r.call_type === 'MultiParty') {
-      const conv = r.group_thread_id
-        ? (db
-            .prepare('select handle,topic,participant_names from conversations where id=?')
-            .get(r.group_thread_id) as any)
-        : null;
-      label = conv
-        ? `${conv.topic || conv.participant_names || '(group)'} ${conv.handle}`
-        : '(group call)';
-    } else {
-      label = (r.counterpart_mri && store.nameForMri(r.counterpart_mri)) || '(unknown)';
-    }
-    return { r, label };
+  const rows = queryCalls(store, {
+    direction: args.direction,
+    missed: args.missed,
+    sinceTs: parseTime(args.since),
+    untilTs: parseTime(args.until),
+    participant: args.participant,
+    limit: args.limit,
   });
-  const filtered = args.participant
-    ? resolved.filter((x) => x.label.toLowerCase().includes(String(args.participant).toLowerCase()))
-    : resolved;
-  const limited = filtered.slice(0, limit);
-
-  const lines = limited.map(({ r, label }) => {
+  const db = store.db;
+  const lines = rows.map((r) => {
     const arrow = r.direction === 'Incoming' ? '←' : r.direction === 'Outgoing' ? '→' : '?';
-    const tail = r.is_missed
+    const tail = r.isMissed
       ? 'missed'
-      : `${humanizeDuration(r.duration_ms)} · ${(r.state || '?').toLowerCase()}`;
+      : `${humanizeDuration(r.durationMs)} · ${(r.state || '?').toLowerCase()}`;
     const tags =
-      (r.has_recording ? ' [recorded]' : '') +
-      (r.has_voicemail ? ' [voicemail]' : '') +
-      (r.spam_level && !/^none$/i.test(r.spam_level) ? ' [spam?]' : '') +
-      (r.is_current_user_part === 0 ? ' [not-you]' : '');
-    const pivot = renderRecordingPivot(db, r.recording_link);
-    return `${fmtTs(r.start_ts)} ${arrow} ${label} · ${tail}${tags}${pivot}`;
+      (r.hasRecording ? ' [recorded]' : '') +
+      (r.hasVoicemail ? ' [voicemail]' : '') +
+      (r.spamLevel && !/^none$/i.test(r.spamLevel) ? ' [spam?]' : '') +
+      (r.isCurrentUserPart === 0 ? ' [not-you]' : '');
+    const pivot = renderRecordingPivot(db, r.recordingLink);
+    return `${fmtTs(r.startTs)} ${arrow} ${r.label} · ${tail}${tags}${pivot}`;
   });
-
-  const head = envelope(meta, deferred, `${limited.length} calls`);
+  const head = envelope(meta, deferred, `${rows.length} calls`);
   return `${head}\n${lines.join('\n') || '(no calls)'}`;
 }
