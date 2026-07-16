@@ -640,6 +640,7 @@ export function buildPhraseExtractor(
   store: ChatStore,
   db: DB,
   excludeWords: Set<string>,
+  extraStopwords?: Iterable<string>,
 ): (content: string) => string[] {
   const nameTokens = new Set<string>();
   for (const r of db.prepare('select name from people').all() as any[])
@@ -647,9 +648,21 @@ export function buildPhraseExtractor(
       .toLowerCase()
       .match(/[\p{L}\p{M}]{3,}/gu) || [])
       nameTokens.add(w);
-  const { phrases: extract } = makeExtractor(nameTokens); // en+de merged (default)
+  const { phrases: extract } = makeExtractor(nameTokens, undefined, extraStopwords); // en+de merged (default)
 
-  const sig = `${nameTokens.size}:${[...nameTokens].sort(byCodeUnit).join(',').length}`;
+  // `extraStopwords` alter the extraction itself (they break phrase runs), so they must be part of
+  // the phrase-cache signature — otherwise a different stopword set would reuse stale phrases. When
+  // none are supplied the signature is byte-identical to the pre-existing one (empty suffix), so the
+  // MCP path (which never passes extras) keeps the exact same cache key and output.
+  const extra = extraStopwords
+    ? [...extraStopwords]
+        .map((w) => String(w).toLowerCase())
+        .filter(Boolean)
+        .sort(byCodeUnit)
+    : [];
+  const sig =
+    `${nameTokens.size}:${[...nameTokens].sort(byCodeUnit).join(',').length}` +
+    (extra.length ? `:x${extra.join(',')}` : '');
   if (store.phraseCacheSig !== sig) {
     store.phraseCache.clear();
     store.phraseCacheSig = sig;

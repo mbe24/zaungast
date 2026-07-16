@@ -3,6 +3,7 @@
 // import specific subpaths (libzaungast/query.js, libzaungast/session.js, …); this barrel just
 // gathers the main surface for `import { … } from 'libzaungast'`.
 export * from './query.js';
+export * from './store-api.js';
 export * from './format/index.js';
 export { Session } from './session.js';
 export { ingest, applyIncremental } from './ingest/ingest.js';
