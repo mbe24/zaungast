@@ -1,10 +1,6 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   loadSnapshot,
   fingerprint,
-  loadMapping,
   selectMapping,
   extractEntity,
   extractRecords,
@@ -13,8 +9,6 @@ import {
 import type { SnapshotRecord, Snapshot } from '../format/types.js';
 import { ChatStore, type StoreMeta } from './store.js';
 import { htmlToText, isSystemMessage, mentionedMris, hasAttachment } from '../util/text.js';
-
-const VERSIONS_DIR = fileURLToPath(new URL('../schema/versions/', import.meta.url));
 
 export function convKind(id = ''): string {
   if (id.includes('@unq.gbl.spaces')) return '1:1';
@@ -42,12 +36,6 @@ export interface Ingested {
   lossy: boolean;
 }
 
-function loadMappings() {
-  return fs
-    .readdirSync(VERSIONS_DIR)
-    .filter((f) => f.endsWith('.json'))
-    .map((f) => loadMapping(path.join(VERSIONS_DIR, f)));
-}
 
 // Compact `properties.emotions` to the minimum the renderer needs and a stable JSON string:
 // per emoji key, the reactor MRIs with their reaction times. Order-normalized (key asc, then
@@ -312,7 +300,7 @@ export function ingest(dir: string, opts: { seqCap?: number } = {}): Ingested {
   const snap = loadSnapshot(dir, { seqCap: opts.seqCap });
   const { maxSeq, lossy } = snap;
   const fp = fingerprint(snap);
-  const { mapping } = selectMapping(loadMappings(), fp);
+  const { mapping } = selectMapping(fp);
   if (!mapping) {
     const store = new ChatStore();
     return {

@@ -201,13 +201,12 @@ function craftDeletionLog(userKey: Buffer, seq: number): Buffer {
 function msgStoreKey(dir: string): Buffer | null {
   const { live } = loadEntries(dir);
   const snap = loadSnapshot(dir);
-  const mapping = selectMapping(
-    fs
+  const mapping = selectMapping(fingerprint(snap), {
+    mappings: fs
       .readdirSync(VDIR)
       .filter((f: string) => f.endsWith('.json'))
       .map((f: string) => loadMapping(path.join(VDIR, f))),
-    fingerprint(snap),
-  ).mapping;
+  }).mapping;
   const targets: Set<string> = entityTargets(snap, mapping, 'message');
   for (const e of live) {
     let p: any;

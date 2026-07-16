@@ -104,7 +104,7 @@ function getMapping(snap: any) {
     .readdirSync(VDIR)
     .filter((f) => f.endsWith('.json'))
     .map((f) => loadMapping(path.join(VDIR, f)));
-  return selectMapping(mappings, fingerprint(snap)).mapping;
+  return selectMapping(fingerprint(snap), { mappings }).mapping;
 }
 function msgStoreKey(snap: any): Buffer | null {
   const targets: Set<string> = entityTargets(snap, getMapping(snap), 'message');

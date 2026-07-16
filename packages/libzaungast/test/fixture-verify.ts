@@ -131,7 +131,7 @@ const mappings = fs
   .readdirSync(VDIR)
   .filter((f) => f.endsWith('.json'))
   .map((f) => loadMapping(path.join(VDIR, f)));
-const { mapping, via } = selectMapping(mappings, fp);
+const { mapping, via } = selectMapping(fp, { mappings });
 ok(
   'mapping resolved',
   mapping?.schemaVersion === 'teams-2026-07',

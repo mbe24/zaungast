@@ -8,14 +8,11 @@
 //
 // Error contract (stated once): a FALLIBLE facade query returns `{ ok: false, reason: QueryMiss } |
 // { ok: true, … }`; an INFALLIBLE one returns its rows/value directly. Never a silent fall-through.
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { ingest, type Ingested } from './ingest/ingest.js';
 import type { ChatStore, StoreMeta } from './ingest/store.js';
 import { Session, type SessionOptions } from './session.js';
-import { loadSnapshot, fingerprint, selectMapping, loadMapping } from './format/index.js';
-import type { Mapping, Snapshot } from './format/types.js';
+import { loadSnapshot, fingerprint, selectMapping } from './format/index.js';
+import type { Snapshot } from './format/types.js';
 import {
   queryConversations,
   conversationById,
@@ -50,17 +47,6 @@ import {
   type QueryMiss,
   type ConvMessagesMiss,
 } from './query.js';
-
-// Bundled mapping files (src/schema/versions/*.json) — reached exactly as ingest.ts's VERSIONS_DIR,
-// but relative to this module (one level up from src/ingest/). `inspect`/`tryOpen` reuse this so a
-// consumer never has to load mapping JSON themselves.
-const VERSIONS_DIR = fileURLToPath(new URL('./schema/versions/', import.meta.url));
-function loadMappings(): Mapping[] {
-  return fs
-    .readdirSync(VERSIONS_DIR)
-    .filter((f) => f.endsWith('.json'))
-    .map((f) => loadMapping(path.join(VERSIONS_DIR, f)));
-}
 
 // Default row caps for the message reads (the query layer requires an explicit limit; the facade
 // supplies a sensible default so a consumer need not think about it).
@@ -482,7 +468,7 @@ export function tryOpen(
 export function inspect(dir: string): StoreInspection {
   const snap = loadSnapshot(dir);
   const fp = fingerprint(snap);
-  const { mapping } = selectMapping(loadMappings(), fp);
+  const { mapping } = selectMapping(fp);
   return {
     fingerprint: fp.hash,
     schemaMatched: !!mapping,

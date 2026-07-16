@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 // Mapping/extraction reads decoded structured-clone values from the snapshot's records. Keys,
 // grouping, and the catalog are already resolved by the loader into the Snapshot; the only Chromium
 // call left here is value decoding (decodeValue), which is fine — macOS Teams uses the same Chromium
@@ -20,8 +22,25 @@ export function loadMapping(path: string): Mapping {
   return JSON.parse(fs.readFileSync(path, 'utf8'));
 }
 
-// Pick a mapping for the given fingerprint: exact hash match, else store-presence match.
-export function selectMapping(mappings: Mapping[], fp: Fingerprint): MappingMatch {
+// The mapping files bundled with the package (src/schema/versions/*.json; copied to dist/ by the
+// build, so this resolves the same in dev and prod). Loaded once and cached — they're static
+// shipped data.
+const VERSIONS_DIR = fileURLToPath(new URL('../schema/versions/', import.meta.url));
+let bundledMappings: Mapping[] | null = null;
+export function loadBundledMappings(): Mapping[] {
+  if (!bundledMappings)
+    bundledMappings = fs
+      .readdirSync(VERSIONS_DIR)
+      .filter((f) => f.endsWith('.json'))
+      .map((f) => loadMapping(path.join(VERSIONS_DIR, f)));
+  return bundledMappings;
+}
+
+// Pick a mapping for the given fingerprint: exact hash match, else store-presence match. Defaults to
+// the mappings bundled with the package (so a consumer never has to load mapping JSON themselves);
+// pass `{ mappings }` to override with your own set.
+export function selectMapping(fp: Fingerprint, opts: { mappings?: Mapping[] } = {}): MappingMatch {
+  const mappings = opts.mappings ?? loadBundledMappings();
   const storeSet = new Set(fp.stores.map((s) => s.store));
   for (const m of mappings)
     if (m.knownFingerprints?.includes(fp.hash)) return { mapping: m, via: 'fingerprint' };

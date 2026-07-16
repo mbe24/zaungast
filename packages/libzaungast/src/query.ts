@@ -489,7 +489,7 @@ export function queryPeople(
   opts: { query?: string; n?: number } = {},
 ): PeopleResult {
   const db = store.db;
-  const n = Math.min(Number(opts.n) || 8, 25);
+  const n = Math.min(Number(opts.n) || 8, 25); // n: default 8, documented maximum 25
   const q = opts.query ? String(opts.query).trim() : '';
   const cols = 'handle,mri,name,msg_count,last_ts';
   if (q.startsWith('p:')) {
@@ -588,7 +588,7 @@ export function queryConversations(
   } = {},
 ): ConversationView[] {
   const db = store.db;
-  const n = Math.min(Number(opts.n) || 12, 30);
+  const n = Math.min(Number(opts.n) || 12, 30); // n: default 12, documented maximum 30
   const where: string[] = [];
   const params: any[] = [];
   if (!opts.includeEmpty) where.push('msg_count>0'); // hide 0-message team roots by default
@@ -647,7 +647,7 @@ export function queryCalls(
   } = {},
 ): CallView[] {
   const db = store.db;
-  const limit = Math.min(Number(opts.limit) || 30, 100);
+  const limit = Math.min(Number(opts.limit) || 30, 100); // limit: default 30, documented maximum 100
   const where: string[] = ['is_deleted=0']; // filtered out by default
   const params: any[] = [];
   if (opts.direction) {
@@ -741,7 +741,7 @@ export function queryEvents(
   } = {},
 ): EventView[] {
   const db = store.db;
-  const limit = Math.min(Number(opts.limit) || 30, 100);
+  const limit = Math.min(Number(opts.limit) || 30, 100); // limit: default 30, documented maximum 100
   const where: string[] = [];
   const params: any[] = [];
   if (opts.sinceTs != null) {

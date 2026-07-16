@@ -85,7 +85,7 @@ function digestOf(dir: string) {
     .map((f) => loadMapping(path.join(VERSIONS, f)));
   const snap = loadSnapshot(dir);
   const fp = fingerprint(snap);
-  const { mapping } = selectMapping(mappings, fp);
+  const { mapping } = selectMapping(fp, { mappings });
   if (!mapping) throw new Error('selectMapping returned no mapping for the real store fingerprint');
   const entities: Record<string, { count: number; sha256: string }> = {};
   for (const name of Object.keys(mapping.entities)) {
