@@ -1,7 +1,7 @@
 {
   "name": "zaungast",
-  "version": "0.2.0",
-  "description": "Read-only, offline MCP server for Teams: search chats, read conversations, surface trending topics, and find people straight from the local on-disk cache — no Graph API, no cloud, no credentials — with token-economical output for coding agents. Not affiliated with or endorsed by Microsoft.",
+  "version": "0.3.0",
+  "description": "Read-only, offline MCP server for Teams: search chats, read conversations, surface trending topics, find people, and browse meetings & calls — straight from the local on-disk cache, with no Graph API, no cloud, no credentials, and token-economical output for coding agents. Not affiliated with or endorsed by Microsoft.",
   "type": "module",
   "repository": {
     "type": "git",
