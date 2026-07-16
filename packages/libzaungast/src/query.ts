@@ -48,6 +48,41 @@ export function senderFilter(
   return { sql: String.raw`m.sender_name like ? escape '\'`, params: [`%${likeEscape(arg)}%`] };
 }
 
+// Why a resolution couldn't be satisfied. A structured reason (Category-2 "outcome-with-reason" of
+// the uniform error semantics) — the library never emits agent-facing prose; the MCP layer maps
+// each reason to its user-facing message. `value` carries the offending selector.
+export type QueryMiss =
+  | { reason: 'no-such-sender'; value: string }
+  | { reason: 'no-such-conversation'; value: string }
+  | { reason: 'no-such-excluded-conversation'; value: string }
+  | { reason: 'no-such-excluded-person'; value: string };
+
+// Resolve an `exclude` list — `c:` conversation handles, `p:` person handles, and plain words — to
+// ids/mris/words, or a `QueryMiss` when a handle doesn't resolve. Shared by the search + topics
+// scopes.
+export function resolveExcludes(
+  db: DB,
+  list: string[] | undefined,
+): { convIds: string[]; mris: string[]; words: string[]; miss?: QueryMiss } {
+  const convIds: string[] = [],
+    mris: string[] = [],
+    words: string[] = [];
+  for (const raw of list ?? []) {
+    const e = String(raw).trim();
+    if (!e) continue;
+    if (e.startsWith('c:')) {
+      const r = db.prepare('select id from conversations where handle=?').get(e) as any;
+      if (!r) return { convIds, mris, words, miss: { reason: 'no-such-excluded-conversation', value: e } };
+      convIds.push(r.id);
+    } else if (e.startsWith('p:')) {
+      const r = db.prepare('select mri from people where handle=?').get(e) as any;
+      if (!r) return { convIds, mris, words, miss: { reason: 'no-such-excluded-person', value: e } };
+      mris.push(r.mri);
+    } else words.push(e.toLowerCase());
+  }
+  return { convIds, mris, words };
+}
+
 // Build a safe FTS5 MATCH string: quote each term so user punctuation/operators can't throw a
 // syntax error. Returns null if there's nothing to match.
 export function ftsMatch(raw: string): string | null {
@@ -56,11 +91,117 @@ export function ftsMatch(raw: string): string | null {
 }
 
 // ---------- search ----------
-// Execute the search: FTS5 MATCH+bm25 ranking when available and a query is given, else a plain
-// content LIKE scan ordered by recency. `conds`/`params` are extended in place: the LIKE path
-// appends the query as a where-clause (so callers must pass their OWN copy, not the shared scope
-// arrays, if those need to stay query-free — see the coverage note in the MCP layer).
-export function runSearchQuery(
+// Options for querySearch. All selectors are optional; time bounds are pre-parsed epoch ms (arg
+// parsing / now-relative defaults stay MCP-side). `ftsEnabled` reflects whether the FTS5 index is
+// available.
+export interface SearchOptions {
+  query?: string;
+  from?: string;
+  in?: string;
+  kind?: string;
+  mentionsMe?: boolean;
+  hasAttachment?: boolean;
+  exclude?: string[];
+  sinceTs?: number;
+  untilTs?: number;
+  limit: number;
+  ftsEnabled: boolean;
+}
+// On success: the hit rows + their order, plus DATA the MCP layer needs for its non-blocking notes
+// — `inIds` (resolved conversation ids when `in` was given, for the ambiguity note) and `coverage`
+// (scope min/max ts, present only when the cache-horizon note should show). On failure: a QueryMiss.
+export type SearchResult =
+  | { ok: false; reason: QueryMiss }
+  | { ok: true; rows: any[]; order: string; inIds?: string[]; coverage?: { hi: number; lo: number } };
+
+// Run a search: resolve the scope (who/where/kind + excludes), apply the time window, execute the
+// query, and compute the coverage-note trigger. Owns everything that was the MCP's buildSearchScope
+// + time + runSearchQuery + computeSearchCoverage — no SQL fragments cross the boundary.
+export function querySearch(store: ChatStore, opts: SearchOptions): SearchResult {
+  const db = store.db;
+  const conds: string[] = ['m.is_system=0'];
+  const params: any[] = [];
+  let inIds: string[] | undefined;
+  if (opts.from) {
+    const f = senderFilter(db, String(opts.from));
+    if (f.miss) return { ok: false, reason: { reason: 'no-such-sender', value: String(opts.from) } };
+    conds.push(f.sql);
+    params.push(...f.params);
+  }
+  if (opts.in) {
+    const ids = convIdsFor(db, String(opts.in));
+    if (!ids.length) return { ok: false, reason: { reason: 'no-such-conversation', value: String(opts.in) } };
+    inIds = ids;
+    conds.push(`m.conv_id in (${ids.map(() => '?').join(',')})`);
+    params.push(...ids);
+  }
+  if (opts.kind) {
+    conds.push('m.kind=?');
+    params.push(opts.kind);
+  }
+  if (opts.mentionsMe) conds.push('m.mentions_me=1');
+  if (opts.hasAttachment) conds.push('m.has_attach=1');
+  if (opts.exclude?.length) {
+    const ex = resolveExcludes(db, opts.exclude);
+    if (ex.miss) return { ok: false, reason: ex.miss };
+    if (ex.convIds.length) {
+      conds.push(`m.conv_id not in (${ex.convIds.map(() => '?').join(',')})`);
+      params.push(...ex.convIds);
+    }
+    if (ex.mris.length) {
+      conds.push(`m.sender_mri not in (${ex.mris.map(() => '?').join(',')})`);
+      params.push(...ex.mris);
+    }
+  }
+  // scope-only arrays (who/where/kind + excludes, NOT time, NOT the query term) — the coverage note
+  // means "newest cached in this scope", not "newest matching the query".
+  const scopeConds = [...conds];
+  const scopeParams = [...params];
+  if (opts.sinceTs) {
+    conds.push('m.ts>=?');
+    params.push(opts.sinceTs);
+  }
+  if (opts.untilTs) {
+    conds.push('m.ts<?');
+    params.push(opts.untilTs);
+  }
+  const { rows, order } = runSearchQuery(db, opts.ftsEnabled, conds, params, opts.limit, opts.query);
+  const coverage = computeCoverage(db, scopeConds, scopeParams, rows.length, opts.sinceTs);
+  return { ok: true, rows, order, inIds, coverage };
+}
+
+// Cache-horizon trigger: return the scope's {hi,lo} message-ts span (system msgs + ts=0 excluded)
+// when the reader should see the coverage note — on empty results, or when a `since` filter starts
+// after the newest cached message in scope (window entirely uncovered). Otherwise undefined. `hi===0`
+// means the scope holds no cached messages at all (the MCP renders that as its own phrasing).
+function computeCoverage(
+  db: DB,
+  scopeConds: string[],
+  scopeParams: any[],
+  rowCount: number,
+  sinceTs: number | undefined,
+): { hi: number; lo: number } | undefined {
+  const scopeSql = scopeConds.join(' and ');
+  const stats = () => {
+    const r = db
+      .prepare(`select min(m.ts) lo, max(m.ts) hi from messages m where ${scopeSql} and m.ts>0`)
+      .get(...scopeParams) as any;
+    return { hi: r?.hi ?? 0, lo: r?.lo ?? 0 };
+  };
+  if (rowCount === 0) return stats();
+  if (sinceTs) {
+    const hi =
+      (db.prepare(`select max(m.ts) hi from messages m where ${scopeSql}`).get(...scopeParams) as any)
+        ?.hi ?? 0;
+    if (sinceTs > hi) return stats();
+  }
+  return undefined;
+}
+
+// Execute the search query itself: FTS5 MATCH+bm25 ranking when available and a query is given, else
+// a plain content LIKE scan ordered by recency. `conds`/`params` are extended in place (the LIKE
+// path appends the query term). Internal to querySearch.
+function runSearchQuery(
   db: DB,
   ftsEnabled: boolean,
   conds: string[],

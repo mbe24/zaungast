@@ -15,7 +15,8 @@ import {
   computeTopicRows,
   convIdsFor,
   senderFilter,
-  runSearchQuery,
+  resolveExcludes,
+  querySearch,
   queryMessageWindow,
   queryThread,
   queryThreadSummaries,
@@ -23,7 +24,7 @@ import {
   buildPhraseExtractor,
   computeTopicsWindow,
 } from 'libzaungast/query.js';
-import type { EventRow, TopicRow } from 'libzaungast/query.js';
+import type { EventRow, TopicRow, QueryMiss } from 'libzaungast/query.js';
 import type {
   ListConversationsArgs,
   ReadMessagesArgs,
@@ -84,43 +85,45 @@ function clip(s: string, n: number): string {
 // likeEscape now lives in the query layer (./query.js) and is imported above.
 
 // ---------- resolvers (name/handle → ids) ----------
-// convIdsFor + senderFilter now live in ./query.js (imported above); the presentation-flavored
-// resolvers below (exclude-list validation, coverage/ambiguity notes) stay MCP-side.
+// The resolvers (convIdsFor/senderFilter/resolveExcludes) + the fallible query cores now live in
+// ./query.js. The presentation below turns their structured results (QueryMiss reasons, resolved
+// ids, coverage spans) into the agent-facing note/error text — the library emits no prose.
 
-// Resolve an `exclude` list into conversation ids / sender MRIs / plain words. Handles fail
-// loudly (return .miss) so a typo'd handle never silently excludes nothing.
-function resolveExcludes(
-  db: DB,
-  list: string[] | undefined,
-): { convIds: string[]; mris: string[]; words: string[]; miss?: string } {
-  const convIds: string[] = [],
-    mris: string[] = [],
-    words: string[] = [];
-  for (const raw of list ?? []) {
-    const e = String(raw).trim();
-    if (!e) continue;
-    if (e.startsWith('c:')) {
-      const r = db.prepare('select id from conversations where handle=?').get(e) as any;
-      if (!r) return { convIds, mris, words, miss: `exclude: no conversation ${e}` };
-      convIds.push(r.id);
-    } else if (e.startsWith('p:')) {
-      const r = db.prepare('select mri from people where handle=?').get(e) as any;
-      if (!r) return { convIds, mris, words, miss: `exclude: no person ${e}` };
-      mris.push(r.mri);
-    } else words.push(e.toLowerCase());
+// Map a library QueryMiss to its user-facing message (the exact strings the scope-builders used to
+// return inline).
+function describeMiss(m: QueryMiss): string {
+  switch (m.reason) {
+    case 'no-such-sender':
+      return `no person matches ${m.value}`;
+    case 'no-such-conversation':
+      return `no conversation matches "${m.value}"`;
+    case 'no-such-excluded-conversation':
+      return `exclude: no conversation ${m.value}`;
+    case 'no-such-excluded-person':
+      return `exclude: no person ${m.value}`;
   }
-  return { convIds, mris, words };
 }
 
-// Local-cache coverage for a scope (min/max message ts, system msgs excluded) — surfaced on
-// empty/edge results so "0 hits" isn't misread as "quiet" when the cache simply hasn't synced
-// anything that recent. Claims only what the cache knows ("newest cached"), never "quiet".
-function coverageNote(db: DB, scopeSql: string, scopeParams: any[]): string {
-  const r = db
-    .prepare(`select min(m.ts) lo, max(m.ts) hi from messages m where ${scopeSql} and m.ts>0`)
-    .get(...scopeParams) as any;
-  if (!r?.hi) return 'no cached messages in this scope';
-  return `newest cached in this scope: ${fmtTs(r.hi)} · oldest ${fmtTs(r.lo)} — local cache may lag the server`;
+// A `from:` name-substring (not a p:handle) that matches >1 person → non-blocking narrowing note.
+function fromAmbiguityNote(db: DB, from: string): string {
+  if (from.startsWith('p:')) return '';
+  const ppl = db
+    .prepare(
+      String.raw`select handle,name from people where name like ? escape '\' order by msg_count desc`,
+    )
+    .all(`%${likeEscape(from)}%`) as any[];
+  if (ppl.length <= 1) return '';
+  return `note: from:"${from}" matched ${ppl.length} people (${ppl
+    .slice(0, 4)
+    .map((p) => `${p.handle} ${p.name}`)
+    .join(', ')}) — pass a p:handle to narrow`;
+}
+
+// Render the cache-horizon note from querySearch's coverage span. `hi===0` means the scope holds no
+// cached messages at all. Claims only what the cache knows ("newest cached"), never "quiet".
+function coverageNoteText(hi: number, lo: number): string {
+  if (!hi) return 'no cached messages in this scope';
+  return `newest cached in this scope: ${fmtTs(hi)} · oldest ${fmtTs(lo)} — local cache may lag the server`;
 }
 // A conversation title-substring that matches >1 conversation → non-blocking disambiguation note.
 function convAmbiguityNote(db: DB, arg: string, ids: string[]): string {
@@ -648,105 +651,8 @@ export function readMessages(
   return `${out}\n${lines.join('\n') || '(no messages)'}`;
 }
 
-// Apply the `from:` filter: resolve to a sender condition, plus (for a name substring, not a
-// p:handle) a non-blocking "matched N people" note when the substring is ambiguous.
-function applyFromFilter(
-  db: DB,
-  from: string,
-): { cond: string; params: any[]; note?: string } | { miss: string } {
-  const f = senderFilter(db, from);
-  if (f.miss) return { miss: f.miss };
-  let note: string | undefined;
-  if (!from.startsWith('p:')) {
-    const ppl = db
-      .prepare(
-        String.raw`select handle,name from people where name like ? escape '\' order by msg_count desc`,
-      )
-      .all(`%${likeEscape(from)}%`) as any[];
-    if (ppl.length > 1)
-      note = `note: from:"${from}" matched ${ppl.length} people (${ppl
-        .slice(0, 4)
-        .map((p) => `${p.handle} ${p.name}`)
-        .join(', ')}) — pass a p:handle to narrow`;
-  }
-  return { cond: f.sql, params: f.params, note };
-}
-// Apply the `in:` filter: resolve a conversation selector to a scope condition, or "no
-// conversation matches" when nothing resolves.
-function applyInFilter(
-  db: DB,
-  inArg: string,
-): { cond: string; params: any[]; note?: string } | { miss: string } {
-  const ids = convIdsFor(db, inArg);
-  if (!ids.length) return { miss: `no conversation matches "${inArg}"` };
-  const amb = convAmbiguityNote(db, inArg, ids);
-  return {
-    cond: `m.conv_id in (${ids.map(() => '?').join(',')})`,
-    params: ids,
-    note: amb || undefined,
-  };
-}
-// Apply the `exclude` list (c:/p: handles only — plain words aren't used by search) as extra
-// scope conditions, or a miss when a handle doesn't resolve.
-function applyExcludeFilter(
-  db: DB,
-  exclude: string[],
-): { conds: string[]; params: any[] } | { miss: string } {
-  const ex = resolveExcludes(db, exclude);
-  if (ex.miss) return { miss: ex.miss };
-  const conds: string[] = [];
-  const params: any[] = [];
-  if (ex.convIds.length) {
-    conds.push(`m.conv_id not in (${ex.convIds.map(() => '?').join(',')})`);
-    params.push(...ex.convIds);
-  }
-  if (ex.mris.length) {
-    conds.push(`m.sender_mri not in (${ex.mris.map(() => '?').join(',')})`);
-    params.push(...ex.mris);
-  }
-  return { conds, params };
-}
-// Build the scope filter (who/where/kind + excludes — NOT time, NOT the query term) from
-// search args, used both to run the query and to compute the coverage note. Returns an
-// early-return miss string when a from:/in:/exclude handle doesn't resolve, so a typo'd handle
-// never silently matches nothing (or everything).
-function buildSearchScope(
-  db: DB,
-  args: SearchArgs,
-): { conds: string[]; params: any[]; notes: string[] } | { miss: string } {
-  const conds: string[] = ['m.is_system=0'];
-  const params: any[] = [];
-  const notes: string[] = [];
-  if (args.from) {
-    const f = applyFromFilter(db, String(args.from));
-    if ('miss' in f) return { miss: f.miss };
-    conds.push(f.cond);
-    params.push(...f.params);
-    if (f.note) notes.push(f.note);
-  }
-  if (args.in) {
-    const inRes = applyInFilter(db, String(args.in));
-    if ('miss' in inRes) return { miss: inRes.miss };
-    conds.push(inRes.cond);
-    params.push(...inRes.params);
-    if (inRes.note) notes.push(inRes.note);
-  }
-  if (args.kind) {
-    conds.push('m.kind=?');
-    params.push(args.kind);
-  }
-  if (args.mentions_me) conds.push('m.mentions_me=1');
-  if (args.has_attachment) conds.push('m.has_attach=1');
-  if (args.exclude?.length) {
-    const exRes = applyExcludeFilter(db, args.exclude);
-    if ('miss' in exRes) return { miss: exRes.miss };
-    conds.push(...exRes.conds);
-    params.push(...exRes.params);
-  }
-  return { conds, params, notes };
-}
-
-// runSearchQuery now lives in ./query.js (imported above).
+// The search scope-building + query + coverage-trigger now live in query.querySearch; this file
+// renders its result (notes/legend/lines) below.
 
 // Build the per-hit lines and the (optional) conversation legend, resolving conv_id → handle
 // once per distinct conversation (memoized).
@@ -781,29 +687,6 @@ function buildSearchResults(
   return { lines, legend };
 }
 
-// Cache-horizon note: on empty results, or when a `since` filter starts after the newest cached
-// message in scope (window entirely uncovered), tell the reader what the cache holds.
-function computeSearchCoverage(
-  db: DB,
-  scopeConds: string[],
-  scopeParams: any[],
-  rows: any[],
-  since: number | undefined,
-): string {
-  const scopeSql = scopeConds.join(' and ');
-  if (rows.length === 0) return coverageNote(db, scopeSql, scopeParams);
-  if (since) {
-    const hi =
-      (
-        db
-          .prepare(`select max(m.ts) hi from messages m where ${scopeSql}`)
-          .get(...scopeParams) as any
-      )?.hi ?? 0;
-    if (since > hi) return coverageNote(db, scopeSql, scopeParams);
-  }
-  return '';
-}
-
 export function search(
   store: ChatStore,
   meta: StoreMeta,
@@ -814,29 +697,37 @@ export function search(
   const bt = badTime(args, ['since', 'until']);
   if (bt) return bt;
   const limit = Math.min(Number(args.limit) || 20, 60);
-  // scopeConds/scopeParams = who/where/kind + excludes (NOT time, NOT the query term) — used for
-  // the coverage note so "newest cached" means "in this scope", not "newest matching the query".
-  const scope = buildSearchScope(db, args);
-  if ('miss' in scope) return scope.miss;
-  const { conds: scopeConds, params: scopeParams, notes } = scope;
+  const res = querySearch(store, {
+    query: args.query,
+    from: args.from != null ? String(args.from) : undefined,
+    in: args.in != null ? String(args.in) : undefined,
+    kind: args.kind,
+    mentionsMe: args.mentions_me,
+    hasAttachment: args.has_attachment,
+    exclude: args.exclude,
+    sinceTs: parseTime(args.since),
+    untilTs: parseTime(args.until),
+    limit,
+    ftsEnabled: meta.ftsEnabled,
+  });
+  if (!res.ok) return describeMiss(res.reason);
+  const { rows, order } = res;
 
-  const conds = [...scopeConds];
-  const params = [...scopeParams];
-  const since = parseTime(args.since);
-  if (since) {
-    conds.push('m.ts>=?');
-    params.push(since);
+  // Non-blocking narrowing notes: from:-substring ambiguity, then in:-substring ambiguity (the
+  // library resolved `in` → res.inIds; the note text is presentation).
+  const notes: string[] = [];
+  if (args.from != null) {
+    const fn = fromAmbiguityNote(db, String(args.from));
+    if (fn) notes.push(fn);
   }
-  const until = parseTime(args.until);
-  if (until) {
-    conds.push('m.ts<?');
-    params.push(until);
+  if (args.in != null && res.inIds) {
+    const an = convAmbiguityNote(db, String(args.in), res.inIds);
+    if (an) notes.push(an);
   }
 
-  const { rows, order } = runSearchQuery(db, meta.ftsEnabled, conds, params, limit, args.query);
   const ownerNm = ownerDisplayName(store, meta);
   const { lines, legend } = buildSearchResults(db, rows, ownerNm);
-  const coverage = computeSearchCoverage(db, scopeConds, scopeParams, rows, since);
+  const coverage = res.coverage ? coverageNoteText(res.coverage.hi, res.coverage.lo) : '';
   // Owner-label legend, only when a hit is owner-authored (search interleaves conversations, so
   // the (you) rows can be scattered — the legend matters here at least as much as in read_messages).
   const vlegend = rows.some((r: any) => r.is_mine) ? viewerLegend(ownerNm) : '';
@@ -929,7 +820,7 @@ export function topTopics(
   const n = Math.min(Number(args.n) || 8, 15);
 
   const ex = resolveExcludes(db, args.exclude);
-  if (ex.miss) return ex.miss;
+  if (ex.miss) return describeMiss(ex.miss);
   const phrases = buildPhraseExtractor(store, db, new Set(ex.words));
 
   const scoped = buildTopicsScope(db, args.scope ? String(args.scope) : undefined, ex);
