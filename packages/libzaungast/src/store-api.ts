@@ -1,10 +1,13 @@
-// libzaungast public high-level data facade (B2 of the api-design plan — see plan/api-design.md §8).
-// This is the "90% path" for data consumers: `openStore(dir)` does the whole load+resolve+build
-// spine once and returns a lifetime-owning handle whose orthogonal query namespaces
-// (conversations / messages / people / events / calls / topics) each delegate to the existing
-// structured query layer (query.ts) over the resident ChatStore. It is PURELY ADDITIVE — it wraps
-// the query functions + Session and changes none of their behavior; the raw SQLite handle and the
-// Chromium byte readers stay hidden behind it.
+// libzaungast public high-level data facade (B2 of the api-design plan — see plan/api-design.md §8;
+// grown in B3a per plan/b3-facade-review.md). This is the "90% path" for data consumers:
+// `openStore(dir)` does the whole load+resolve+build spine once and returns a lifetime-owning handle
+// whose orthogonal query namespaces (conversations / messages / people / events / calls / topics)
+// each delegate to the structured query layer (query.ts) over the resident ChatStore. It is PURELY
+// ADDITIVE — it wraps the query functions + Session and changes none of their behavior; the raw
+// SQLite handle and the Chromium byte readers stay hidden behind it.
+//
+// Error contract (stated once): a FALLIBLE facade query returns `{ ok: false, reason: QueryMiss } |
+// { ok: true, … }`; an INFALLIBLE one returns its rows/value directly. Never a silent fall-through.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,29 +15,40 @@ import { ingest, type Ingested } from './ingest/ingest.js';
 import type { ChatStore, StoreMeta } from './ingest/store.js';
 import { Session, type SessionOptions } from './session.js';
 import { loadSnapshot, fingerprint, selectMapping, loadMapping } from './format/index.js';
-import type { Mapping } from './format/types.js';
+import type { Mapping, Snapshot } from './format/types.js';
 import {
   queryConversations,
-  convIdsFor,
+  conversationById,
+  resolveConversations,
   querySearch,
   queryConversationMessages,
   queryThread,
+  messageById,
+  queryThreadSummaries,
+  convMessageStats,
   queryPeople,
   queryEvents,
+  maxEventStart,
   queryCalls,
   loadTopicsInScope,
   computeTopicsWindow,
   computeTopicRows,
   buildPhraseExtractor,
+  toMessageView,
+  toSearchHit,
+  toThreadSummary,
   type SearchOptions,
-  type SearchResult,
   type ConvMessagesOptions,
   type ConversationView,
+  type MessageView,
+  type SearchHit,
+  type ThreadSummary,
   type PeopleResult,
   type EventView,
   type CallView,
   type TopicView,
   type QueryMiss,
+  type ConvMessagesMiss,
 } from './query.js';
 
 // Bundled mapping files (src/schema/versions/*.json) — reached exactly as ingest.ts's VERSIONS_DIR,
@@ -64,14 +78,16 @@ export interface OpenStoreOptions {
 // openLiveStore layers the auto-refreshing Session's options on top of the facade options.
 export interface LiveOptions extends SessionOptions {
   extraStopwords?: Iterable<string>;
+  // Eager first ingest at open time (default true — script consumers get a ready store). Pass
+  // `false` for a lazy cold start (e.g. an MCP server that must return its handshake instantly and
+  // warms afterward via `refresh()`); the first `current()`/`refresh()` then builds the store.
+  warm?: boolean;
 }
 
 // Message-search options mirror query.ts's SearchOptions, but the facade owns the store, so it fills
-// `ftsEnabled` from it and defaults `limit` — both become optional here.
-export type MessageSearchOptions = Omit<SearchOptions, 'ftsEnabled' | 'limit'> & {
-  limit?: number;
-  ftsEnabled?: boolean;
-};
+// `ftsEnabled` from it and defaults `limit` — both drop off here. (`ftsEnabled` is an implementation
+// switch, not an option: the store knows whether the FTS index exists.)
+export type MessageSearchOptions = Omit<SearchOptions, 'ftsEnabled' | 'limit'> & { limit?: number };
 // Flat-conversation read options; `limit` defaults if omitted.
 export type ConversationMessagesOptions = Omit<ConvMessagesOptions, 'limit'> & { limit?: number };
 
@@ -92,32 +108,83 @@ export interface TopicsComputeOptions {
   extraStopwords?: Iterable<string>; // union'd with the store-level extraStopwords
 }
 
+// ---------- result shapes ----------
+
+// A search's success arm carries typed hits + the DATA the renderer needs for its non-blocking notes
+// (`inIds` for the in:-ambiguity note, `coverage` for the cache-horizon note). On a scope miss the
+// QueryMiss reason is surfaced verbatim.
+export type MessageSearchResult =
+  | { ok: false; reason: QueryMiss }
+  | {
+      ok: true;
+      rows: SearchHit[];
+      order: 'relevance' | 'time';
+      inIds?: string[];
+      coverage?: { hi: number; lo: number };
+    };
+
+// A flat conversation read: on success the mapped rows + a `nextOlder` keyset cursor when older
+// messages remain; on a miss ('no-such-message' for an absent `around:` pivot) the reason.
+export type ConvMessagesResult =
+  | { ok: false; reason: ConvMessagesMiss }
+  | { ok: true; rows: MessageView[]; nextOlder?: string };
+
 // On a scope miss the QueryMiss reason is surfaced verbatim (never a silent whole-DB fall-through);
-// otherwise the scored topic rows + the resolved window and baseline size.
+// otherwise the scored topic rows PLUS every fact a renderer states about the run — the window and
+// its message count, the scope's all-time size (0 ⇒ "no messages in scope"), the baseline size, the
+// count of bot/app messages dropped, and the resolved conversation ids (scope=conversation:).
 export type TopicsComputeResult =
   | { ok: false; reason: QueryMiss }
-  | { rows: TopicView[]; baseTotal: number; window: { sinceTs: number; untilTs: number } };
+  | {
+      ok: true;
+      rows: TopicView[];
+      window: { sinceTs: number; untilTs: number };
+      windowCount: number; // messages inside the window
+      scopeTotal: number; // messages in scope across all time (0 → "no messages in scope")
+      baseTotal: number; // baseline size (messages before the window)
+      botExcluded: number; // bot/app messages dropped (disclosure note)
+      scopeConvIds?: string[]; // resolved ids when scope=conversation: (ambiguity note)
+    };
+
+// What `inspect` reports about a store without building it.
+export interface StoreInspection {
+  fingerprint: string;
+  schemaMatched: boolean;
+  schemaVersion: string | null;
+  lossy: boolean;
+}
 
 // ---------- namespace surface ----------
 
 export interface ConversationsApi {
   list(opts?: ConversationListOptions): ConversationView[];
-  // `c:handle` or a title/participant substring → matching conversation ids (possibly several).
-  resolve(sel: string): string[];
+  // Point lookup by leveldb id OR `c:` handle → the conversation (or null).
+  get(id: string): ConversationView | null;
+  // `c:handle` or a title/participant substring → candidate conversations WITH display fields,
+  // newest-first (last_ts desc). The MCP owns the thresholds/prose around ambiguity.
+  resolve(sel: string): ConversationView[];
 }
 export interface MessagesApi {
-  search(opts?: MessageSearchOptions): SearchResult;
-  inConversation(
+  search(opts?: MessageSearchOptions): MessageSearchResult;
+  inConversation(convId: string, opts?: ConversationMessagesOptions): ConvMessagesResult;
+  // Point lookup by (convId, id) — the around→root_id pivot; null when absent.
+  get(convId: string, id: string): MessageView | null;
+  thread(convId: string, rootId: string): MessageView[];
+  threadSummaries(
     convId: string,
-    opts?: ConversationMessagesOptions,
-  ): { rows: any[] } | { aroundNotFound: string };
-  thread(convId: string, rootId: string): any[];
+    opts?: { sinceTs?: number; untilTs?: number },
+  ): ThreadSummary[];
+  stats(convId: string): { total: number; earliestTs: number; newestTs: number };
 }
 export interface PeopleApi {
   find(opts?: PeopleFindOptions): PeopleResult;
+  // Best display name for an MRI (people → profiles fallback), or null.
+  nameFor(mri: string): string | null;
 }
 export interface EventsApi {
   list(opts?: EventsListOptions): EventView[];
+  // Newest materialized occurrence start across ALL events (the honest recurring-events bound).
+  maxStart(): number;
 }
 export interface CallsApi {
   list(opts?: CallsListOptions): CallView[];
@@ -126,9 +193,9 @@ export interface TopicsApi {
   compute(opts?: TopicsComputeOptions): TopicsComputeResult;
 }
 
-// The lifetime-owning facade. `meta` describes the load (fingerprint/schemaMatched/lossy/counts/…);
-// the six namespaces are orthogonal — call any, in any order, none depends on another.
-export interface TeamsStore {
+// The query surface, with no lifetime: the six orthogonal namespaces + the load's `meta`. Shared by
+// the static handle and by a live handle's pinned reading.
+export interface StoreView {
   readonly meta: StoreMeta;
   readonly conversations: ConversationsApi;
   readonly messages: MessagesApi;
@@ -136,20 +203,38 @@ export interface TeamsStore {
   readonly events: EventsApi;
   readonly calls: CallsApi;
   readonly topics: TopicsApi;
+}
+
+// The lifetime-owning static handle. `meta` describes the load (fingerprint/schemaMatched/lossy/
+// counts/…). Its `lastFullAt`/`refreshMode` fields are live-refresh diagnostics — static and
+// meaningless for a one-shot `openStore`.
+export interface TeamsStore extends StoreView {
   close(): void;
   [Symbol.dispose](): void;
 }
 
-// A live, auto-refreshing store (Session-backed): same namespaces, plus a forced `refresh()`; every
-// query and `meta` read reflects the latest applied refresh.
-export interface LiveTeamsStore extends TeamsStore {
-  refresh(): void;
+// A pinned, read-consistent view of ONE Session build: the query surface + the build's `meta`, plus
+// `mayBeStale` (a fresher build may exist but wasn't applied — drives the may-be-stale flag).
+export interface StoreReading extends StoreView {
+  readonly mayBeStale: boolean;
 }
 
-// ---------- namespace factories (shared by the static + live handles) ----------
-// Each takes a `getStore` accessor: for a static store it always returns the same ChatStore; for a
-// live store it returns `session.get().store` freshly each call (so queries always hit the current
-// build). This is how both handles share one delegation implementation.
+// A live, auto-refreshing store (Session-backed). It exposes NO direct query namespaces — reads go
+// through `current()`, which pins a single build so one logical operation (several facade calls)
+// can't straddle a refresh. `refresh` forces a rebuild and returns the applied meta; `reloadSnapshot`
+// re-loads the (consistent tmp) snapshot backing the current build for cold-path schema recovery.
+export interface LiveTeamsStore {
+  current(): StoreReading;
+  refresh(opts?: { full?: boolean }): StoreMeta;
+  reloadSnapshot(): Snapshot;
+  close(): void;
+  [Symbol.dispose](): void;
+}
+
+// ---------- namespace factory (shared by the static handle + a live reading) ----------
+// `getStore` is a constant accessor bound to ONE ChatStore build, so every namespace call on the
+// resulting view hits the same build (this is how read-consistency is delivered — the static handle
+// owns one store for its lifetime; a live reading pins the build `current()` observed).
 
 function mergeStopwords(
   ...sets: (Iterable<string> | undefined)[]
@@ -172,26 +257,61 @@ function makeApis(
 } {
   const conversations: ConversationsApi = {
     list: (opts = {}) => queryConversations(getStore(), opts),
-    resolve: (sel) => convIdsFor(getStore().db, sel),
+    get: (id) => conversationById(getStore(), id),
+    resolve: (sel) => resolveConversations(getStore(), sel),
   };
   const messages: MessagesApi = {
     search: (opts = {}) => {
       const store = getStore();
-      return querySearch(store, {
+      const res = querySearch(store, {
         ...opts,
         limit: opts.limit ?? DEFAULT_SEARCH_LIMIT,
-        ftsEnabled: opts.ftsEnabled ?? store.ftsEnabled,
+        ftsEnabled: store.ftsEnabled,
       });
+      if (!res.ok) return res;
+      return {
+        ok: true,
+        rows: res.rows.map(toSearchHit),
+        order: res.order,
+        inIds: res.inIds,
+        coverage: res.coverage,
+      };
     },
-    inConversation: (convId, opts = {}) =>
-      queryConversationMessages(getStore(), convId, {
-        ...opts,
-        limit: opts.limit ?? DEFAULT_CONV_MESSAGES_LIMIT,
-      }),
-    thread: (convId, rootId) => queryThread(getStore().db, convId, rootId),
+    inConversation: (convId, opts = {}) => {
+      const limit = opts.limit ?? DEFAULT_CONV_MESSAGES_LIMIT;
+      const res = queryConversationMessages(getStore(), convId, { ...opts, limit });
+      if ('aroundNotFound' in res)
+        return { ok: false, reason: { reason: 'no-such-message', value: res.aroundNotFound } };
+      // nextOlder: a keyset cursor for the previous page. Rows are oldest→newest, so the oldest is
+      // rows[0]. Offered only for the paged (non-`around`) path and only when the window filled —
+      // a full page is the standard "older rows likely remain" signal.
+      let nextOlder: string | undefined;
+      if (!opts.around && res.rows.length >= limit && res.rows.length) {
+        const oldest = res.rows[0];
+        nextOlder = `older:${oldest.ts}:${oldest.id}`;
+      }
+      return { ok: true, rows: res.rows.map(toMessageView), nextOlder };
+    },
+    get: (convId, id) => {
+      const r = messageById(getStore(), convId, id);
+      return r ? toMessageView(r) : null;
+    },
+    thread: (convId, rootId) => queryThread(getStore().db, convId, rootId).map(toMessageView),
+    threadSummaries: (convId, opts = {}) =>
+      queryThreadSummaries(getStore(), convId, opts).map(toThreadSummary),
+    stats: (convId) => {
+      const s = convMessageStats(getStore().db, convId);
+      return { total: s.total, earliestTs: s.earliest, newestTs: s.newest };
+    },
   };
-  const people: PeopleApi = { find: (opts = {}) => queryPeople(getStore(), opts) };
-  const events: EventsApi = { list: (opts = {}) => queryEvents(getStore(), opts) };
+  const people: PeopleApi = {
+    find: (opts = {}) => queryPeople(getStore(), opts),
+    nameFor: (mri) => getStore().nameForMri(mri),
+  };
+  const events: EventsApi = {
+    list: (opts = {}) => queryEvents(getStore(), opts),
+    maxStart: () => maxEventStart(getStore()),
+  };
   const calls: CallsApi = { list: (opts = {}) => queryCalls(getStore(), opts) };
   const topics: TopicsApi = {
     compute: (opts = {}) => {
@@ -212,7 +332,7 @@ function makeApis(
         windowKey: opts.window,
       });
       const n = Math.min(Number(opts.n) || 8, 15);
-      const { rows, baseTotal } = computeTopicRows(
+      const { rows, baseTotal, win } = computeTopicRows(
         scoped.all,
         phrases,
         sinceTs,
@@ -220,7 +340,16 @@ function makeApis(
         scoped.minSenders,
         n,
       );
-      return { rows, baseTotal, window: { sinceTs, untilTs } };
+      return {
+        ok: true,
+        rows,
+        window: { sinceTs, untilTs },
+        windowCount: win.length,
+        scopeTotal: scoped.all.length,
+        baseTotal,
+        botExcluded: scoped.botExcluded,
+        scopeConvIds: scoped.scopeConvIds,
+      };
     },
   };
   return { conversations, messages, people, events, calls, topics };
@@ -262,33 +391,38 @@ class StaticTeamsStore implements TeamsStore {
 }
 
 // ---------- live handle ----------
+// No direct namespaces: reads go through `current()`, which calls `Session.get()` ONCE and binds a
+// StoreReading to that single build (the read-consistency pin that fixes the torn read — one logical
+// operation making several facade calls can no longer straddle a refresh).
 
 class LiveTeamsStoreImpl implements LiveTeamsStore {
-  readonly conversations: ConversationsApi;
-  readonly messages: MessagesApi;
-  readonly people: PeopleApi;
-  readonly events: EventsApi;
-  readonly calls: CallsApi;
-  readonly topics: TopicsApi;
   private readonly session: Session;
+  private readonly extraStopwords?: Iterable<string>;
 
   constructor(session: Session, extraStopwords?: Iterable<string>) {
     this.session = session;
-    session.warmUp(); // eager first ingest; a failure surfaces on the first query, per Session
-    const apis = makeApis(() => this.session.get().store, extraStopwords);
-    this.conversations = apis.conversations;
-    this.messages = apis.messages;
-    this.people = apis.people;
-    this.events = apis.events;
-    this.calls = apis.calls;
-    this.topics = apis.topics;
+    this.extraStopwords = extraStopwords;
   }
 
-  get meta(): StoreMeta {
-    return this.session.get().meta;
+  current(): StoreReading {
+    const got = this.session.get(); // one probe/refresh decision for this whole reading
+    const apis = makeApis(() => got.store, this.extraStopwords); // pinned to THIS build
+    return {
+      meta: got.meta,
+      mayBeStale: got.staleProbeDeferred,
+      conversations: apis.conversations,
+      messages: apis.messages,
+      people: apis.people,
+      events: apis.events,
+      calls: apis.calls,
+      topics: apis.topics,
+    };
   }
-  refresh(): void {
-    this.session.refreshNow();
+  refresh(opts: { full?: boolean } = {}): StoreMeta {
+    return this.session.refreshNow(opts.full ?? false);
+  }
+  reloadSnapshot(): Snapshot {
+    return loadSnapshot(this.session.currentDir());
   }
   close(): void {
     this.session.dispose();
@@ -308,44 +442,44 @@ export function openStore(dir: string, opts: OpenStoreOptions = {}): TeamsStore 
   return new StaticTeamsStore(ingest(dir), opts.extraStopwords);
 }
 
-// A live, auto-refreshing store over the Session machinery (the MCP server's mode). Same query
-// namespaces plus `refresh()`; `meta` reads the current build each time.
+// A live, auto-refreshing store over the Session machinery (the MCP server's mode). Reads go through
+// `current()`. `warm` (default true) runs the first full ingest eagerly; pass `false` for a lazy
+// cold start.
 export function openLiveStore(opts: LiveOptions = {}): LiveTeamsStore {
-  const { extraStopwords, ...sessionOpts } = opts;
-  return new LiveTeamsStoreImpl(new Session(sessionOpts), extraStopwords);
+  const { extraStopwords, warm, ...sessionOpts } = opts;
+  const session = new Session(sessionOpts);
+  if (warm !== false) session.warmUp(); // eager first ingest; a failure surfaces on first current()
+  return new LiveTeamsStoreImpl(session, extraStopwords);
 }
 
 // Check-before-commit companion to openStore: no throw for an unknown schema — branch on `reason`
-// ('unknown-schema' → the store loaded but we don't know the schema; 'unreadable' → the dir itself
-// couldn't be read) and get the meta either way. The happy path returns the same handle openStore
-// would.
+// ('unknown-schema' → the store loaded but we don't know the schema, with its real meta;
+// 'unreadable' → the dir itself couldn't be read, with the error string). The happy path returns the
+// same handle openStore would.
 export function tryOpen(
   dir: string,
+  opts: OpenStoreOptions = {},
 ):
   | { ok: true; store: TeamsStore }
-  | { ok: false; reason: 'unknown-schema' | 'unreadable'; meta: StoreMeta } {
+  | { ok: false; reason: 'unknown-schema'; meta: StoreMeta }
+  | { ok: false; reason: 'unreadable'; error: string } {
   let ingested: Ingested;
   try {
     ingested = ingest(dir);
-  } catch {
-    return { ok: false, reason: 'unreadable', meta: unreadableMeta() };
+  } catch (e) {
+    return { ok: false, reason: 'unreadable', error: (e as Error).message };
   }
   if (!ingested.meta.schemaMatched) {
     ingested.store.close(); // an empty store for an unknown schema — don't leak the handle
     return { ok: false, reason: 'unknown-schema', meta: ingested.meta };
   }
-  return { ok: true, store: new StaticTeamsStore(ingested) };
+  return { ok: true, store: new StaticTeamsStore(ingested, opts.extraStopwords) };
 }
 
 // Cheap peek that does NOT build the SQLite store: decode+group the snapshot, hash it, and resolve
 // a bundled mapping — enough to know whether we can interpret this store before committing to a
 // full open. The non-committing companion to openStore/tryOpen.
-export function inspect(dir: string): {
-  fingerprint: string;
-  schemaMatched: boolean;
-  schemaVersion: string | null;
-  lossy: boolean;
-} {
+export function inspect(dir: string): StoreInspection {
   const snap = loadSnapshot(dir);
   const fp = fingerprint(snap);
   const { mapping } = selectMapping(loadMappings(), fp);
@@ -354,23 +488,5 @@ export function inspect(dir: string): {
     schemaMatched: !!mapping,
     schemaVersion: mapping?.schemaVersion ?? null,
     lossy: snap.lossy,
-  };
-}
-
-// Synthetic meta for the 'unreadable' branch of tryOpen (ingest itself threw — the dir isn't a
-// readable leveldb store). lossy:true flags that nothing could be read.
-function unreadableMeta(): StoreMeta {
-  return {
-    asOf: Date.now(),
-    fingerprint: '',
-    schemaVersion: null,
-    schemaMatched: false,
-    counts: { conversations: 0, messages: 0, people: 0 },
-    earliestTs: 0,
-    ftsEnabled: false,
-    lastFullAt: Date.now(),
-    refreshMode: 'full',
-    lossy: true,
-    selfMri: null,
   };
 }

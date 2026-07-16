@@ -57,6 +57,11 @@ export type QueryMiss =
   | { reason: 'no-such-excluded-conversation'; value: string }
   | { reason: 'no-such-excluded-person'; value: string };
 
+// The flat-read miss reason: QueryMiss plus the `around:` pivot case ('no-such-message', an id
+// absent from the conversation). Kept as a SUPERSET of QueryMiss — not folded into it — so the MCP's
+// exhaustive describeMiss() switch over QueryMiss stays valid until stage 2 handles the new case.
+export type ConvMessagesMiss = QueryMiss | { reason: 'no-such-message'; value: string };
+
 // Resolve an `exclude` list — `c:` conversation handles, `p:` person handles, and plain words — to
 // ids/mris/words, or a `QueryMiss` when a handle doesn't resolve. Shared by the search + topics
 // scopes.
@@ -90,6 +95,54 @@ export function ftsMatch(raw: string): string | null {
   return toks.length ? toks.map((t) => `"${t}"`).join(' ') : null;
 }
 
+// ---------- message views ----------
+// The engine-agnostic, camelCase shape of one message row as the facade hands it to consumers.
+// The 0/1 SQLite flags are booleanized at this boundary; `reactionsJson` is the raw compact JSON
+// string ([{k,u:[[mri,ts]]}]) left typed-but-unparsed (parsing is a deliberate #6-polish deferral).
+// `rootId === id` ⇒ this message is a thread root (joins ThreadSummary.rootId).
+export interface MessageView {
+  id: string;
+  convId: string;
+  rootId: string;
+  ts: number;
+  kind: string;
+  senderMri: string | null;
+  senderName: string | null;
+  isMine: boolean;
+  hasAttachment: boolean;
+  mentionsMe: boolean;
+  content: string;
+  reactionsJson: string | null;
+}
+// A search result row: a MessageView plus the highlighted `snippet` (the old raw-row `snip`).
+export interface SearchHit extends MessageView {
+  snippet: string;
+}
+
+// Map a raw `messages` row (snake_case, 0/1 flags) to a MessageView. The mappers live here (not in
+// the facade) so any consumer of the raw query fns can reuse them; the facade calls them at its
+// boundary while the query fns keep returning raw rows (the MCP still reads those directly).
+export function toMessageView(r: any): MessageView {
+  return {
+    id: r.id,
+    convId: r.conv_id,
+    rootId: r.root_id,
+    ts: r.ts,
+    kind: r.kind,
+    senderMri: r.sender_mri ?? null,
+    senderName: r.sender_name ?? null,
+    isMine: !!r.is_mine,
+    hasAttachment: !!r.has_attach,
+    mentionsMe: !!r.mentions_me,
+    content: r.content,
+    reactionsJson: r.reactions ?? null,
+  };
+}
+// Map a raw search row (a `messages` row + a `snip` column) to a SearchHit.
+export function toSearchHit(r: any): SearchHit {
+  return { ...toMessageView(r), snippet: r.snip };
+}
+
 // ---------- search ----------
 // Options for querySearch. All selectors are optional; time bounds are pre-parsed epoch ms (arg
 // parsing / now-relative defaults stay MCP-side). `ftsEnabled` reflects whether the FTS5 index is
@@ -112,7 +165,13 @@ export interface SearchOptions {
 // (scope min/max ts, present only when the cache-horizon note should show). On failure: a QueryMiss.
 export type SearchResult =
   | { ok: false; reason: QueryMiss }
-  | { ok: true; rows: any[]; order: string; inIds?: string[]; coverage?: { hi: number; lo: number } };
+  | {
+      ok: true;
+      rows: any[];
+      order: 'relevance' | 'time';
+      inIds?: string[];
+      coverage?: { hi: number; lo: number };
+    };
 
 // Run a search: resolve the scope (who/where/kind + excludes), apply the time window, execute the
 // query, and compute the coverage-note trigger. Owns everything that was the MCP's buildSearchScope
@@ -208,7 +267,7 @@ function runSearchQuery(
   params: any[],
   limit: number,
   query: string | undefined,
-): { rows: any[]; order: string } {
+): { rows: any[]; order: 'relevance' | 'time' } {
   const match = query && String(query).trim() ? ftsMatch(String(query)) : null;
   if (match && ftsEnabled) {
     const rows = db
@@ -310,6 +369,28 @@ export function queryThread(db: DB, convId: string, rootId: string): any[] {
     .all(convId, rootId) as any[];
 }
 
+// A single message by (conv_id, id) — the raw row (or null). The facade's `messages.get` maps it
+// to a MessageView; it also backs the around→root_id pivot (root_id is on the raw row).
+export function messageById(store: ChatStore, convId: string, id: string): any | null {
+  return (
+    (store.db
+      .prepare('select * from messages where conv_id=? and id=?')
+      .get(convId, id) as any) ?? null
+  );
+}
+
+// The camelCase facade shape of one reply-chain summary (queryThreadSummaries returns raw
+// {root_id,n,last}; this is what the facade hands out). rootId joins MessageView.rootId.
+export interface ThreadSummary {
+  rootId: string;
+  count: number;
+  lastTs: number;
+}
+// Map a raw thread-summary row to a ThreadSummary.
+export function toThreadSummary(r: { root_id: any; n: number; last: number }): ThreadSummary {
+  return { rootId: String(r.root_id), count: r.n, lastTs: r.last };
+}
+
 // Per-reply-chain activity summaries (message count + last-activity ts per root) for a channel's
 // time window — drives which threads a channel digest surfaces. Cursor paging is applied by the MCP
 // layer over the returned summaries (it's a presentation/budget concern), not here.
@@ -358,10 +439,12 @@ export interface PersonView {
   name: string;
   msgCount: number;
   lastTs: number;
+  isBot: boolean; // sender MRI is in the Bot Framework namespace (28:) — absorbs the MCP's isBotMri use
 }
 export interface PeopleResult {
   mode: 'handle' | 'search' | 'roster'; // how the query resolved (drives the renderer's header)
   query: string; // the trimmed query, '' for roster
+  total: number; // ALL matches for this mode (not just the returned/limited rows)
   rows: PersonView[];
 }
 
@@ -371,9 +454,12 @@ const toPersonRow = (r: any): PersonView => ({
   name: r.name,
   msgCount: r.msg_count,
   lastTs: r.last_ts,
+  isBot: isBotMri(r.mri),
 });
 
 // find_person's data: a p:handle lookup, a name substring search, or the volume-ranked roster.
+// `total` counts every match for the mode (the search/roster rows are limited to `n`); the handle
+// mode's rows are already exhaustive so `total` equals the row count.
 export function queryPeople(
   store: ChatStore,
   opts: { query?: string; n?: number } = {},
@@ -386,9 +472,14 @@ export function queryPeople(
     const rows = (db.prepare(`select ${cols} from people where handle=?`).all(q) as any[]).map(
       toPersonRow,
     );
-    return { mode: 'handle', query: q, rows };
+    return { mode: 'handle', query: q, total: rows.length, rows };
   }
   if (q) {
+    const total = (
+      db
+        .prepare(String.raw`select count(*) c from people where name like ? escape '\'`)
+        .get(`%${likeEscape(q)}%`) as any
+    ).c;
     const rows = (
       db
         .prepare(
@@ -396,22 +487,67 @@ export function queryPeople(
         )
         .all(`%${likeEscape(q)}%`, n) as any[]
     ).map(toPersonRow);
-    return { mode: 'search', query: q, rows };
+    return { mode: 'search', query: q, total, rows };
   }
+  const total = (db.prepare('select count(*) c from people').get() as any).c;
   const rows = (
     db.prepare(`select ${cols} from people order by msg_count desc limit ?`).all(n) as any[]
   ).map(toPersonRow);
-  return { mode: 'roster', query: '', rows };
+  return { mode: 'roster', query: '', total, rows };
 }
 
 // ---------- conversations ----------
 export interface ConversationView {
+  id: string; // the conversation's leveldb id (joins MessageView.convId; the c: handle is `handle`)
   handle: string;
   kind: string;
   topic: string | null;
   participantNames: string | null;
   lastTs: number;
   msgCount: number;
+}
+
+const toConversationView = (r: any): ConversationView => ({
+  id: r.id,
+  handle: r.handle,
+  kind: r.kind,
+  topic: r.topic,
+  participantNames: r.participant_names,
+  lastTs: r.last_ts,
+  msgCount: r.msg_count,
+});
+
+// column list for the conversation views (shared by list/get/resolve).
+const CONV_COLS = 'id,handle,kind,topic,participant_names,last_ts,msg_count';
+
+// A single conversation by leveldb id OR by `c:` handle → its ConversationView (or null). Backs
+// the facade's `conversations.get`.
+export function conversationById(store: ChatStore, idOrHandle: string): ConversationView | null {
+  const col = idOrHandle.startsWith('c:') ? 'handle' : 'id';
+  const r = store.db
+    .prepare(`select ${CONV_COLS} from conversations where ${col}=?`)
+    .get(idOrHandle) as any;
+  return r ? toConversationView(r) : null;
+}
+
+// Resolve a conversation selector (`c:handle` or a topic/participant substring) to candidate
+// ConversationViews, newest-first (last_ts desc). Unlike convIdsFor (ids only), this carries the
+// display fields so the MCP's ambiguity note can render candidates without a second lookup.
+export function resolveConversations(store: ChatStore, sel: string): ConversationView[] {
+  const db = store.db;
+  if (sel.startsWith('c:')) {
+    const rows = db.prepare(`select ${CONV_COLS} from conversations where handle=?`).all(sel) as any[];
+    return rows.map(toConversationView);
+  }
+  const like = `%${likeEscape(sel)}%`;
+  const rows = db
+    .prepare(
+      String.raw`select ${CONV_COLS} from conversations
+      where topic like ? escape '\' or participant_names like ? escape '\'
+      order by last_ts desc`,
+    )
+    .all(like, like) as any[];
+  return rows.map(toConversationView);
 }
 
 // list_conversations' data: activity-ranked conversations, filtered by kind/query/participant/since.
@@ -451,18 +587,11 @@ export function queryConversations(
   const w = where.length ? 'where ' + where.join(' and ') : '';
   const rows = db
     .prepare(
-      `select handle,kind,topic,participant_names,last_ts,msg_count
+      `select ${CONV_COLS}
      from conversations ${w} order by last_ts desc limit ?`,
     )
     .all(...params, n) as any[];
-  return rows.map((r) => ({
-    handle: r.handle,
-    kind: r.kind,
-    topic: r.topic,
-    participantNames: r.participant_names,
-    lastTs: r.last_ts,
-    msgCount: r.msg_count,
-  }));
+  return rows.map(toConversationView);
 }
 
 // ---------- calls ----------
@@ -685,7 +814,7 @@ export interface TopicView {
   count: number; // window mentions
   senderCount: number; // distinct senders in the window (anti-spam gate)
   lift: number; // window rate ÷ smoothed baseline rate
-  example: any; // an example message (ts + content) for the phrase
+  example: { ts: number; content: string }; // an example message for the phrase
 }
 
 // Load the in-scope messages and (by default) drop bot/app senders (28: MRI) — automated
