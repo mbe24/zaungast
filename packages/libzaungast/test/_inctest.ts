@@ -98,6 +98,13 @@ function ftsConsistent(store: ChatStore): boolean {
     .get() as any;
   return (a?.g ?? null) === (b?.g ?? null);
 }
+// Full FTS CONTENT dump (not just membership) — so a delta FTS refresh (perf 2) that left stale
+// content on a changed id, or failed to drop a deleted id, is caught against a full rebuild.
+function ftsDump(store: ChatStore): string {
+  return JSON.stringify(
+    store.db.prepare(`select id, conv_id, content from messages_fts order by id`).all(),
+  );
+}
 const VDIR = fileURLToPath(new URL('../src/schema/versions/', import.meta.url));
 function getMapping(snap: any) {
   const mappings = fs
@@ -150,6 +157,7 @@ console.log('\n=== A. spine: partial(seqCap) + incremental == full rebuild ===')
   ok('incremental store == full rebuild', dump(partial.store) === dump(full.store));
   ok('FTS consistent (incremental)', ftsConsistent(partial.store));
   ok('FTS consistent (full)', ftsConsistent(full.store));
+  ok('FTS content == full rebuild (delta refresh)', ftsDump(partial.store) === ftsDump(full.store));
   partial.store.close();
   full.store.close();
 }
@@ -227,6 +235,7 @@ console.log(
       dump(partial.store) === dump(full.store),
     );
     ok(`[${label}] FTS consistent after deletion`, ftsConsistent(partial.store));
+    ok(`[${label}] FTS content == full rebuild after deletion`, ftsDump(partial.store) === ftsDump(full.store));
     partial.store.close();
     full.store.close();
     fs.rmSync(modified, { recursive: true, force: true });

@@ -469,11 +469,16 @@ export function applyIncremental(
   // than leave a half-mutated store (which the Session's catch would otherwise serve forever).
   try {
     store.db.exec('BEGIN');
-    // deletions first (whole-chain gone), then delete changed chains before re-inserting them
-    store.deleteMessagesForMissingChains(liveChainKeys);
-    for (const ck of changedChainKeys) store.deleteMessagesByChain(ck);
+    // deletions first (whole-chain gone), then delete changed chains before re-inserting them.
+    // Accumulate every deleted + re-inserted message id → `ftsIds`, for a DELTA FTS refresh (perf
+    // 2) instead of a full 11.8k-row rebuild. The union provably equals a full rebuild: it covers
+    // every id whose messages-table row changed (removed, re-inserted, or both); any message left
+    // untouched keeps its existing — and still correct — FTS row.
+    const ftsIds = new Set<string>(store.deleteMessagesForMissingChains(liveChainKeys));
+    for (const ck of changedChainKeys)
+      for (const id of store.deleteMessagesByChain(ck)) ftsIds.add(id);
     const newMsgRows = extractRecords(changedMsgRecords, state.mapping, 'message').records;
-    applyMessages(store, newMsgRows, state.selfMri);
+    for (const id of applyMessages(store, newMsgRows, state.selfMri)) ftsIds.add(id);
     // profiles/events/calls are all cheap (hundreds of rows) → whole-store replace from the
     // full snapshot each refresh, exactly like profiles — this is what keeps the
     // incremental==full-rebuild invariant trivially true for them.
@@ -498,7 +503,7 @@ export function applyIncremental(
     // messages but stale aggregates) also returns needFullRebuild, so the Session rebuilds a
     // clean store rather than serving inconsistent aggregates.
     store.recomputeDerived(state.selfMri);
-    store.refreshFts(null);
+    store.refreshFts(ftsIds); // delta (perf 2): deleted ∪ re-inserted ids, provably == full rebuild
   } catch (e) {
     try {
       store.db.exec('ROLLBACK');

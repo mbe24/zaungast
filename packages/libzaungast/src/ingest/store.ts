@@ -37,7 +37,7 @@ export class ChatStore {
   constructor() {
     this.db = new DatabaseSync(':memory:');
     this.ftsEnabled = this.detectFts();
-    this.db.exec(`
+    this.db.exec(/* sql */ `
       create table conversations(
         id text primary key, handle text unique, kind text,
         -- meta, written from conversation records:
@@ -358,19 +358,30 @@ export class ChatStore {
     return r?.name ?? null;
   }
 
-  deleteMessagesByChain(chainKey: string) {
+  // Returns the ids of the messages it deleted, so the caller can feed a delta FTS refresh
+  // (chain_key is indexed → the SELECT is a cheap index probe).
+  deleteMessagesByChain(chainKey: string): string[] {
+    const ids = (this.db.prepare('select id from messages where chain_key=?').all(chainKey) as any[]).map(
+      (r) => r.id as string,
+    );
     this.q('delete from messages where chain_key=?').run(chainKey);
+    return ids;
   }
 
   // Delete messages whose owning reply-chain is no longer present in the live DB (whole-chain
   // deletion / compaction-elided). liveChainKeys = every message-store key currently live.
   // Caller manages the transaction (this runs inside applyIncremental's BEGIN/COMMIT).
-  deleteMessagesForMissingChains(liveChainKeys: Set<string>) {
+  // Returns the deleted message ids (for the delta FTS refresh).
+  deleteMessagesForMissingChains(liveChainKeys: Set<string>): string[] {
     this.db.exec('create temp table if not exists _live_chains(k text primary key)');
     this.db.exec('delete from _live_chains');
     const ins = this.q('insert or ignore into _live_chains values(?)');
     for (const k of liveChainKeys) ins.run(k);
+    const ids = (
+      this.db.prepare('select id from messages where chain_key not in (select k from _live_chains)').all() as any[]
+    ).map((r) => r.id as string);
     this.db.exec('delete from messages where chain_key not in (select k from _live_chains)');
+    return ids;
   }
 
   // ONE deterministic recompute of all derived state, used by BOTH full and incremental paths,
