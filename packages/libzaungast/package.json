@@ -20,18 +20,25 @@
       "development": "./src/format/engine.ts",
       "types": "./dist/format/engine.d.ts",
       "default": "./dist/format/engine.js"
+    },
+    "./schema/versions/*.json": {
+      "development": "./src/schema/versions/*.json",
+      "default": "./dist/schema/versions/*.json"
     }
   },
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/mbe24/zaungast.git",
     "directory": "packages/libzaungast"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && node -e \"const fs=require('fs');fs.cpSync('src/schema/versions','dist/schema/versions',{recursive:true});fs.copyFileSync('src/schema.sql','dist/schema.sql')\""
+    "build": "tsc -p tsconfig.json && node scripts/copy-schema.mjs"
   },
   "engines": {
     "node": ">=22.5.0"
