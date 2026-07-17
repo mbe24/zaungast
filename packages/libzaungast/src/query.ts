@@ -620,15 +620,16 @@ export function queryConversations(
 
 // ---------- calls ----------
 export interface Call {
+  id: string; // callId — stable identity for the row
   startTs: number;
   direction: string | null;
-  isMissed: number;
+  isMissed: boolean;
   durationMs: number;
   state: string | null;
-  hasRecording: number;
-  hasVoicemail: number;
+  hasRecording: boolean;
+  hasVoicemail: boolean;
   spamLevel: string | null;
-  isCurrentUserPart: number;
+  isCurrentUserPart: boolean;
   recordingLink: string | null;
   label: string; // resolved counterpart name / group topic+handle
 }
@@ -691,23 +692,24 @@ export function queryCalls(
       )
     : resolved;
   return filtered.slice(0, limit).map(({ r, label }) => ({
+    id: r.id,
     startTs: r.start_ts,
     direction: r.direction,
-    isMissed: r.is_missed,
+    isMissed: !!r.is_missed,
     durationMs: r.duration_ms,
     state: r.state,
-    hasRecording: r.has_recording,
-    hasVoicemail: r.has_voicemail,
+    hasRecording: !!r.has_recording,
+    hasVoicemail: !!r.has_voicemail,
     spamLevel: r.spam_level,
-    isCurrentUserPart: r.is_current_user_part,
+    isCurrentUserPart: !!r.is_current_user_part,
     recordingLink: r.recording_link,
     label,
   }));
 }
 
 // ---------- events ----------
-// One calendar event, camelCase (queryEvents aliases the snake_case DB columns). Number fields that
-// are 0/1 flags stay `number` (SQLite has no boolean); the renderer treats them as truthy.
+// One calendar event, camelCase. The 0/1 SQLite flags are booleanized at this boundary (via
+// toCalendarEvent), matching Message/Call — a consumer can safely write `if (ev.isCancelled)`.
 export interface CalendarEvent {
   id: string;
   seriesId: string | null;
@@ -715,15 +717,36 @@ export interface CalendarEvent {
   subject: string | null;
   startTs: number;
   endTs: number;
-  isAllDay: number;
+  isAllDay: boolean;
   organizerName: string | null;
   cid: string | null;
   myResponse: string | null;
-  isCancelled: number;
-  isConfidential: number;
-  hasAttach: number;
+  isCancelled: boolean;
+  isConfidential: boolean;
+  hasAttachment: boolean;
   attendees: string | null;
   bodyHtml: string | null;
+}
+
+// Map a raw events row (snake_case columns) to a CalendarEvent, booleanizing the 0/1 flags.
+function toCalendarEvent(r: any): CalendarEvent {
+  return {
+    id: r.id,
+    seriesId: r.series_id ?? null,
+    kind: r.kind,
+    subject: r.subject ?? null,
+    startTs: r.start_ts,
+    endTs: r.end_ts,
+    isAllDay: !!r.is_all_day,
+    organizerName: r.organizer_name ?? null,
+    cid: r.cid ?? null,
+    myResponse: r.my_response ?? null,
+    isCancelled: !!r.is_cancelled,
+    isConfidential: !!r.is_confidential,
+    hasAttachment: !!r.has_attach,
+    attendees: r.attendees ?? null,
+    bodyHtml: r.body_html ?? null,
+  };
 }
 
 // list_events' data: events in the (already-computed) window, filtered, chronological, limited.
@@ -766,15 +789,9 @@ export function queryEvents(
   }
   if (opts.hideCancelled) where.push('is_cancelled=0');
   const w = where.length ? 'where ' + where.join(' and ') : '';
-  return db
-    .prepare(
-      `select id, series_id as seriesId, kind, subject, start_ts as startTs, end_ts as endTs,
-        is_all_day as isAllDay, organizer_name as organizerName, cid, my_response as myResponse,
-        is_cancelled as isCancelled, is_confidential as isConfidential, has_attach as hasAttach,
-        attendees, body_html as bodyHtml
-      from events ${w} order by start_ts asc limit ?`,
-    )
-    .all(...params, limit) as unknown as CalendarEvent[];
+  return (
+    db.prepare(`select * from events ${w} order by start_ts asc limit ?`).all(...params, limit) as any[]
+  ).map(toCalendarEvent);
 }
 
 // Newest materialized occurrence start across ALL events — the honest bound for list_events'

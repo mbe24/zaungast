@@ -53,7 +53,7 @@ export function listCalls(view: View, args: ListCallsArgs = {}): string {
       (r.hasRecording ? ' [recorded]' : '') +
       (r.hasVoicemail ? ' [voicemail]' : '') +
       (r.spamLevel && !/^none$/i.test(r.spamLevel) ? ' [spam?]' : '') +
-      (r.isCurrentUserPart === 0 ? ' [not-you]' : '');
+      (!r.isCurrentUserPart ? ' [not-you]' : '');
     const pivot = renderRecordingPivot(view, r.recordingLink);
     return `${fmtTs(r.startTs)} ${arrow} ${r.label} · ${tail}${tags}${pivot}`;
   });

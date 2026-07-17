@@ -54,7 +54,7 @@ function renderEventLine(view: View, r: CalendarEvent): string {
   const tags =
     (r.isCancelled ? ' [cancelled]' : '') +
     (r.isConfidential ? ' [confidential]' : '') +
-    (r.hasAttach ? ' [attachment]' : '');
+    (r.hasAttachment ? ' [attachment]' : '');
   const timeRange = eventTimeRange(r.startTs, r.endTs, !!r.isAllDay);
   const org = r.organizerName ? `org: ${r.organizerName}` : 'org: (unknown)';
   const attendees = renderAttendees(r.attendees);
