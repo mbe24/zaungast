@@ -8,6 +8,14 @@
 //   npm run build
 //   node --experimental-sqlite --expose-gc scripts/profile.mjs [<leveldb-dir>] [<iterations>]
 //
+// Two modes (the percentile spread p50/75/90/95/99 + stddev is emitted in BOTH):
+//   LIGHT (default) — N=10 · tools 100 · top_topics 50 · incremental 20. A quick standard run.
+//   HEAVY (opt-in)  — N=100 · tools 500 · top_topics 200 · incremental 40. A deep, tight-stddev
+//                     re-profile (~20-30 min). Enable with the `--heavy` flag OR PROFILE_HEAVY=1.
+//     node --experimental-sqlite --expose-gc scripts/profile.mjs <dir> --heavy
+// An explicit <iterations> arg overrides the mode's default N (the tool/topic/incremental iteration
+// counts still follow the mode).
+//
 // Outputs into profiling/<YYYYMMDD-HHMMSS>/ (gitignored): timings.json, full-parse.cpuprofile,
 // full-parse.heapprofile, full-parse-cold.cpuprofile. The main session writes profiling.md there.
 
@@ -75,8 +83,15 @@ if (process.argv[2] === '--cold') {
   process.exit(0);
 }
 
-const DIR = process.argv[2] ?? 'data/2026-07-15/https_teams.microsoft.com_0.indexeddb.leveldb';
-const N = Number(process.argv[3] ?? 10);
+// HEAVY vs LIGHT (see header): heavy is opt-in via `--heavy` or PROFILE_HEAVY=1; light is the
+// standard default. Only the iteration COUNTS differ — the metrics/percentiles are identical.
+const HEAVY = process.argv.includes('--heavy') || process.env.PROFILE_HEAVY === '1';
+const positional = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+const DIR = positional[0] ?? 'data/2026-07-15/https_teams.microsoft.com_0.indexeddb.leveldb';
+const N = Number(positional[1] ?? (HEAVY ? 100 : 10));
+const TOOL_ITERS = HEAVY ? 500 : 100; // per-tool bench iterations
+const TOPIC_ITERS = HEAVY ? 200 : 50; // top_topics (heavier per call)
+const INC_ITERS = HEAVY ? 40 : 20; // incremental no-op refresh
 if (!fs.existsSync(path.join(DIR, 'CURRENT'))) {
   console.error(`not a leveldb dir (no CURRENT): ${DIR}`);
   process.exit(1);
@@ -100,15 +115,24 @@ function bench(label, fn, iters = N) {
   }
   s.sort((a, b) => a - b);
   const sum = s.reduce((a, b) => a + b, 0);
-  const at = (q) => s[Math.min(s.length - 1, Math.floor(iters * q))];
+  const mean = sum / iters;
+  const variance = s.reduce((a, b) => a + (b - mean) ** 2, 0) / iters;
+  const r3 = (x) => +x.toFixed(3);
+  // nearest-rank percentile (ceil), clamped
+  const pc = (q) => s[Math.min(s.length - 1, Math.max(0, Math.ceil(iters * q) - 1))];
   return {
     label,
     iters,
-    min: +s[0].toFixed(3),
-    median: +at(0.5).toFixed(3),
-    mean: +(sum / iters).toFixed(3),
-    p95: +at(0.95).toFixed(3),
-    max: +s[iters - 1].toFixed(3),
+    min: r3(s[0]),
+    p50: r3(pc(0.5)),
+    median: r3(pc(0.5)), // alias (some callers/throughput read .median)
+    p75: r3(pc(0.75)),
+    p90: r3(pc(0.9)),
+    p95: r3(pc(0.95)),
+    p99: r3(pc(0.99)),
+    max: r3(s[iters - 1]),
+    mean: r3(mean),
+    stddev: r3(Math.sqrt(variance)),
   };
 }
 
@@ -122,6 +146,8 @@ results.meta = {
   dir: DIR,
   parsedBytes,
   iterations: N,
+  mode: HEAVY ? 'heavy' : 'light',
+  iters: { tool: TOOL_ITERS, topic: TOPIC_ITERS, incremental: INC_ITERS },
   gcPinned: !!gc,
   node: process.version,
   platform: `${os.platform()} ${os.release()}`,
@@ -190,7 +216,7 @@ for (const mode of ['copy-reuse', 'reparse']) {
   s.refreshNow(true);
   const fullMs = +(performance.now() - t).toFixed(3);
   s.refreshNow(false); // warm the cache (copy-reuse)
-  const inc = bench(`incremental no-op (${mode})`, () => s.refreshNow(false), 20);
+  const inc = bench(`incremental no-op (${mode})`, () => s.refreshNow(false), INC_ITERS);
   s.dispose();
   results.incremental.push({ mode, kind: 'no-op', fullMs, ...inc });
 }
@@ -220,11 +246,11 @@ for (const mode of ['copy-reuse', 'reparse']) {
     convs.filter((c) => c.kind === kind).sort((a, b) => b.msgCount - a.msgCount)[0]?.handle;
   const flat = busiest('1:1') ?? busiest('group');
   const chan = busiest('channel');
-  const T = 100;
+  const T = TOOL_ITERS;
   if (flat) results.tools.push(bench('read_messages (flat)', () => readMessages(store, { conversation: flat, limit: 40 }), T));
   if (chan) results.tools.push(bench('read_messages (channel digest)', () => readMessages(store, { conversation: chan, limit: 40 }), T));
   results.tools.push(bench('search "the"', () => search(store, { query: 'the', limit: 20 }), T));
-  results.tools.push(bench('top_topics 30d', () => topTopics(store, { window: '30d' }), 50));
+  results.tools.push(bench('top_topics 30d', () => topTopics(store, { window: '30d' }), TOPIC_ITERS));
   results.tools.push(bench('list_conversations', () => listConversations(store, {}), T));
   results.tools.push(bench('find_person (roster)', () => findPerson(store, {}), T));
   results.tools.push(bench('list_events', () => listEvents(store, { since: '2020-01-01', until: '2030-01-01', limit: 30 }), T));
@@ -258,10 +284,11 @@ try {
 
 // ---- write timings + console summary ----
 fs.writeFileSync(path.join(outDir, 'timings.json'), JSON.stringify(results, null, 2));
-const row = (r) => `  ${r.label.padEnd(46)} median ${String(r.median).padStart(9)}ms  p95 ${String(r.p95).padStart(9)}ms`;
+const row = (r) => `  ${r.label.padEnd(44)} p50 ${String(r.p50).padStart(8)} p90 ${String(r.p90).padStart(8)} p95 ${String(r.p95).padStart(8)} p99 ${String(r.p99).padStart(8)} ±${String(r.stddev).padStart(7)}ms`;
 console.log(`\n=== profile → ${outDir} ===`);
 console.log(`data: ${DIR}`);
 console.log(`  ${results.meta.liveEntries} entries · ${(parsedBytes / 1048576).toFixed(1)} MB parsed · counts ${JSON.stringify(results.meta.counts)} · gcPinned ${!!gc}`);
+console.log(`  mode: ${HEAVY ? 'HEAVY' : 'light'} (N=${N} · tools ${TOOL_ITERS} · top_topics ${TOPIC_ITERS} · incremental ${INC_ITERS})`);
 console.log(`\nfull parse: cold ${results.fullParse.coldMs}ms · warm median ${results.fullParse.warm.median}ms · cold peak RSS ${results.fullParse.coldPeakRssMB ?? '—'}MB · RSS w/store ${results.fullParse.rssWithStoreMB}MB`);
 console.log(`throughput: ${results.meta.throughput.entriesPerSec} entries/s · ${results.meta.throughput.mbPerSec} MB/s`);
 console.log('\nformat phases:');
@@ -269,7 +296,7 @@ results.formatPhases.forEach((r) => console.log(row(r)));
 console.log('\nincremental:');
 results.incremental.forEach((r) =>
   r.kind === 'no-op'
-    ? console.log(`  no-op (${r.mode}): full ${r.fullMs}ms · refresh median ${r.median}ms p95 ${r.p95}ms`)
+    ? console.log(`  no-op (${r.mode}): full ${r.fullMs}ms · refresh p50 ${r.p50} p90 ${r.p90} p95 ${r.p95} p99 ${r.p99} ±${r.stddev}ms`)
     : console.log(`  changed (${r.mode}): applied ${r.appliedMsgs} msgs in ${r.changedMs}ms`),
 );
 console.log('\ntools:');
