@@ -25,3 +25,7 @@ path = "src/bin/diffsnap.rs"
 [[bin]]
 name = "diffssv"         # SSV layer: per-bucket decoded-value canonical digest
 path = "src/bin/diffssv.rs"
+
+[[bin]]
+name = "difffp"          # Fingerprint layer: schema hash + per-store report
+path = "src/bin/difffp.rs"

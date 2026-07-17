@@ -32,6 +32,7 @@ const LAYERS = {
   sstable: { bin: 'difftable', mode: 'perfile', harness: 'diff-sstable.mjs' },
   snapshot: { bin: 'diffsnap', mode: 'whole', harness: 'diff-snapshot.mjs' },
   ssv: { bin: 'diffssv', mode: 'whole', harness: 'diff-ssv.mjs' },
+  fp: { bin: 'difffp', mode: 'whole', harness: 'diff-fp.mjs' },
 };
 const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 const layerIdx = process.argv.indexOf('--layer');
