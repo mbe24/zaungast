@@ -42,7 +42,7 @@ try {
   const convs = store.conversations.list();
   ok('conversations.list() non-empty', convs.length > 0, `${convs.length}`);
   const first = convs[0];
-  ok('ConversationView carries id', typeof first?.id === 'string' && first.id.length > 0, first?.id);
+  ok('Conversation carries id', typeof first?.id === 'string' && first.id.length > 0, first?.id);
   const got = first ? store.conversations.get(first.id) : null;
   ok('conversations.get(id) returns the conversation', got?.id === first?.id, `${got?.id}`);
   const gotByHandle = first ? store.conversations.get(first.handle) : null;
@@ -76,7 +76,7 @@ try {
   ok('messages.inConversation returns ok', inConv.ok === true, JSON.stringify(inConv).slice(0, 80));
   let sampleMsgId = '';
   if (inConv.ok) {
-    ok('inConversation rows are MessageView', inConv.rows.every((r) => typeof r.convId === 'string'));
+    ok('inConversation rows are Message', inConv.rows.every((r) => typeof r.convId === 'string'));
     ok(
       'inConversation booleanizes flags',
       inConv.rows.every((r) => typeof r.isMine === 'boolean' && typeof r.hasAttachment === 'boolean'),
@@ -91,10 +91,10 @@ try {
   );
   if (sampleMsgId) {
     const one = store.messages.get(convId, sampleMsgId);
-    ok('messages.get(convId,id) returns MessageView', one?.id === sampleMsgId, `${one?.id}`);
+    ok('messages.get(convId,id) returns Message', one?.id === sampleMsgId, `${one?.id}`);
     ok('messages.get(convId,missing) is null', store.messages.get(convId, 'nope') === null);
     const thread = store.messages.thread(convId, one!.rootId);
-    ok('messages.thread returns MessageView[]', Array.isArray(thread) && thread.length > 0, `${thread.length}`);
+    ok('messages.thread returns Message[]', Array.isArray(thread) && thread.length > 0, `${thread.length}`);
   }
   const stats = store.messages.stats(convId);
   ok(
@@ -113,7 +113,7 @@ try {
   const ppl = store.people.find();
   ok('people.find() returns rows', ppl.rows.length > 0, `${ppl.mode}/${ppl.rows.length}`);
   ok('PeopleResult.total present', typeof ppl.total === 'number' && ppl.total >= ppl.rows.length, `${ppl.total}`);
-  ok('PersonView.isBot is boolean', typeof ppl.rows[0]?.isBot === 'boolean');
+  ok('Person.isBot is boolean', typeof ppl.rows[0]?.isBot === 'boolean');
   const someMri = ppl.rows[0]?.mri ?? '';
   ok('people.nameFor(mri) resolves', typeof store.people.nameFor(someMri) === 'string', someMri);
   ok('people.nameFor(unknown) is null', store.people.nameFor('8:orphan:nobody') === null);

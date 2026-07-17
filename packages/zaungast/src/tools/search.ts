@@ -1,4 +1,4 @@
-import type { SearchHit, ConversationView } from 'libzaungast';
+import type { SearchHit, Conversation } from 'libzaungast';
 import type { SearchArgs } from '../schemas.js';
 import { searchShape } from '../schemas.js';
 import type { QueryTool } from './types.js';
@@ -44,8 +44,8 @@ function buildSearchResults(
   rows: SearchHit[],
   ownerFallback: string | null,
 ): { lines: string[]; legend: string } {
-  const cache = new Map<string, ConversationView | null>();
-  const conv = (cid: string): ConversationView | null => {
+  const cache = new Map<string, Conversation | null>();
+  const conv = (cid: string): Conversation | null => {
     if (!cache.has(cid)) cache.set(cid, view.conversations.get(cid));
     return cache.get(cid)!;
   };

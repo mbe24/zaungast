@@ -1,5 +1,5 @@
 import { htmlToText } from 'libzaungast';
-import type { EventView } from 'libzaungast';
+import type { CalendarEvent } from 'libzaungast';
 import type { ListEventsArgs } from '../schemas.js';
 import { listEventsShape } from '../schemas.js';
 import type { QueryTool } from './types.js';
@@ -50,7 +50,7 @@ function elideUrlsToHostnames(text: string): string {
 }
 
 // One event row, fully rendered (subject/org/attendees/response/chat-pivot/tags).
-function renderEventLine(view: View, r: EventView): string {
+function renderEventLine(view: View, r: CalendarEvent): string {
   const tags =
     (r.isCancelled ? ' [cancelled]' : '') +
     (r.isConfidential ? ' [confidential]' : '') +
@@ -70,10 +70,10 @@ function renderEventLine(view: View, r: EventView): string {
 
 // Recurrence run-collapse: rows sharing a series_id, in the window, beyond the first 2 collapse
 // to one summary line (the chat handle prints once — on the fully-rendered first occurrence).
-function renderEventGroups(view: View, rows: EventView[]): string[] {
+function renderEventGroups(view: View, rows: CalendarEvent[]): string[] {
   // Group by series_id, preserving each row's relative chronological position (rows arrive
   // pre-sorted by start_ts asc, so a group's array is automatically in series order too).
-  const bySeries = new Map<string, EventView[]>();
+  const bySeries = new Map<string, CalendarEvent[]>();
   for (const r of rows) {
     if (!r.seriesId) continue;
     const g = bySeries.get(r.seriesId);

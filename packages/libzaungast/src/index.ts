@@ -43,22 +43,22 @@ export type {
 // The typed row/result shapes the query namespaces return (data types only — the query functions
 // themselves are internal).
 export type {
-  ConversationView,
-  MessageView,
+  Conversation,
+  Message,
   ReactionGroup,
   SearchHit,
   ThreadSummary,
-  PersonView,
+  Person,
   PeopleResult,
-  EventView,
-  CallView,
-  TopicView,
+  CalendarEvent,
+  Call,
+  Topic,
   QueryMiss,
   ConvMessagesMiss,
 } from './query.js';
 
 // Public helpers + the store-metadata type. htmlToText is Teams-domain functionality (the library
-// hands out raw EventView.bodyHtml on purpose); isBotMri is a documented MRI-namespace fact.
+// hands out raw CalendarEvent.bodyHtml on purpose); isBotMri is a documented MRI-namespace fact.
 export { htmlToText } from './util/text.js';
 export { isBotMri } from './ingest/store.js';
 export type { StoreMeta } from './ingest/store.js';

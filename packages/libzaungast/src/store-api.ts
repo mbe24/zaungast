@@ -31,19 +31,19 @@ import {
   computeTopicsWindow,
   computeTopicRows,
   buildPhraseExtractor,
-  toMessageView,
+  toMessage,
   toSearchHit,
   toThreadSummary,
   type SearchOptions,
   type ConvMessagesOptions,
-  type ConversationView,
-  type MessageView,
+  type Conversation,
+  type Message,
   type SearchHit,
   type ThreadSummary,
   type PeopleResult,
-  type EventView,
-  type CallView,
-  type TopicView,
+  type CalendarEvent,
+  type Call,
+  type Topic,
   type QueryMiss,
   type ConvMessagesMiss,
 } from './query.js';
@@ -113,7 +113,7 @@ export type MessageSearchResult =
 // messages remain; on a miss ('no-such-message' for an absent `around:` pivot) the reason.
 export type ConvMessagesResult =
   | { ok: false; reason: ConvMessagesMiss }
-  | { ok: true; rows: MessageView[]; nextOlder?: string };
+  | { ok: true; rows: Message[]; nextOlder?: string };
 
 // On a scope miss the QueryMiss reason is surfaced verbatim (never a silent whole-DB fall-through);
 // otherwise the scored topic rows PLUS every fact a renderer states about the run — the window and
@@ -123,7 +123,7 @@ export type TopicsComputeResult =
   | { ok: false; reason: QueryMiss }
   | {
       ok: true;
-      rows: TopicView[];
+      rows: Topic[];
       window: { sinceTs: number; untilTs: number };
       windowCount: number; // messages inside the window
       scopeTotal: number; // messages in scope across all time (0 → "no messages in scope")
@@ -143,19 +143,19 @@ export interface StoreInspection {
 // ---------- namespace surface ----------
 
 export interface ConversationsApi {
-  list(opts?: ConversationListOptions): ConversationView[];
+  list(opts?: ConversationListOptions): Conversation[];
   // Point lookup by leveldb id OR `c:` handle → the conversation (or null).
-  get(id: string): ConversationView | null;
+  get(id: string): Conversation | null;
   // `c:handle` or a title/participant substring → candidate conversations WITH display fields,
   // newest-first (last_ts desc). The MCP owns the thresholds/prose around ambiguity.
-  resolve(sel: string): ConversationView[];
+  resolve(sel: string): Conversation[];
 }
 export interface MessagesApi {
   search(opts?: MessageSearchOptions): MessageSearchResult;
   inConversation(convId: string, opts?: ConversationMessagesOptions): ConvMessagesResult;
   // Point lookup by (convId, id) — the around→root_id pivot; null when absent.
-  get(convId: string, id: string): MessageView | null;
-  thread(convId: string, rootId: string): MessageView[];
+  get(convId: string, id: string): Message | null;
+  thread(convId: string, rootId: string): Message[];
   threadSummaries(
     convId: string,
     opts?: { sinceTs?: number; untilTs?: number },
@@ -168,12 +168,12 @@ export interface PeopleApi {
   nameFor(mri: string): string | null;
 }
 export interface EventsApi {
-  list(opts?: EventsListOptions): EventView[];
+  list(opts?: EventsListOptions): CalendarEvent[];
   // Newest materialized occurrence start across ALL events (the honest recurring-events bound).
   maxStart(): number;
 }
 export interface CallsApi {
-  list(opts?: CallsListOptions): CallView[];
+  list(opts?: CallsListOptions): Call[];
 }
 export interface TopicsApi {
   compute(opts?: TopicsComputeOptions): TopicsComputeResult;
@@ -276,13 +276,13 @@ function makeApis(
         const oldest = res.rows[0];
         nextOlder = `older:${oldest.ts}:${oldest.id}`;
       }
-      return { ok: true, rows: res.rows.map(toMessageView), nextOlder };
+      return { ok: true, rows: res.rows.map(toMessage), nextOlder };
     },
     get: (convId, id) => {
       const r = messageById(getStore(), convId, id);
-      return r ? toMessageView(r) : null;
+      return r ? toMessage(r) : null;
     },
-    thread: (convId, rootId) => queryThread(getStore().db, convId, rootId).map(toMessageView),
+    thread: (convId, rootId) => queryThread(getStore().db, convId, rootId).map(toMessage),
     threadSummaries: (convId, opts = {}) =>
       queryThreadSummaries(getStore(), convId, opts).map(toThreadSummary),
     stats: (convId) => {

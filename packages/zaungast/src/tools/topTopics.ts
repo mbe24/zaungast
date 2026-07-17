@@ -1,4 +1,4 @@
-import type { TopicView } from 'libzaungast';
+import type { Topic } from 'libzaungast';
 import type { TopTopicsArgs } from '../schemas.js';
 import { topTopicsShape } from '../schemas.js';
 import type { QueryTool } from './types.js';
@@ -14,7 +14,7 @@ import {
   parseTime,
 } from './shared.js';
 
-function renderTopicRows(rows: TopicView[]): string[] {
+function renderTopicRows(rows: Topic[]): string[] {
   return rows.map(
     (r, i) =>
       `${i + 1}. "${r.phrase}" ×${r.count} (${r.lift.toFixed(1)}× baseline) · ${r.senderCount} people\n   e.g. ${fmtTs(r.example.ts)}: ${clip(r.example.content, 90)}`,

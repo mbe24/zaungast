@@ -107,7 +107,7 @@ export interface ReactionGroup {
 // The engine-agnostic, camelCase shape of one message row as the facade hands it to consumers.
 // The 0/1 SQLite flags are booleanized at this boundary; reactions are PARSED into typed groups.
 // `rootId === id` ⇒ this message is a thread root (joins ThreadSummary.rootId).
-export interface MessageView {
+export interface Message {
   id: string;
   convId: string;
   rootId: string;
@@ -121,8 +121,8 @@ export interface MessageView {
   content: string;
   reactions: ReactionGroup[];
 }
-// A search result row: a MessageView plus the highlighted `snippet` (the old raw-row `snip`).
-export interface SearchHit extends MessageView {
+// A search result row: a Message plus the highlighted `snippet` (the old raw-row `snip`).
+export interface SearchHit extends Message {
   snippet: string;
 }
 
@@ -143,10 +143,10 @@ export function parseReactions(json: string | null | undefined): ReactionGroup[]
   }
 }
 
-// Map a raw `messages` row (snake_case, 0/1 flags) to a MessageView. The mappers live here (not in
+// Map a raw `messages` row (snake_case, 0/1 flags) to a Message. The mappers live here (not in
 // the facade) so any consumer of the raw query fns can reuse them; the facade calls them at its
 // boundary while the query fns keep returning raw rows (the MCP still reads those directly).
-export function toMessageView(r: any): MessageView {
+export function toMessage(r: any): Message {
   return {
     id: r.id,
     convId: r.conv_id,
@@ -164,7 +164,7 @@ export function toMessageView(r: any): MessageView {
 }
 // Map a raw search row (a `messages` row + a `snip` column) to a SearchHit.
 export function toSearchHit(r: any): SearchHit {
-  return { ...toMessageView(r), snippet: r.snip };
+  return { ...toMessage(r), snippet: r.snip };
 }
 
 // ---------- search ----------
@@ -394,7 +394,7 @@ export function queryThread(db: DB, convId: string, rootId: string): any[] {
 }
 
 // A single message by (conv_id, id) — the raw row (or null). The facade's `messages.get` maps it
-// to a MessageView; it also backs the around→root_id pivot (root_id is on the raw row).
+// to a Message; it also backs the around→root_id pivot (root_id is on the raw row).
 export function messageById(store: ChatStore, convId: string, id: string): any | null {
   return (
     (store.db
@@ -404,7 +404,7 @@ export function messageById(store: ChatStore, convId: string, id: string): any |
 }
 
 // The camelCase facade shape of one reply-chain summary (queryThreadSummaries returns raw
-// {root_id,n,last}; this is what the facade hands out). rootId joins MessageView.rootId.
+// {root_id,n,last}; this is what the facade hands out). rootId joins Message.rootId.
 export interface ThreadSummary {
   rootId: string;
   count: number;
@@ -457,7 +457,7 @@ export function convMessageStats(
 }
 
 // ---------- people ----------
-export interface PersonView {
+export interface Person {
   handle: string;
   mri: string;
   name: string;
@@ -469,10 +469,10 @@ export interface PeopleResult {
   mode: 'handle' | 'search' | 'roster'; // how the query resolved (drives the renderer's header)
   query: string; // the trimmed query, '' for roster
   total: number; // ALL matches for this mode (not just the returned/limited rows)
-  rows: PersonView[];
+  rows: Person[];
 }
 
-const toPersonRow = (r: any): PersonView => ({
+const toPerson = (r: any): Person => ({
   handle: r.handle,
   mri: r.mri,
   name: r.name,
@@ -494,7 +494,7 @@ export function queryPeople(
   const cols = 'handle,mri,name,msg_count,last_ts';
   if (q.startsWith('p:')) {
     const rows = (db.prepare(`select ${cols} from people where handle=?`).all(q) as any[]).map(
-      toPersonRow,
+      toPerson,
     );
     return { mode: 'handle', query: q, total: rows.length, rows };
   }
@@ -510,19 +510,19 @@ export function queryPeople(
           String.raw`select ${cols} from people where name like ? escape '\' order by msg_count desc limit ?`,
         )
         .all(`%${likeEscape(q)}%`, n) as any[]
-    ).map(toPersonRow);
+    ).map(toPerson);
     return { mode: 'search', query: q, total, rows };
   }
   const total = (db.prepare('select count(*) c from people').get() as any).c;
   const rows = (
     db.prepare(`select ${cols} from people order by msg_count desc limit ?`).all(n) as any[]
-  ).map(toPersonRow);
+  ).map(toPerson);
   return { mode: 'roster', query: '', total, rows };
 }
 
 // ---------- conversations ----------
-export interface ConversationView {
-  id: string; // the conversation's leveldb id (joins MessageView.convId; the c: handle is `handle`)
+export interface Conversation {
+  id: string; // the conversation's leveldb id (joins Message.convId; the c: handle is `handle`)
   handle: string;
   kind: string;
   topic: string | null;
@@ -531,7 +531,7 @@ export interface ConversationView {
   msgCount: number;
 }
 
-const toConversationView = (r: any): ConversationView => ({
+const toConversation = (r: any): Conversation => ({
   id: r.id,
   handle: r.handle,
   kind: r.kind,
@@ -544,24 +544,24 @@ const toConversationView = (r: any): ConversationView => ({
 // column list for the conversation views (shared by list/get/resolve).
 const CONV_COLS = 'id,handle,kind,topic,participant_names,last_ts,msg_count';
 
-// A single conversation by leveldb id OR by `c:` handle → its ConversationView (or null). Backs
+// A single conversation by leveldb id OR by `c:` handle → its Conversation (or null). Backs
 // the facade's `conversations.get`.
-export function conversationById(store: ChatStore, idOrHandle: string): ConversationView | null {
+export function conversationById(store: ChatStore, idOrHandle: string): Conversation | null {
   const col = idOrHandle.startsWith('c:') ? 'handle' : 'id';
   const r = store.db
     .prepare(`select ${CONV_COLS} from conversations where ${col}=?`)
     .get(idOrHandle) as any;
-  return r ? toConversationView(r) : null;
+  return r ? toConversation(r) : null;
 }
 
 // Resolve a conversation selector (`c:handle` or a topic/participant substring) to candidate
 // ConversationViews, newest-first (last_ts desc). Unlike convIdsFor (ids only), this carries the
 // display fields so the MCP's ambiguity note can render candidates without a second lookup.
-export function resolveConversations(store: ChatStore, sel: string): ConversationView[] {
+export function resolveConversations(store: ChatStore, sel: string): Conversation[] {
   const db = store.db;
   if (sel.startsWith('c:')) {
     const rows = db.prepare(`select ${CONV_COLS} from conversations where handle=?`).all(sel) as any[];
-    return rows.map(toConversationView);
+    return rows.map(toConversation);
   }
   const like = `%${likeEscape(sel)}%`;
   const rows = db
@@ -571,7 +571,7 @@ export function resolveConversations(store: ChatStore, sel: string): Conversatio
       order by last_ts desc`,
     )
     .all(like, like) as any[];
-  return rows.map(toConversationView);
+  return rows.map(toConversation);
 }
 
 // list_conversations' data: activity-ranked conversations, filtered by kind/query/participant/since.
@@ -586,7 +586,7 @@ export function queryConversations(
     sinceTs?: number;
     includeEmpty?: boolean;
   } = {},
-): ConversationView[] {
+): Conversation[] {
   const db = store.db;
   const n = Math.min(Number(opts.n) || 12, 30); // n: default 12, documented maximum 30
   const where: string[] = [];
@@ -615,11 +615,11 @@ export function queryConversations(
      from conversations ${w} order by last_ts desc limit ?`,
     )
     .all(...params, n) as any[];
-  return rows.map(toConversationView);
+  return rows.map(toConversation);
 }
 
 // ---------- calls ----------
-export interface CallView {
+export interface Call {
   startTs: number;
   direction: string | null;
   isMissed: number;
@@ -645,7 +645,7 @@ export function queryCalls(
     participant?: string;
     limit?: number;
   } = {},
-): CallView[] {
+): Call[] {
   const db = store.db;
   const limit = Math.min(Number(opts.limit) || 30, 100); // limit: default 30, documented maximum 100
   const where: string[] = ['is_deleted=0']; // filtered out by default
@@ -708,7 +708,7 @@ export function queryCalls(
 // ---------- events ----------
 // One calendar event, camelCase (queryEvents aliases the snake_case DB columns). Number fields that
 // are 0/1 flags stay `number` (SQLite has no boolean); the renderer treats them as truthy.
-export interface EventView {
+export interface CalendarEvent {
   id: string;
   seriesId: string | null;
   kind: string;
@@ -739,7 +739,7 @@ export function queryEvents(
     hideCancelled?: boolean;
     limit?: number;
   } = {},
-): EventView[] {
+): CalendarEvent[] {
   const db = store.db;
   const limit = Math.min(Number(opts.limit) || 30, 100); // limit: default 30, documented maximum 100
   const where: string[] = [];
@@ -774,7 +774,7 @@ export function queryEvents(
         attendees, body_html as bodyHtml
       from events ${w} order by start_ts asc limit ?`,
     )
-    .all(...params, limit) as unknown as EventView[];
+    .all(...params, limit) as unknown as CalendarEvent[];
 }
 
 // Newest materialized occurrence start across ALL events — the honest bound for list_events'
@@ -833,7 +833,7 @@ export function buildPhraseExtractor(
   };
 }
 
-export interface TopicView {
+export interface Topic {
   phrase: string;
   count: number; // window mentions
   senderCount: number; // distinct senders in the window (anti-spam gate)
@@ -932,7 +932,7 @@ export function computeTopicRows(
   untilTs: number,
   minSenders: number,
   n: number,
-): { rows: TopicView[]; baseTotal: number; win: any[] } {
+): { rows: Topic[]; baseTotal: number; win: any[] } {
   const baseDf = new Map<string, number>();
   let baseTotal = 0;
   for (const m of all)

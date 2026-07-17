@@ -1,9 +1,9 @@
 import { reactionGlyph } from '../util/emoji.js';
 import { byCodeUnit } from '../util/sort.js';
 import type {
-  MessageView,
+  Message,
   ReactionGroup,
-  ConversationView,
+  Conversation,
   ThreadSummary,
 } from 'libzaungast';
 import type { ReadMessagesArgs } from '../schemas.js';
@@ -106,7 +106,7 @@ interface ReactionCtx {
 }
 
 // Sender label: the owner as "<name> (you)", everyone else by display name.
-function whoLabel(r: MessageView, ownerFallback: string | null): string {
+function whoLabel(r: Message, ownerFallback: string | null): string {
   return r.isMine ? ownerLabel(r.senderName, ownerFallback) : r.senderName || '(unknown)';
 }
 
@@ -114,7 +114,7 @@ function whoLabel(r: MessageView, ownerFallback: string | null): string {
 // indented reaction line beneath it when reacted. `who` is precomputed (name / "<name> (you)" /
 // "↳" burst mark); `suffix` (e.g. a thread tag) rides the text line, before any reaction line.
 function msgText(
-  r: MessageView,
+  r: Message,
   who: string,
   indent: string,
   rx?: ReactionCtx,
@@ -129,7 +129,7 @@ function msgText(
 // FLAT rendering (1:1/group, and non-threaded views): chronological, same-sender bursts within
 // 15 min collapse to "↳". Unchanged behaviour.
 function renderMessageLines(
-  rows: MessageView[],
+  rows: Message[],
   ownerFallback: string | null,
   rx?: ReactionCtx,
 ): string[] {
@@ -151,13 +151,13 @@ const REPLY_INDENT = '  ';
 // `preReplies` is an optional notice inserted between root and replies (e.g. "+N earlier · …");
 // `hitId` marks one line with a "→" gutter (the search-pivot target).
 function renderThread(
-  root: MessageView,
-  replies: MessageView[],
+  root: Message,
+  replies: Message[],
   ownerFallback: string | null,
   rx: ReactionCtx | undefined,
   opts: { suffix?: string; preReplies?: string; hitId?: string } = {},
 ): string[] {
-  const mark = (r: MessageView, base: string) =>
+  const mark = (r: Message, base: string) =>
     (opts.hitId && String(r.id) === opts.hitId ? '→ ' : '') + base;
   const out: string[] = [
     msgText(root, mark(root, whoLabel(root, ownerFallback)), '', rx, opts.suffix),
@@ -177,9 +177,9 @@ function renderThread(
 
 // Split a thread's ts-ordered rows into { root, replies } (root = the id===root_id message).
 function splitThread(
-  rows: MessageView[],
+  rows: Message[],
   rootId: string,
-): { root: MessageView; replies: MessageView[] } {
+): { root: Message; replies: Message[] } {
   const root = rows.find((r) => String(r.id) === rootId) ?? rows[0];
   return { root, replies: rows.filter((r) => r !== root) };
 }
@@ -188,7 +188,7 @@ function splitThread(
 const THREAD_INLINE_MAX = 40; // a thread this size or smaller renders whole in thread mode
 const THREAD_WINDOW = 30; // else this many replies per page
 
-function channelHead(conv: ConversationView, extra: string): string {
+function channelHead(conv: Conversation, extra: string): string {
   return `${conv.handle} [channel] "${conv.topic || conv.participantNames}" · ${extra}`;
 }
 
@@ -196,7 +196,7 @@ function channelHead(conv: ConversationView, extra: string): string {
 // ≥6 show root + last 3 + a "+N earlier · read_messages(thread: m:…)" drill-in. A zero-reply thread
 // is a bare root line (no thread tag). `rows` are the thread's non-system messages, ts-ascending.
 function renderDigestThread(
-  rows: MessageView[],
+  rows: Message[],
   rootId: string,
   ownerNm: string | null,
   rx: ReactionCtx,
@@ -223,7 +223,7 @@ function renderDigestThread(
 // bottom), size-gated, filled to a message budget (`limit`). Pages threads via the older: cursor.
 function renderChannelDigest(
   view: View,
-  conv: ConversationView,
+  conv: Conversation,
   convId: string,
   args: ReadMessagesArgs,
   limit: number,
@@ -283,7 +283,7 @@ function renderChannelDigest(
 // hit) and page backward with a keyset `more: before m:<id>` cursor.
 function renderThreadView(
   view: View,
-  conv: ConversationView,
+  conv: Conversation,
   convId: string,
   rootId: string,
   args: ReadMessagesArgs,
@@ -299,7 +299,7 @@ function renderThreadView(
   const total = rows.length;
 
   const beforeM = args.cursor && /^before m:(.+)$/.exec(String(args.cursor));
-  let shown: MessageView[];
+  let shown: Message[];
   let earlier = 0;
   if (hitId && total > THREAD_INLINE_MAX) {
     const idx = Math.max(
@@ -343,7 +343,7 @@ function renderThreadView(
 // Dispatch a channel read: a specific thread, an around-pivot (→ the hit's thread), or the digest.
 function renderChannel(
   view: View,
-  conv: ConversationView,
+  conv: Conversation,
   convId: string,
   args: ReadMessagesArgs,
   limit: number,
@@ -366,7 +366,7 @@ function renderChannel(
 }
 
 function buildReadMessagesHead(
-  conv: ConversationView,
+  conv: Conversation,
   shown: number,
   total: number,
   earliest: number,
