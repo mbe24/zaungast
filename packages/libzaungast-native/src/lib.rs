@@ -10,5 +10,6 @@
 
 pub mod idb;
 pub mod snappy;
+pub mod ssv;
 pub mod sstable;
 pub mod wal;
