@@ -103,13 +103,18 @@ function applyMessages(store: ChatStore, msgRows: any[], selfMri: string | null)
   return changedIds;
 }
 
-// Populate the profiles name-source (mri → display name). Whole-store replace each ingest.
-function applyProfiles(store: ChatStore, snap: Snapshot, mapping: any) {
-  const rows = extractEntity(snap, mapping, 'profile').records.map((r: any) => ({
+// Extract the profiles name-source rows (mri → display name) from the snapshot. Split from
+// applyProfiles so a full ingest can extract every entity's rows BEFORE building the store, then
+// drop the snapshot (perf 1b — see ingest()).
+function buildProfileRows(snap: Snapshot, mapping: any) {
+  return extractEntity(snap, mapping, 'profile').records.map((r: any) => ({
     mri: String(r.mri ?? ''),
     name: String(r.name ?? ''),
   }));
-  store.replaceProfiles(rows);
+}
+// Populate the profiles name-source. Whole-store replace each ingest.
+function applyProfiles(store: ChatStore, snap: Snapshot, mapping: any) {
+  store.replaceProfiles(buildProfileRows(snap, mapping));
 }
 
 // startTime/endTime decode as a real JS Date (structured-clone tag 0x44) in production Teams
@@ -146,10 +151,10 @@ function compactAttendees(attendees: unknown): string | null {
   return JSON.stringify(out);
 }
 
-// Populate the events table (calendar) — whole-store replace each ingest, exactly like
-// applyProfiles (see store.ts's replaceEvents doc). `RecurringMaster` rows are series templates,
+// Build the events table rows (calendar) from the snapshot. Split from applyEvents for the
+// extract-then-drop-snapshot ordering (perf 1b). `RecurringMaster` rows are series templates,
 // never rendered as an event, so they're dropped here rather than inserted and filtered later.
-function applyEvents(store: ChatStore, snap: Snapshot, mapping: any) {
+function buildEventRows(snap: Snapshot, mapping: any) {
   const rows = extractEntity(snap, mapping, 'event').records;
   const out = [];
   for (const r of rows as any[]) {
@@ -184,7 +189,12 @@ function applyEvents(store: ChatStore, snap: Snapshot, mapping: any) {
       bodyHtml: r.bodyContent != null ? String(r.bodyContent) : null,
     });
   }
-  store.replaceEvents(out);
+  return out;
+}
+// Populate the events table — whole-store replace each ingest, exactly like applyProfiles
+// (see store.ts's replaceEvents doc).
+function applyEvents(store: ChatStore, snap: Snapshot, mapping: any) {
+  store.replaceEvents(buildEventRows(snap, mapping));
 }
 
 // Compact a MultiParty call's participantList[] ({id,displayName,…}) to JSON [{mri,name}],
@@ -214,10 +224,11 @@ function recordingLinkOf(r: any): string | null {
   });
 }
 
-// Populate the calls table (call-history) — whole-store replace each ingest, like applyEvents.
+// Build the calls table rows (call-history) from the snapshot. Split from applyCalls for the
+// extract-then-drop-snapshot ordering (perf 1b).
 // `is_missed` maps ONLY callState==='Missed' (the real data's other observed value, 'Declined',
 // is a deliberate reject — not a miss — see the ingest report for the full enumeration).
-function applyCalls(store: ChatStore, snap: Snapshot, mapping: any) {
+function buildCallRows(snap: Snapshot, mapping: any) {
   const rows = extractEntity(snap, mapping, 'call').records;
   const out = [];
   for (const r of rows as any[]) {
@@ -245,7 +256,11 @@ function applyCalls(store: ChatStore, snap: Snapshot, mapping: any) {
       isDeleted: r.isDeleted === true ? 1 : 0,
     });
   }
-  store.replaceCalls(out);
+  return out;
+}
+// Populate the calls table — whole-store replace each ingest, like applyEvents.
+function applyCalls(store: ChatStore, snap: Snapshot, mapping: any) {
+  store.replaceCalls(buildCallRows(snap, mapping));
 }
 
 function applyConversationMeta(store: ChatStore, convRows: any[]) {
@@ -294,22 +309,70 @@ function finalMeta(
   };
 }
 
-// FULL rebuild from a fresh snapshot dir. `seqCap` (tests only) builds a PARTIAL store as of
-// an earlier sequence, so a following applyIncremental can be proven to reach a full rebuild.
-export function ingest(dir: string, opts: { seqCap?: number } = {}): Ingested {
+// Everything a full ingest extracts from a snapshot, as plain row arrays (no Buffer slices, no
+// snapshot references). `mapping` is null when no schema matched.
+interface FullExtract {
+  fp: any;
+  mapping: any;
+  maxSeq: number;
+  lossy: boolean;
+  selfMri: string | null;
+  msgTargets: Set<string>;
+  convTargets: Set<string>;
+  msgRows: any[];
+  convRows: any[];
+  profileRows: ReturnType<typeof buildProfileRows>;
+  eventRows: ReturnType<typeof buildEventRows>;
+  callRows: ReturnType<typeof buildCallRows>;
+}
+
+// Load the snapshot and extract EVERY entity's rows, then return — so the Snapshot (the ~56MB
+// whole-file buffers + the full decoded record graph, both held via snap.buckets' key/value
+// slices) becomes unreachable as this frame unwinds, BEFORE ingest() builds the SQLite store.
+// Extracted rows carry only decoded values + a latin1 __key string (resolver.ts:141), never Buffer
+// slices, so nothing returned here pins the snapshot. This keeps the decode-graph peak and the
+// growing-store peak from coexisting → lower peak RSS (perf 1b). Byte-identical: extraction order
+// doesn't affect any inserted value, selfMri, or the fingerprint (computed here, unchanged).
+function extractForFullIngest(dir: string, opts: { seqCap?: number }): FullExtract {
   const snap = loadSnapshot(dir, { seqCap: opts.seqCap });
   const { maxSeq, lossy } = snap;
   const fp = fingerprint(snap);
   const { mapping } = selectMapping(fp);
-  if (!mapping) {
+  if (!mapping)
+    return {
+      fp, mapping: null, maxSeq, lossy, selfMri: null,
+      msgTargets: new Set(), convTargets: new Set(),
+      msgRows: [], convRows: [], profileRows: [], eventRows: [], callRows: [],
+    };
+  const msgTargets: Set<string> = entityTargets(snap, mapping, 'message');
+  const convTargets: Set<string> = entityTargets(snap, mapping, 'conversation');
+  const msgRows = extractEntity(snap, mapping, 'message', msgTargets).records;
+  const convRows = extractEntity(snap, mapping, 'conversation', convTargets).records;
+  const profileRows = buildProfileRows(snap, mapping);
+  const eventRows = buildEventRows(snap, mapping);
+  const callRows = buildCallRows(snap, mapping);
+  const selfMri = voteSelfMri(msgRows);
+  return {
+    fp, mapping, maxSeq, lossy, selfMri, msgTargets, convTargets,
+    msgRows, convRows, profileRows, eventRows, callRows,
+  };
+}
+
+// FULL rebuild from a fresh snapshot dir. `seqCap` (tests only) builds a PARTIAL store as of
+// an earlier sequence, so a following applyIncremental can be proven to reach a full rebuild.
+export function ingest(dir: string, opts: { seqCap?: number } = {}): Ingested {
+  // Extract every entity's rows first; the helper's frame drops the Snapshot before we build the
+  // store below, so the two memory peaks never coexist (perf 1b).
+  const ex = extractForFullIngest(dir, opts);
+  if (!ex.mapping) {
     const store = new ChatStore();
     return {
       store,
       state: null,
-      lossy,
+      lossy: ex.lossy,
       meta: {
         asOf: Date.now(),
-        fingerprint: fp.hash,
+        fingerprint: ex.fp.hash,
         schemaVersion: null,
         schemaMatched: false,
         counts: { conversations: 0, messages: 0, people: 0 },
@@ -317,30 +380,36 @@ export function ingest(dir: string, opts: { seqCap?: number } = {}): Ingested {
         ftsEnabled: store.ftsEnabled,
         lastFullAt: Date.now(),
         refreshMode: 'full',
-        lossy,
+        lossy: ex.lossy,
         selfMri: null,
       },
     };
   }
-  const msgTargets: Set<string> = entityTargets(snap, mapping, 'message');
-  const convTargets: Set<string> = entityTargets(snap, mapping, 'conversation');
-  const msgRows = extractEntity(snap, mapping, 'message', msgTargets).records;
-  const convRows = extractEntity(snap, mapping, 'conversation', convTargets).records;
-  const selfMri = voteSelfMri(msgRows);
 
   const store = new ChatStore();
   store.db.exec('BEGIN');
-  applyConversationMeta(store, convRows);
-  applyMessages(store, msgRows, selfMri);
-  applyProfiles(store, snap, mapping);
-  applyEvents(store, snap, mapping);
-  applyCalls(store, snap, mapping);
+  applyConversationMeta(store, ex.convRows);
+  applyMessages(store, ex.msgRows, ex.selfMri);
+  store.replaceProfiles(ex.profileRows);
+  store.replaceEvents(ex.eventRows);
+  store.replaceCalls(ex.callRows);
   store.db.exec('COMMIT');
-  store.recomputeDerived(selfMri);
+  store.recomputeDerived(ex.selfMri);
   store.refreshFts(null);
 
-  const meta = finalMeta(store, fp, mapping, 'full', Date.now(), lossy, selfMri);
-  return { store, meta, lossy, state: { mapping, selfMri, msgTargets, convTargets, maxSeq } };
+  const meta = finalMeta(store, ex.fp, ex.mapping, 'full', Date.now(), ex.lossy, ex.selfMri);
+  return {
+    store,
+    meta,
+    lossy: ex.lossy,
+    state: {
+      mapping: ex.mapping,
+      selfMri: ex.selfMri,
+      msgTargets: ex.msgTargets,
+      convTargets: ex.convTargets,
+      maxSeq: ex.maxSeq,
+    },
+  };
 }
 
 // INCREMENTAL apply onto an existing store. Mutates the store in place; the caller updates
