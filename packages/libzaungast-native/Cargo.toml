@@ -21,3 +21,7 @@ path = "src/bin/difftable.rs"
 [[bin]]
 name = "diffsnap"        # Snapshot layer: whole-dir dedup+buckets report
 path = "src/bin/diffsnap.rs"
+
+[[bin]]
+name = "diffssv"         # SSV layer: per-bucket decoded-value canonical digest
+path = "src/bin/diffssv.rs"

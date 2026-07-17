@@ -257,9 +257,7 @@ impl<'a> Reader<'a> {
             }
             let key = self.value()?;
             let val = self.value()?;
-            if let Some(k) = Self::key_string(&key) {
-                push_prop(&mut props, k, val);
-            }
+            set_array_elem(&mut items, &mut props, &key, val);
         }
         self.pos += 1;
         self.varint()?;
@@ -273,7 +271,7 @@ impl<'a> Reader<'a> {
         let len = self.varint()? as usize;
         let id = self.objects.len();
         self.objects.push(Ssv::Null);
-        let items = vec![Ssv::Undefined; len]; // holes → undefined (JS new Array(len))
+        let mut items = vec![Ssv::Undefined; len]; // holes → undefined (JS new Array(len))
         let mut props: Vec<(String, Ssv)> = Vec::new();
         while self.peek() != Some(0x40) {
             // '@'
@@ -282,9 +280,7 @@ impl<'a> Reader<'a> {
             }
             let key = self.value()?;
             let val = self.value()?;
-            if let Some(k) = Self::key_string(&key) {
-                push_prop(&mut props, k, val);
-            }
+            set_array_elem(&mut items, &mut props, &key, val);
         }
         self.pos += 1;
         self.varint()?;
@@ -376,6 +372,32 @@ fn push_prop(props: &mut Vec<(String, Ssv)>, k: String, v: Ssv) {
     }
 }
 
+// A property key is a JS array index iff ToString(ToUint32(P)) == P and ToUint32(P) != 2^32-1.
+fn array_index(v: &Ssv) -> Option<usize> {
+    match v {
+        Ssv::Num(n) if *n >= 0.0 && n.fract() == 0.0 && *n < 4294967295.0 => Some(*n as usize),
+        Ssv::Str(s) => s
+            .parse::<u32>()
+            .ok()
+            .and_then(|u| (u != u32::MAX && *s == u.to_string()).then_some(u as usize)),
+        _ => None,
+    }
+}
+
+// JS `arr[key] = val`: an array-index key lands in the indexed slots (extending with holes), any
+// other key becomes an own property. The canonical serializes only the indexed items — so an array
+// encoded as (index,value) pairs (sparse form, or dense trailing props) reconstructs correctly.
+fn set_array_elem(items: &mut Vec<Ssv>, props: &mut Vec<(String, Ssv)>, key: &Ssv, val: Ssv) {
+    if let Some(idx) = array_index(key) {
+        if idx >= items.len() {
+            items.resize(idx + 1, Ssv::Undefined);
+        }
+        items[idx] = val;
+    } else if let Some(k) = Reader::key_string(key) {
+        push_prop(props, k, val);
+    }
+}
+
 fn coerce_any_key(v: &Ssv) -> String {
     match v {
         Ssv::Bool(true) => "true".into(),
@@ -383,6 +405,124 @@ fn coerce_any_key(v: &Ssv) -> String {
         Ssv::Null => "null".into(),
         Ssv::Undefined => "undefined".into(),
         _ => "[object Object]".into(),
+    }
+}
+
+// ---- canonical serialization (for the cross-language differential; see harness/diff-ssv.mjs) ----
+// Deterministic byte form of a decoded value. Object keys sorted by UTF-8 bytes on BOTH sides (the
+// TS harness sorts identically), so decoder-content bugs surface while JS's integer-key iteration
+// order — validated elsewhere — doesn't cause false diffs. Array own-properties are ignored on both
+// sides (indexed items only). Markers are emitted as their TS object-equivalents so an enum variant
+// here and a plain marker object there produce identical bytes.
+fn varint_out(out: &mut Vec<u8>, mut n: u64) {
+    loop {
+        let b = (n & 0x7f) as u8;
+        n >>= 7;
+        if n != 0 {
+            out.push(b | 0x80);
+        } else {
+            out.push(b);
+            break;
+        }
+    }
+}
+
+pub fn canonical(v: &Ssv, out: &mut Vec<u8>) {
+    match v {
+        Ssv::Undefined => out.push(b'u'),
+        Ssv::Null => out.push(b'n'),
+        Ssv::Bool(true) => out.push(b'T'),
+        Ssv::Bool(false) => out.push(b'F'),
+        Ssv::Num(f) => {
+            out.push(b'd');
+            out.extend_from_slice(&f.to_le_bytes());
+        }
+        Ssv::Date(f) => {
+            out.push(b'M');
+            out.extend_from_slice(&f.to_le_bytes());
+        }
+        Ssv::BigInt { neg, le } => {
+            out.push(b'G');
+            out.push(if *neg { 1 } else { 0 });
+            let mut end = le.len(); // trim trailing zero bytes (LE) → minimal magnitude
+            while end > 0 && le[end - 1] == 0 {
+                end -= 1;
+            }
+            varint_out(out, end as u64);
+            out.extend_from_slice(&le[..end]);
+        }
+        Ssv::Str(s) => {
+            out.push(b's');
+            varint_out(out, s.len() as u64);
+            out.extend_from_slice(s.as_bytes());
+        }
+        Ssv::Bytes(b) => {
+            out.push(b'b');
+            varint_out(out, b.len() as u64);
+            out.extend_from_slice(b);
+        }
+        Ssv::Object(props) => {
+            out.push(b'{');
+            let mut sorted: Vec<&(String, Ssv)> = props.iter().collect();
+            sorted.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+            for (k, val) in sorted {
+                varint_out(out, k.len() as u64);
+                out.extend_from_slice(k.as_bytes());
+                canonical(val, out);
+            }
+            out.push(b'}');
+        }
+        Ssv::Array { items, .. } => {
+            out.push(b'[');
+            varint_out(out, items.len() as u64);
+            for it in items {
+                canonical(it, out);
+            }
+            out.push(b']');
+        }
+        // markers → their TS object-equivalents
+        Ssv::ArrayBufferView(len) => {
+            canonical(&Ssv::Object(vec![("__arrayBufferView".into(), Ssv::Num(*len as f64))]), out)
+        }
+        Ssv::Regexp { pattern, flags } => canonical(
+            &Ssv::Object(vec![
+                ("__regexp".into(), (**pattern).clone()),
+                ("flags".into(), Ssv::Num(*flags as f64)),
+            ]),
+            out,
+        ),
+        Ssv::Blob { blob_type, size } => canonical(
+            &Ssv::Object(vec![(
+                "__blob".into(),
+                Ssv::Object(vec![
+                    ("type".into(), Ssv::Str(blob_type.clone())),
+                    ("size".into(), Ssv::Num(*size as f64)),
+                ]),
+            )]),
+            out,
+        ),
+        Ssv::BlobIndex { index, file } => {
+            let mut props = vec![("__blobIndex".into(), Ssv::Num(*index as f64))];
+            if *file {
+                props.push(("__file".into(), Ssv::Bool(true)));
+            }
+            canonical(&Ssv::Object(props), out)
+        }
+        Ssv::ExternalBlob { method } => canonical(
+            &Ssv::Object(vec![
+                ("__externalBlob".into(), Ssv::Bool(true)),
+                ("method".into(), Ssv::Num(*method as f64)),
+            ]),
+            out,
+        ),
+        Ssv::Partial(root) => match &**root {
+            Ssv::Object(props) => {
+                let mut p = props.clone();
+                p.push(("__partial".into(), Ssv::Bool(true)));
+                canonical(&Ssv::Object(p), out)
+            }
+            other => canonical(other, out),
+        },
     }
 }
 

@@ -31,6 +31,7 @@ const IMAGE = process.env.ZAUNGAST_NATIVE_IMAGE || 'rust:1-slim-bookworm';
 const LAYERS = {
   sstable: { bin: 'difftable', mode: 'perfile', harness: 'diff-sstable.mjs' },
   snapshot: { bin: 'diffsnap', mode: 'whole', harness: 'diff-snapshot.mjs' },
+  ssv: { bin: 'diffssv', mode: 'whole', harness: 'diff-ssv.mjs' },
 };
 const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 const layerIdx = process.argv.indexOf('--layer');

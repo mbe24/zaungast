@@ -319,6 +319,54 @@ fn bucket_crc(b: &StoreBucket) -> u32 {
     crc32c_final(c)
 }
 
+/// SSV-layer report: decode every record's VALUE and crc32c its canonical form per bucket (P2
+/// differential). Per record: 0x01 + u32 len + canonical bytes on decode success, else 0x00 (a
+/// decode failure on one side but not the other → digest diverges). Matches harness/diff-ssv.mjs.
+pub fn snapshot_ssv_report(snap: &Snapshot) -> String {
+    use std::fmt::Write;
+    let up = crc32c_update;
+    let mut total = 0usize;
+    let mut total_ok = 0usize;
+    let mut idx: Vec<usize> = (0..snap.buckets.len()).collect();
+    idx.sort_by_key(|&i| (snap.buckets[i].db_id, snap.buckets[i].os_id));
+    let mut body = String::new();
+    for &i in &idx {
+        let b = &snap.buckets[i];
+        let mut c = crc32c_init();
+        let mut ok = 0usize;
+        for r in &b.records {
+            let bytes = r.value.as_deref().unwrap_or(&[]);
+            match crate::ssv::decode_value(bytes, false) {
+                Ok(v) => {
+                    let mut canon = Vec::new();
+                    crate::ssv::canonical(&v, &mut canon);
+                    c = up(c, 0x01);
+                    for x in (canon.len() as u32).to_le_bytes() {
+                        c = up(c, x);
+                    }
+                    for &x in &canon {
+                        c = up(c, x);
+                    }
+                    ok += 1;
+                }
+                Err(_) => c = up(c, 0x00),
+            }
+        }
+        total += b.records.len();
+        total_ok += ok;
+        let _ = writeln!(
+            body,
+            "BUCKET\t{}:{}\t{}\t{}\t{:08x}",
+            b.db_id,
+            b.os_id,
+            b.records.len(),
+            ok,
+            crc32c_final(c)
+        );
+    }
+    format!("GLOBAL\t{}\t{}\t{}\n{}", total, total_ok, snap.buckets.len(), body)
+}
+
 /// Deterministic snapshot summary for cross-language equality: a GLOBAL line + one BUCKET line per
 /// store (sorted by dbId:osId), each with a crc32c over its records in dedup-insertion order.
 pub fn snapshot_report(snap: &Snapshot) -> String {
