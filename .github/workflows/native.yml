@@ -1,0 +1,74 @@
+name: Native engine
+
+# Builds the optional Rust accelerator (libzaungast-native) as a Node addon on each native runner,
+# then runs the fixture + golden suites TWICE — once on the JS engine, once on the native engine —
+# so the native path is proven byte-equal to the TS reference on every supported platform. The full
+# cross-target prebuild matrix (musl, aarch64, …) for publishing is a release concern; this job
+# covers the three host platforms a developer/CI actually runs on.
+
+on:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main"]
+
+jobs:
+  build-and-verify:
+    name: Build addon + dual-engine golden (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          # node:sqlite (the ChatStore) needs Node >= 22.5.
+          node-version: "22"
+          cache: "npm"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/libzaungast-native
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Rust unit tests (incl. the ISO-8601 / Date.parse parity golden)
+        working-directory: packages/libzaungast-native
+        run: cargo test --release --lib
+
+      - name: Build TS
+        run: npm run build
+
+      - name: Build native addon (.node)
+        working-directory: packages/libzaungast-native
+        run: npm run build
+        # napi-rs emits libzaungast-native.<triple>.node here; as a workspace member it is symlinked
+        # into node_modules, so libzaungast's loader (index.js) finds it and ZAUNGAST_ENGINE=native
+        # resolves the addon.
+
+      - name: Sanity — addon loads and reports conformance
+        run: node -e "const n=require('libzaungast-native');if(typeof n.conformanceVersion()!=='number')process.exit(1);console.log('conformance',n.conformanceVersion())"
+
+      - name: Fixture suite — JS engine
+        run: npm run test:fixture
+        env:
+          ZAUNGAST_ENGINE: js
+
+      - name: Fixture suite — NATIVE engine (must equal JS)
+        run: npm run test:fixture
+        env:
+          ZAUNGAST_ENGINE: native
+
+      - name: Golden suite — NATIVE engine (must equal JS-generated goldens)
+        run: npm run test:golden
+        env:
+          ZAUNGAST_ENGINE: native
+        # resolveEngine() honors ZAUNGAST_ENGINE for every ingest() call (incl. the MCP's Session),
+        # so this exercises the native full-ingest path against the committed goldens. Partial builds
+        # (seqCap, the incremental tests) always force JS — native has no incremental path yet.

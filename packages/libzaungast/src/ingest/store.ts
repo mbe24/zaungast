@@ -1,5 +1,12 @@
 import { DatabaseSync } from 'node:sqlite';
+import { readFileSync, rmSync } from 'node:fs';
 import { makeHandle } from '../util/handles.js';
+
+// The ChatStore DDL, read from the single-source schema.sql (see that file's header). This is the
+// SAME string the native engine (libzaungast-native) execs verbatim, so the two engines' schemas
+// cannot drift. Resolved relative to this module: src/schema.sql in dev, dist/schema.sql in prod
+// (the build copies it — see package.json). FTS is created separately (conditional on fts5).
+export const SCHEMA_SQL = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
 
 export interface StoreMeta {
   asOf: number; // ingest completion time (epoch ms)
@@ -34,93 +41,23 @@ export class ChatStore {
   phraseCache = new Map<string, string[]>();
   phraseCacheSig = '';
 
-  constructor() {
+  // Set when this store was opened onto a native-built temp .db; unlinked on close().
+  private tempFile?: string;
+
+  // Default: an in-memory store, schema created + populated by the TS ingest. `openFile`: open an
+  // EXISTING ChatStore .db read-only (the native engine already built it end-to-end) — skips schema
+  // creation and ingest; only the query surface (db + ftsEnabled) is used. `tempFile` (if the opened
+  // file is a throwaway the native path wrote) is deleted on close().
+  constructor(opts?: { openFile?: string; ftsEnabled?: boolean; tempFile?: string }) {
+    if (opts?.openFile) {
+      this.db = new DatabaseSync(opts.openFile, { readOnly: true });
+      this.ftsEnabled = opts.ftsEnabled ?? this.detectFtsFromDb();
+      this.tempFile = opts.tempFile;
+      return;
+    }
     this.db = new DatabaseSync(':memory:');
     this.ftsEnabled = this.detectFts();
-    this.db.exec(/* sql */ `
-      create table conversations(
-        id text primary key, handle text unique, kind text,
-        -- meta, written from conversation records. thread_type = Teams' OWN conversation-type
-        -- string (chat/channel/meeting/space/engagecommunity/…), faithful and distinct from the
-        -- id-derived "kind"; persisted so future team/community consumers can identify roots
-        -- (space) and communities (engagecommunity) by Teams' value, not id-pattern guessing.
-        topic text, team_id text, thread_type text, meta_last_ts integer default 0,
-        -- derived, recomputed from messages:
-        msg_count integer default 0, participant_names text, participant_count integer default 0,
-        activity_ts integer default 0, last_ts integer default 0
-      );
-      create table people(
-        mri text primary key, handle text unique, name text,
-        msg_count integer default 0, last_ts integer default 0
-      );
-      -- Name source from the Teams profiles store, independent of who posted. recomputeDerived
-      -- rebuilds people from message senders only, so a reactor/mention who never posted has no
-      -- people row — profiles fills that gap (26% of reactors in real data). Never cleared by the
-      -- derived recompute; reconciled directly by the ingest profiles pass.
-      create table profiles(mri text primary key, name text);
-      -- chain_key: the owning reply-chain record's leveldb key, HEX-encoded. It must be hex, not
-      -- the raw latin1 bytes: leveldb keys contain embedded NUL bytes, and node:sqlite truncates a
-      -- TEXT value at the first NUL on JS read-back (a plain SELECT would return '' for real keys).
-      -- Hex is NUL-free so it round-trips; ingest encodes both this column and the reconcile's
-      -- live-key set the same way. (Regression-guarded in test/fixture/verify.ts.)
-      -- root_id: the id of the reply-chain root this message belongs to (a channel thread key).
-      -- Teams marks the root with parentMessageId === its own id, and every reply's parentMessageId
-      -- is the root's id; ingest derives root_id from that. root_id === id ⇒ this message is a root.
-      -- In 1:1/group chats each message is its own root (unthreaded); only channels render threaded.
-      create table messages(
-        conv_id text, id text, chain_key text, version integer default 0, ts integer,
-        sender_mri text, sender_name text, kind text, is_mine integer default 0,
-        is_system integer default 0, has_attach integer default 0, mentions_me integer default 0,
-        content text, reactions text, root_id text,
-        primary key(conv_id, id)
-      );
-      create index msg_conv_ts on messages(conv_id, ts);
-      create index msg_sender_ts on messages(sender_mri, ts);
-      create index msg_ts on messages(ts);
-      create index msg_chain on messages(chain_key);
-      create index msg_root on messages(conv_id, root_id, ts);
-      create table events(
-        id text primary key,
-        series_id text,              -- seriesMasterId; groups a recurring series (one c: handle + run-collapse)
-        kind text,                   -- 'meeting' | 'appointment' (cid-first, computed at ingest)
-        subject text,
-        start_ts integer default 0,
-        end_ts integer default 0,
-        is_all_day integer default 0,
-        location text,
-        organizer_name text,
-        organizer_email text,
-        cid text,                    -- 19:meeting_ thread id (meetings only) for chat pivot; null otherwise
-        my_response text,            -- Accepted/Tentative/Declined/None
-        show_as text,                -- Busy/Free/Tentative/OOF
-        is_cancelled integer default 0,
-        is_confidential integer default 0,  -- sensitivityLabelId truthy OR doNotForward
-        has_attach integer default 0,
-        attendees text,              -- compact JSON [{n,e,r}] = name,email,response; capped at render
-        body_html text               -- raw bodyContent; used ONLY behind include_body
-      );
-      create index events_start on events(start_ts);
-      create index events_series on events(series_id);
-      create table calls(
-        id text primary key,         -- callId
-        call_type text,              -- TwoParty/MultiParty/… (verbatim; no fixed enum)
-        direction text,              -- Outgoing/Incoming
-        state text,                  -- callState verbatim
-        is_missed integer default 0, -- derived from callState (Missed only; see applyCalls)
-        start_ts integer default 0,
-        duration_ms integer default 0,
-        counterpart_mri text,        -- TwoParty other party: target if Outgoing else originator (its .id)
-        participants text,           -- compact JSON [{mri,name}] for MultiParty
-        group_thread_id text,        -- groupChatThreadId (19:…@thread.v2) for MultiParty chat pivot
-        has_recording integer default 0,
-        recording_link text,         -- JSON {conversationId, linkedMessageId} for read_messages pivot
-        has_voicemail integer default 0,
-        spam_level text,             -- spamRiskLevel; render [spam?] only when risky (non-null/none)
-        is_current_user_part integer default 1,
-        is_deleted integer default 0 -- filtered by default
-      );
-      create index calls_start on calls(start_ts);
-    `);
+    this.db.exec(SCHEMA_SQL);
     if (this.ftsEnabled) {
       this.db.exec(`create virtual table messages_fts using fts5(
         content, conv_id unindexed, id unindexed, tokenize='porter unicode61');`);
@@ -133,6 +70,18 @@ export class ChatStore {
       t.exec('create virtual table _p using fts5(x)');
       t.close();
       return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // Whether an already-open store has the FTS table (native-opened path fallback; normally the
+  // native engine reports ftsEnabled directly, so this is only a safety net).
+  private detectFtsFromDb(): boolean {
+    try {
+      return !!this.db
+        .prepare("select 1 from sqlite_master where type='table' and name='messages_fts'")
+        .get();
     } catch {
       return false;
     }
@@ -365,9 +314,9 @@ export class ChatStore {
   // Returns the ids of the messages it deleted, so the caller can feed a delta FTS refresh
   // (chain_key is indexed → the SELECT is a cheap index probe).
   deleteMessagesByChain(chainKey: string): string[] {
-    const ids = (this.db.prepare('select id from messages where chain_key=?').all(chainKey) as any[]).map(
-      (r) => r.id as string,
-    );
+    const ids = (
+      this.db.prepare('select id from messages where chain_key=?').all(chainKey) as any[]
+    ).map((r) => r.id as string);
     this.q('delete from messages where chain_key=?').run(chainKey);
     return ids;
   }
@@ -382,7 +331,9 @@ export class ChatStore {
     const ins = this.q('insert or ignore into _live_chains values(?)');
     for (const k of liveChainKeys) ins.run(k);
     const ids = (
-      this.db.prepare('select id from messages where chain_key not in (select k from _live_chains)').all() as any[]
+      this.db
+        .prepare('select id from messages where chain_key not in (select k from _live_chains)')
+        .all() as any[]
     ).map((r) => r.id as string);
     this.db.exec('delete from messages where chain_key not in (select k from _live_chains)');
     return ids;
@@ -474,5 +425,12 @@ export class ChatStore {
 
   close() {
     this.db.close();
+    if (this.tempFile) {
+      try {
+        rmSync(this.tempFile, { force: true, recursive: true });
+      } catch {
+        /* best-effort cleanup of the native engine's throwaway .db dir */
+      }
+    }
   }
 }

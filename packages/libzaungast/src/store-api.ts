@@ -9,6 +9,7 @@
 // Error contract (stated once): a FALLIBLE facade query returns `{ ok: false, reason: QueryMiss } |
 // { ok: true, … }`; an INFALLIBLE one returns its rows/value directly. Never a silent fall-through.
 import { ingest, type Ingested } from './ingest/ingest.js';
+import type { Engine } from './ingest/native.js';
 import type { ChatStore, StoreMeta } from './ingest/store.js';
 import { Session, type SessionOptions } from './session.js';
 import { loadSnapshot, fingerprint, selectMapping } from './format/index.js';
@@ -59,6 +60,11 @@ export interface OpenStoreOptions {
   // Extra phrase-extractor stopwords merged into the language defaults for `topics.compute`
   // (union'd with any per-call `extraStopwords`). Omit for the default en+de behavior.
   extraStopwords?: Iterable<string>;
+  // Ingest engine: 'js' (default — the TS reference, zero-dep), 'native' (require the optional
+  // libzaungast-native accelerator; error if absent), or 'auto' (use native when installed +
+  // conformant, else JS). Env ZAUNGAST_ENGINE overrides this. Omit for 'js' — native is opt-in only
+  // until it has multi-platform mileage; 'auto' will NOT be picked up implicitly.
+  engine?: Engine;
 }
 
 // openLiveStore layers the auto-refreshing Session's options on top of the facade options.
@@ -112,8 +118,7 @@ export type MessageSearchResult =
 // A flat conversation read: on success the mapped rows + a `nextOlder` keyset cursor when older
 // messages remain; on a miss ('no-such-message' for an absent `around:` pivot) the reason.
 export type ConvMessagesResult =
-  | { ok: false; reason: ConvMessagesMiss }
-  | { ok: true; rows: Message[]; nextOlder?: string };
+  { ok: false; reason: ConvMessagesMiss } | { ok: true; rows: Message[]; nextOlder?: string };
 
 // On a scope miss the QueryMiss reason is surfaced verbatim (never a silent whole-DB fall-through);
 // otherwise the scored topic rows PLUS every fact a renderer states about the run — the window and
@@ -156,10 +161,7 @@ export interface MessagesApi {
   // Point lookup by (convId, id) — the around→root_id pivot; null when absent.
   get(convId: string, id: string): Message | null;
   thread(convId: string, rootId: string): Message[];
-  threadSummaries(
-    convId: string,
-    opts?: { sinceTs?: number; untilTs?: number },
-  ): ThreadSummary[];
+  threadSummaries(convId: string, opts?: { sinceTs?: number; untilTs?: number }): ThreadSummary[];
   stats(convId: string): { total: number; earliestTs: number; newestTs: number };
 }
 export interface PeopleApi {
@@ -222,9 +224,7 @@ export interface LiveTeamsStore {
 // resulting view hits the same build (this is how read-consistency is delivered — the static handle
 // owns one store for its lifetime; a live reading pins the build `current()` observed).
 
-function mergeStopwords(
-  ...sets: (Iterable<string> | undefined)[]
-): Iterable<string> | undefined {
+function mergeStopwords(...sets: (Iterable<string> | undefined)[]): Iterable<string> | undefined {
   const out = new Set<string>();
   for (const s of sets) if (s) for (const w of s) out.add(w);
   return out.size ? out : undefined; // undefined keeps buildPhraseExtractor byte-identical
@@ -425,7 +425,7 @@ class LiveTeamsStoreImpl implements LiveTeamsStore {
 // "lossy" load — `store.meta` tells the truth (schemaMatched / lossy); it throws only if `dir`
 // cannot be read at all. Use `using store = openStore(dir)` for automatic disposal.
 export function openStore(dir: string, opts: OpenStoreOptions = {}): TeamsStore {
-  return new StaticTeamsStore(ingest(dir), opts.extraStopwords);
+  return new StaticTeamsStore(ingest(dir, { engine: opts.engine }), opts.extraStopwords);
 }
 
 // A live, auto-refreshing store over the Session machinery (the MCP server's mode). Reads go through
@@ -451,7 +451,7 @@ export function tryOpen(
   | { ok: false; reason: 'unreadable'; error: string } {
   let ingested: Ingested;
   try {
-    ingested = ingest(dir);
+    ingested = ingest(dir, { engine: opts.engine });
   } catch (e) {
     return { ok: false, reason: 'unreadable', error: (e as Error).message };
   }

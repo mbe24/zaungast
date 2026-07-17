@@ -7,35 +7,65 @@ description = "Native (Rust) accelerator for libzaungast: leveldb read + decode 
 
 [lib]
 name = "libzaungast_native"
-# rlib for now (cargo test + the diff bins). cdylib for the napi module lands in P5.
-crate-type = ["rlib"]
+# rlib: cargo test + the diff bins. cdylib: the Node addon (the `napi` feature). An empty cdylib
+# (feature off) links fine; only `--features napi` compiles the actual N-API binding + linker args.
+crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 serde_json = "1"
 snap = "1"       # standard raw-block Snappy (byte-identical output; verified vs the TS reader)
 regex = "1"      # htmlToText tag/entity matching (mirrors the TS regex; ASCII classes)
+rusqlite = { version = "0.32", features = ["bundled"] }  # bundled SQLite (+FTS5) — the store writer
+# N-API binding (Node addon) — OPTIONAL, behind the `napi` feature so the default build (harness/CI
+# diff bins) never pulls it. `napi build --features napi` produces the .node for the engine switch.
+napi = { version = "2", default-features = false, features = ["napi8"], optional = true }
+napi-derive = { version = "2", optional = true }
 
-# Differential-harness binaries: dump digests to compare against the TS readers.
+[build-dependencies]
+napi-build = { version = "2", optional = true }
+
+[features]
+# `napi` turns on the Node addon: the binding module + napi-build's linker setup in build.rs.
+napi = ["dep:napi", "dep:napi-derive", "dep:napi-build"]
+# `harness` gates the differential diff bins. They're OFF by default so `napi build` (which runs
+# `cargo build` over all targets) SKIPS them — otherwise, with `--features napi`, the bins would try
+# to link the N-API rlib and fail on undefined Node symbols (only the cdylib gets dynamic-lookup).
+# The Docker/CI harness builds with `--features harness`.
+harness = []
+
+# Differential-harness binaries: dump digests to compare against the TS readers. All gated behind the
+# `harness` feature (required-features) so a plain/napi build skips them (see the `harness` feature).
 [[bin]]
 name = "difftable"       # SSTable layer: per-.ldb (count, lossy, crc)
 path = "src/bin/difftable.rs"
+required-features = ["harness"]
 
 [[bin]]
 name = "diffsnap"        # Snapshot layer: whole-dir dedup+buckets report
 path = "src/bin/diffsnap.rs"
+required-features = ["harness"]
 
 [[bin]]
 name = "diffssv"         # SSV layer: per-bucket decoded-value canonical digest
 path = "src/bin/diffssv.rs"
+required-features = ["harness"]
 
 [[bin]]
 name = "difffp"          # Fingerprint layer: schema hash + per-store report
 path = "src/bin/difffp.rs"
+required-features = ["harness"]
 
 [[bin]]
 name = "diffextract"     # Extract layer: per-entity extracted-row canonical digest
 path = "src/bin/diffextract.rs"
+required-features = ["harness"]
 
 [[bin]]
 name = "difftext"        # htmltext layer: htmlToText over message content, digest
 path = "src/bin/difftext.rs"
+required-features = ["harness"]
+
+[[bin]]
+name = "diffstore"       # store layer: full ChatStore build, per-table content digest
+path = "src/bin/diffstore.rs"
+required-features = ["harness"]

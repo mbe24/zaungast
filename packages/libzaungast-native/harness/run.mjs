@@ -46,6 +46,16 @@ const LAYERS = {
     harness: 'diff-htmltext.mjs',
     extra: 'packages/libzaungast/src/schema/versions/teams-2026-07.json',
   },
+  store: {
+    bin: 'diffstore',
+    mode: 'whole',
+    harness: 'diff-store.mjs',
+    extra: 'packages/libzaungast/src/schema/versions/teams-2026-07.json',
+    // binExtra: passed to the Rust bin ONLY (after `extra`), not to the TS harness. The store bin
+    // reads the DDL from the SAME single-source schema.sql the TS ingest uses (Topic 1 seam proof).
+    binExtra: ['packages/libzaungast/src/schema.sql'],
+    nodeFlags: ['--experimental-sqlite'], // TS ingest uses node:sqlite
+  },
 };
 const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 const layerIdx = process.argv.indexOf('--layer');
@@ -66,7 +76,7 @@ function dockerDigests() {
   const containerData = `/work/${rel}`;
   const script = '/work/packages/libzaungast-native/harness/incontainer.sh';
   console.error(`[runner=docker layer=${layerName}] image=${IMAGE}  data=${containerData}`);
-  const extra = L.extra ? [`/work/${L.extra}`] : [];
+  const extra = [...(L.extra ? [L.extra] : []), ...(L.binExtra || [])].map((p) => `/work/${p}`);
   // a named volume caches the cargo registry so crate deps (serde_json, snap, …) compile once
   return execFileSync(
     'docker',
@@ -80,9 +90,9 @@ function dockerDigests() {
 function localDigests() {
   const exe = path.join(CRATE, 'target', 'release', exeName(L.bin));
   console.error(`[runner=local layer=${layerName}] cargo build --release`);
-  execFileSync('cargo', ['build', '--release'], { cwd: CRATE, stdio: ['ignore', 'inherit', 'inherit'] });
+  execFileSync('cargo', ['build', '--release', '--features', 'harness'], { cwd: CRATE, stdio: ['ignore', 'inherit', 'inherit'] });
   if (L.mode === 'whole') {
-    const extra = L.extra ? [path.resolve(REPO, L.extra)] : [];
+    const extra = [...(L.extra ? [L.extra] : []), ...(L.binExtra || [])].map((p) => path.resolve(REPO, p));
     return execFileSync(exe, [dataAbs, ...extra], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 256 * 1024 * 1024 });
   }
   const ldbs = fs.readdirSync(dataAbs).filter((f) => f.endsWith('.ldb')).sort();
@@ -124,7 +134,7 @@ if (RUNNER === 'docker') {
 
 const tsv = path.join(os.tmpdir(), `zaungast-native-${layerName}-${process.pid}.tsv`);
 fs.writeFileSync(tsv, digests);
-const harnessArgs = [path.join(HERE, L.harness), dataAbs, '--rust', tsv];
+const harnessArgs = [...(L.nodeFlags || []), path.join(HERE, L.harness), dataAbs, '--rust', tsv];
 if (L.extra) harnessArgs.push('--mapping', path.resolve(REPO, L.extra));
 const r = spawnSync(process.execPath, harnessArgs, { stdio: 'inherit' });
 fs.rmSync(tsv, { force: true });

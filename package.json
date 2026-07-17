@@ -12,7 +12,8 @@
   "bugs": "https://github.com/mbe24/zaungast/issues",
   "workspaces": [
     "packages/libzaungast",
-    "packages/zaungast"
+    "packages/zaungast",
+    "packages/libzaungast-native"
   ],
   "scripts": {
     "build": "npm run build --workspace libzaungast && npm run build --workspace zaungast",

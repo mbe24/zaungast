@@ -31,7 +31,7 @@
     "directory": "packages/libzaungast"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && node -e \"require('fs').cpSync('src/schema/versions','dist/schema/versions',{recursive:true})\""
+    "build": "tsc -p tsconfig.json && node -e \"const fs=require('fs');fs.cpSync('src/schema/versions','dist/schema/versions',{recursive:true});fs.copyFileSync('src/schema.sql','dist/schema.sql')\""
   },
   "engines": {
     "node": ">=22.5.0"

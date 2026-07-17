@@ -8,6 +8,7 @@ import { htmlToText, isSystemMessage, mentionedMris } from '../src/util/text.js'
 import { makeHandle } from '../src/util/handles.js';
 import { makeExtractor } from '../src/util/topics.js';
 import { isBotMri } from '../src/ingest/store.js';
+import { resolveEngine } from '../src/ingest/native.js';
 import { discoverTeamsDbs } from '../src/format/index.js';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -193,6 +194,21 @@ console.log('\n=== discoverTeamsDbs: platform layouts (Windows + macOS) ===');
 
   fs.rmSync(macHome, { recursive: true, force: true });
   fs.rmSync(winHome, { recursive: true, force: true });
+}
+
+console.log('\n=== engine resolution (default js; explicit + env opt-in) ===');
+{
+  const saved = process.env.ZAUNGAST_ENGINE;
+  delete process.env.ZAUNGAST_ENGINE;
+  eq("default engine is 'js' (native is opt-in only)", resolveEngine(), 'js');
+  eq("explicit 'auto' is respected", resolveEngine('auto'), 'auto');
+  eq("explicit 'native' is respected", resolveEngine('native'), 'native');
+  process.env.ZAUNGAST_ENGINE = 'native';
+  eq('ZAUNGAST_ENGINE overrides the option', resolveEngine('js'), 'native');
+  process.env.ZAUNGAST_ENGINE = 'bogus';
+  eq('unknown ZAUNGAST_ENGINE is ignored → option', resolveEngine('auto'), 'auto');
+  if (saved === undefined) delete process.env.ZAUNGAST_ENGINE;
+  else process.env.ZAUNGAST_ENGINE = saved;
 }
 
 console.log(`\n==== ${pass} passed, ${fail} failed ====`);

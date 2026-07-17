@@ -5,7 +5,7 @@
 //! and mis-sample the frozen fingerprint), and object/array/map iteration preserves insertion order.
 //! Verified against the TS decoder by a per-record decoded-value differential.
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Ssv {
     Undefined,
     Null,

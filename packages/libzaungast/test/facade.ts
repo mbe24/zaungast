@@ -55,7 +55,9 @@ try {
     `${first?.handle} -> ${resolved.map((r) => r.id).join(',')}`,
   );
 
-  console.log('\n=== messages (search / inConversation / get / thread / stats / threadSummaries) ===');
+  console.log(
+    '\n=== messages (search / inConversation / get / thread / stats / threadSummaries) ===',
+  );
   const searched = store.messages.search({ query: 'lecture' });
   ok('messages.search returns ok', searched.ok === true, JSON.stringify(searched).slice(0, 120));
   if (searched.ok) {
@@ -76,10 +78,15 @@ try {
   ok('messages.inConversation returns ok', inConv.ok === true, JSON.stringify(inConv).slice(0, 80));
   let sampleMsgId = '';
   if (inConv.ok) {
-    ok('inConversation rows are Message', inConv.rows.every((r) => typeof r.convId === 'string'));
+    ok(
+      'inConversation rows are Message',
+      inConv.rows.every((r) => typeof r.convId === 'string'),
+    );
     ok(
       'inConversation booleanizes flags',
-      inConv.rows.every((r) => typeof r.isMine === 'boolean' && typeof r.hasAttachment === 'boolean'),
+      inConv.rows.every(
+        (r) => typeof r.isMine === 'boolean' && typeof r.hasAttachment === 'boolean',
+      ),
     );
     sampleMsgId = inConv.rows[inConv.rows.length - 1]?.id ?? '';
   }
@@ -94,7 +101,11 @@ try {
     ok('messages.get(convId,id) returns Message', one?.id === sampleMsgId, `${one?.id}`);
     ok('messages.get(convId,missing) is null', store.messages.get(convId, 'nope') === null);
     const thread = store.messages.thread(convId, one!.rootId);
-    ok('messages.thread returns Message[]', Array.isArray(thread) && thread.length > 0, `${thread.length}`);
+    ok(
+      'messages.thread returns Message[]',
+      Array.isArray(thread) && thread.length > 0,
+      `${thread.length}`,
+    );
   }
   const stats = store.messages.stats(convId);
   ok(
@@ -105,7 +116,8 @@ try {
   const summaries = store.messages.threadSummaries(convId, {});
   ok(
     'messages.threadSummaries → ThreadSummary[]',
-    Array.isArray(summaries) && summaries.every((s) => typeof s.rootId === 'string' && typeof s.count === 'number'),
+    Array.isArray(summaries) &&
+      summaries.every((s) => typeof s.rootId === 'string' && typeof s.count === 'number'),
     `${summaries.length}`,
   );
 
@@ -125,7 +137,11 @@ try {
     const cid = flat!.id;
     const full = store.messages.inConversation(cid, { limit: 100000 });
     const N = full.ok ? full.rows.length : 0;
-    ok(`§C precondition: a flat conversation with ≥4 messages`, full.ok && N >= 4, `${flat?.kind} N=${N}`);
+    ok(
+      `§C precondition: a flat conversation with ≥4 messages`,
+      full.ok && N >= 4,
+      `${flat?.kind} N=${N}`,
+    );
 
     if (full.ok && N >= 4) {
       const allIds = full.rows.map((r) => r.id); // oldest→newest
@@ -140,7 +156,10 @@ try {
         ok('(a) next page returns ok', p2.ok);
         if (p2.ok) {
           const s1 = new Set(p1.rows.map((r) => r.id));
-          ok('(a) no overlap between pages', p2.rows.every((r) => !s1.has(r.id)));
+          ok(
+            '(a) no overlap between pages',
+            p2.rows.every((r) => !s1.has(r.id)),
+          );
           const o = p1.rows[0]; // p1 is oldest→newest, so rows[0] is its oldest
           ok(
             '(a) next page is entirely older than page 1 (no gap/skip)',
@@ -187,7 +206,11 @@ try {
   console.log('\n=== people (find / nameFor) ===');
   const ppl = store.people.find();
   ok('people.find() returns rows', ppl.rows.length > 0, `${ppl.mode}/${ppl.rows.length}`);
-  ok('PeopleResult.total present', typeof ppl.total === 'number' && ppl.total >= ppl.rows.length, `${ppl.total}`);
+  ok(
+    'PeopleResult.total present',
+    typeof ppl.total === 'number' && ppl.total >= ppl.rows.length,
+    `${ppl.total}`,
+  );
   ok('Person.isBot is boolean', typeof ppl.rows[0]?.isBot === 'boolean');
   const someMri = ppl.rows[0]?.mri ?? '';
   ok('people.nameFor(mri) resolves', typeof store.people.nameFor(someMri) === 'string', someMri);
@@ -202,7 +225,11 @@ try {
 
   console.log('\n=== topics (envelope) ===');
   const topics = store.topics.compute({ window: '30d' });
-  ok('topics.compute ok:true or ok:false', typeof topics.ok === 'boolean', JSON.stringify(topics).slice(0, 120));
+  ok(
+    'topics.compute ok:true or ok:false',
+    typeof topics.ok === 'boolean',
+    JSON.stringify(topics).slice(0, 120),
+  );
   if (topics.ok) {
     ok(
       'topics envelope carries the renderer facts',
@@ -235,6 +262,41 @@ try {
     JSON.stringify(bad).slice(0, 100),
   );
 
+  console.log('\n=== engine switch (js / auto / native) ===');
+  // 'js' is the explicit TS path — must match the default open.
+  const jsStore = openStore(dir, { engine: 'js' });
+  ok(
+    "engine:'js' matches default counts",
+    jsStore.meta.counts.messages === store.meta.counts.messages &&
+      jsStore.meta.counts.conversations === store.meta.counts.conversations,
+    `${JSON.stringify(jsStore.meta.counts)} vs ${JSON.stringify(store.meta.counts)}`,
+  );
+  jsStore.close();
+  // 'auto' with no native addon installed → silent fall back to JS (same result, no throw).
+  const autoStore = openStore(dir, { engine: 'auto' });
+  ok(
+    "engine:'auto' falls back to JS and works",
+    autoStore.meta.schemaMatched === true &&
+      autoStore.meta.counts.messages === store.meta.counts.messages,
+    JSON.stringify(autoStore.meta.counts),
+  );
+  autoStore.close();
+  // 'native': if the addon is installed it must produce the same store; if not, it must throw a
+  // clear, actionable error naming the missing package (never a silent fallback). Robust to both so
+  // the test passes with or without a locally-built .node.
+  let nativeOk = false;
+  let nativeMsg = '';
+  try {
+    const ns = openStore(dir, { engine: 'native' });
+    nativeOk = ns.meta.counts.messages === store.meta.counts.messages;
+    nativeMsg = `native addon present; counts ${JSON.stringify(ns.meta.counts)}`;
+    ns.close();
+  } catch (e) {
+    nativeMsg = (e as Error).message;
+    nativeOk = /libzaungast-native/.test(nativeMsg);
+  }
+  ok("engine:'native' works if installed, else errors clearly", nativeOk, nativeMsg);
+
   store.close();
 
   console.log('\n=== openLiveStore (static dir) — pinned current() reading ===');
@@ -244,11 +306,12 @@ try {
   ok('current().mayBeStale is boolean', typeof reading.mayBeStale === 'boolean');
   ok('current().conversations.list() non-empty', reading.conversations.list().length > 0);
   const meta = live.refresh({ full: true });
-  ok('refresh({full}) returns meta', meta.schemaMatched === true, JSON.stringify(meta).slice(0, 80));
   ok(
-    'current() after refresh still non-empty',
-    live.current().conversations.list().length > 0,
+    'refresh({full}) returns meta',
+    meta.schemaMatched === true,
+    JSON.stringify(meta).slice(0, 80),
   );
+  ok('current() after refresh still non-empty', live.current().conversations.list().length > 0);
   const snap = live.reloadSnapshot();
   ok('reloadSnapshot() returns a Snapshot', snap.buckets.size > 0, `${snap.buckets.size}`);
   live.close();

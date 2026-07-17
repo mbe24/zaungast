@@ -36,6 +36,15 @@ export function loadBundledMappings(): Mapping[] {
   return bundledMappings;
 }
 
+// Raw JSON text of every bundled mapping — handed verbatim to the native engine, which does its own
+// fingerprint + selectMapping (seam A: the expensive read lives in Rust, so TS can't pre-select).
+export function loadBundledMappingTexts(): string[] {
+  return fs
+    .readdirSync(VERSIONS_DIR)
+    .filter((f) => f.endsWith('.json'))
+    .map((f) => fs.readFileSync(path.join(VERSIONS_DIR, f), 'utf8'));
+}
+
 // Pick a mapping for the given fingerprint: exact hash match, else store-presence match. Defaults to
 // the mappings bundled with the package (so a consumer never has to load mapping JSON themselves);
 // pass `{ mappings }` to override with your own set.

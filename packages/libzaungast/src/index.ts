@@ -14,6 +14,7 @@
 
 // Entry points + the lifetime-owning facade.
 export { openStore, openLiveStore, tryOpen, inspect } from './store-api.js';
+export type { Engine } from './ingest/native.js';
 export type {
   TeamsStore,
   LiveTeamsStore,

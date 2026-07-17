@@ -16,8 +16,10 @@ EXTRA=("${@:4}") # any trailing args passed straight to the bin (e.g. the mappin
 mkdir -p /build/src
 cp /work/packages/libzaungast-native/Cargo.toml /build/
 cp -r /work/packages/libzaungast-native/src/. /build/src/
+# NOTE: no schema copy — the store bin reads the single-source schema.sql straight from the
+# read-only /work mount (packages/libzaungast/src/schema.sql), passed as a bin arg by run.mjs.
 cd /build
-cargo build --release >&2   # builds all [[bin]] targets
+cargo build --release --features harness >&2   # `harness` feature enables the diff [[bin]] targets
 if [ "$MODE" = "whole" ]; then
   "./target/release/$BIN" "$DATA" "${EXTRA[@]}" 2>/dev/null
 else

@@ -8,6 +8,7 @@ import {
 } from '../format/index.js';
 import type { SnapshotRecord, Snapshot } from '../format/types.js';
 import { ChatStore, type StoreMeta } from './store.js';
+import { resolveEngine, nativeIngest, type Engine } from './native.js';
 import { htmlToText, isSystemMessage, mentionedMris, hasAttachment } from '../util/text.js';
 
 export function convKind(id = ''): string {
@@ -35,7 +36,6 @@ export interface Ingested {
   state: IngestState | null;
   lossy: boolean;
 }
-
 
 // Compact `properties.emotions` to the minimum the renderer needs and a stable JSON string:
 // per emoji key, the reactor MRIs with their reaction times. Order-normalized (key asc, then
@@ -343,9 +343,18 @@ function extractForFullIngest(dir: string, opts: { seqCap?: number }): FullExtra
   const { mapping } = selectMapping(fp);
   if (!mapping)
     return {
-      fp, mapping: null, maxSeq, lossy, selfMri: null,
-      msgTargets: new Set(), convTargets: new Set(),
-      msgRows: [], convRows: [], profileRows: [], eventRows: [], callRows: [],
+      fp,
+      mapping: null,
+      maxSeq,
+      lossy,
+      selfMri: null,
+      msgTargets: new Set(),
+      convTargets: new Set(),
+      msgRows: [],
+      convRows: [],
+      profileRows: [],
+      eventRows: [],
+      callRows: [],
     };
   const msgTargets: Set<string> = entityTargets(snap, mapping, 'message');
   const convTargets: Set<string> = entityTargets(snap, mapping, 'conversation');
@@ -356,14 +365,34 @@ function extractForFullIngest(dir: string, opts: { seqCap?: number }): FullExtra
   const callRows = buildCallRows(snap, mapping);
   const selfMri = voteSelfMri(msgRows);
   return {
-    fp, mapping, maxSeq, lossy, selfMri, msgTargets, convTargets,
-    msgRows, convRows, profileRows, eventRows, callRows,
+    fp,
+    mapping,
+    maxSeq,
+    lossy,
+    selfMri,
+    msgTargets,
+    convTargets,
+    msgRows,
+    convRows,
+    profileRows,
+    eventRows,
+    callRows,
   };
 }
 
 // FULL rebuild from a fresh snapshot dir. `seqCap` (tests only) builds a PARTIAL store as of
 // an earlier sequence, so a following applyIncremental can be proven to reach a full rebuild.
-export function ingest(dir: string, opts: { seqCap?: number } = {}): Ingested {
+export function ingest(dir: string, opts: { seqCap?: number; engine?: Engine } = {}): Ingested {
+  // Engine switch: the native engine does the whole FULL ingest in Rust (read → decode → write the
+  // ChatStore .db) and we open it read-only; JS is the default and the `auto` fallback. `seqCap`
+  // (partial builds for the incremental tests) forces JS — native has no incremental path yet.
+  if (opts.seqCap === undefined) {
+    const engine = resolveEngine(opts.engine);
+    if (engine === 'native' || engine === 'auto') {
+      const native = nativeIngest(dir, engine);
+      if (native) return native;
+    }
+  }
   // Extract every entity's rows first; the helper's frame drops the Snapshot before we build the
   // store below, so the two memory peaks never coexist (perf 1b).
   const ex = extractForFullIngest(dir, opts);
@@ -492,7 +521,9 @@ export function applyIncremental(
     // conversations are cheap → fully reconcile each refresh: re-apply live meta, drop orphans.
     const convRows = extractEntity(snap, state.mapping, 'conversation', state.convTargets).records;
     const liveConvIds = new Set<string>(convRows.map((c: any) => c.id).filter(Boolean));
-    store.db.exec('update conversations set topic=null, team_id=null, thread_type=null, meta_last_ts=0');
+    store.db.exec(
+      'update conversations set topic=null, team_id=null, thread_type=null, meta_last_ts=0',
+    );
     applyConversationMeta(store, convRows);
     store.db.exec('create temp table if not exists _liveconv(id text primary key)');
     store.db.exec('delete from _liveconv');
