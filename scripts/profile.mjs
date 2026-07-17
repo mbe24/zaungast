@@ -18,16 +18,19 @@ import inspector from 'node:inspector';
 import { spawnSync } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 
-import { ingest, applyIncremental } from 'libzaungast/ingest/ingest.js';
+// Internals (ingest/Session — not on the public exports map post-B3) are reached via relative dist
+// paths: the same "in-repo tooling reaches its own internals directly" pattern the tests use. The
+// public data + format API comes through the narrow package entry points.
+import { ingest, applyIncremental } from '../packages/libzaungast/dist/ingest/ingest.js';
+import { Session } from '../packages/libzaungast/dist/session.js';
 import {
-  loadEntries,
+  loadSnapshot,
   fingerprint,
   selectMapping,
-  loadMapping,
   extractEntity,
   entityTargets,
-} from 'libzaungast/format/index.js';
-import { Session } from 'libzaungast/session.js';
+} from 'libzaungast/format';
+import { openStore } from 'libzaungast';
 import {
   readMessages,
   search,
@@ -153,31 +156,29 @@ if (gc) {
 }
 
 // ---- 2. format-layer phase breakdown (the API-reshape target) ----
-const VDIR = path.join('packages', 'libzaungast', 'dist', 'schema', 'versions');
-const mappings = fs
-  .readdirSync(VDIR)
-  .filter((f) => f.endsWith('.json'))
-  .map((f) => loadMapping(path.join(VDIR, f)));
-const { live } = loadEntries(DIR);
-const fp0 = fingerprint(live);
-const { mapping } = selectMapping(mappings, fp0);
-results.meta.liveEntries = live.length;
+// Post-refactor: loadSnapshot replaces loadEntries (it decodes AND groups by store once);
+// fingerprint/entityTargets/extractEntity now take the Snapshot; selectMapping defaults to the
+// bundled mappings; extractEntity returns an EntityExtract envelope (the bench times the call).
+const snap0 = loadSnapshot(DIR);
+const fp0 = fingerprint(snap0);
+const { mapping } = selectMapping(fp0);
+results.meta.liveEntries = snap0.uniqueCount;
 results.meta.throughput = {
-  entriesPerSec: Math.round(live.length / (results.fullParse.warm.median / 1000)),
+  entriesPerSec: Math.round(snap0.uniqueCount / (results.fullParse.warm.median / 1000)),
   mbPerSec: +(parsedBytes / 1048576 / (results.fullParse.warm.median / 1000)).toFixed(1),
 };
 // precompute targets exactly as ingest does for message/conversation (passed in → no re-scan);
 // event/call/profile are extracted WITHOUT precomputed targets in production (applyEvents/…), so
-// bench them the same way. entityTargets is timed on its own to surface the schemaTables scan cost.
-const msgTargets = entityTargets(live, mapping, 'message');
-const convTargets = entityTargets(live, mapping, 'conversation');
-results.formatPhases.push(bench('loadEntries (read+decode)', () => loadEntries(DIR)));
-results.formatPhases.push(bench('fingerprint', () => fingerprint(live)));
-results.formatPhases.push(bench('entityTargets (schemaTables scan)', () => entityTargets(live, mapping, 'message')));
-results.formatPhases.push(bench('extractEntity(message) [targets passed]', () => extractEntity(live, mapping, 'message', msgTargets)));
-results.formatPhases.push(bench('extractEntity(conversation) [targets passed]', () => extractEntity(live, mapping, 'conversation', convTargets)));
+// bench them the same way. entityTargets is now an O(#stores) catalog lookup (post-Snapshot), not a scan.
+const msgTargets = entityTargets(snap0, mapping, 'message');
+const convTargets = entityTargets(snap0, mapping, 'conversation');
+results.formatPhases.push(bench('loadSnapshot (read+decode+group)', () => loadSnapshot(DIR)));
+results.formatPhases.push(bench('fingerprint', () => fingerprint(snap0)));
+results.formatPhases.push(bench('entityTargets (catalog lookup)', () => entityTargets(snap0, mapping, 'message')));
+results.formatPhases.push(bench('extractEntity(message) [targets passed]', () => extractEntity(snap0, mapping, 'message', msgTargets)));
+results.formatPhases.push(bench('extractEntity(conversation) [targets passed]', () => extractEntity(snap0, mapping, 'conversation', convTargets)));
 for (const ent of ['event', 'call', 'profile']) {
-  results.formatPhases.push(bench(`extractEntity(${ent}) [targets recomputed, as prod]`, () => extractEntity(live, mapping, ent)));
+  results.formatPhases.push(bench(`extractEntity(${ent}) [targets recomputed, as prod]`, () => extractEntity(snap0, mapping, ent)));
 }
 
 // ---- 3. incremental refresh ----
@@ -196,7 +197,9 @@ for (const mode of ['copy-reuse', 'reparse']) {
 // (b) a REAL changed delta (reparse path): build a store as-of an earlier sequence, then apply the
 //     remaining real records. Single-shot (applyIncremental mutates the store). No live data touched.
 {
-  const seqs = live.map((e) => e.seq).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const seqs = [...snap0.buckets.values()]
+    .flatMap((b) => b.records.map((r) => r.seq))
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   const cap = seqs[Math.floor(seqs.length * 0.99)]; // leaves the top ~1% of records to apply
   const part = ingest(DIR, { seqCap: cap });
   const before = part.store.counts().messages;
@@ -208,24 +211,24 @@ for (const mode of ['copy-reuse', 'reparse']) {
   results.incremental.push({ mode: 'reparse', kind: 'changed', appliedMsgs, changedMs, iters: 1 });
 }
 
-// ---- 4. tool calls (on the in-memory store) ----
+// ---- 4. tool calls (through the public facade — tools now take (view, args); openStore's static
+//         TeamsStore is a valid view). Pick the busiest channel + a flat conv via the facade. ----
 {
-  const { store, meta } = ingest(DIR);
-  const handle = (kind) =>
-    store.db
-      .prepare(`select handle from conversations where kind=? and msg_count>0 order by msg_count desc limit 1`)
-      .get(kind)?.handle;
-  const flat = handle('1:1') ?? handle('group');
-  const chan = handle('channel');
+  const store = openStore(DIR);
+  const convs = store.conversations.list({ n: 500 });
+  const busiest = (kind) =>
+    convs.filter((c) => c.kind === kind).sort((a, b) => b.msgCount - a.msgCount)[0]?.handle;
+  const flat = busiest('1:1') ?? busiest('group');
+  const chan = busiest('channel');
   const T = 100;
-  if (flat) results.tools.push(bench('read_messages (flat)', () => readMessages(store, meta, false, { conversation: flat, limit: 40 }), T));
-  if (chan) results.tools.push(bench('read_messages (channel digest)', () => readMessages(store, meta, false, { conversation: chan, limit: 40 }), T));
-  results.tools.push(bench('search "the"', () => search(store, meta, false, { query: 'the', limit: 20 }), T));
-  results.tools.push(bench('top_topics 30d', () => topTopics(store, meta, false, { window: '30d' }), 50));
-  results.tools.push(bench('list_conversations', () => listConversations(store, meta, false, {}), T));
-  results.tools.push(bench('find_person (roster)', () => findPerson(store, meta, false, {}), T));
-  results.tools.push(bench('list_events', () => listEvents(store, meta, false, { since: '2020-01-01', until: '2030-01-01', limit: 30 }), T));
-  results.tools.push(bench('list_calls', () => listCalls(store, meta, false, { limit: 30 }), T));
+  if (flat) results.tools.push(bench('read_messages (flat)', () => readMessages(store, { conversation: flat, limit: 40 }), T));
+  if (chan) results.tools.push(bench('read_messages (channel digest)', () => readMessages(store, { conversation: chan, limit: 40 }), T));
+  results.tools.push(bench('search "the"', () => search(store, { query: 'the', limit: 20 }), T));
+  results.tools.push(bench('top_topics 30d', () => topTopics(store, { window: '30d' }), 50));
+  results.tools.push(bench('list_conversations', () => listConversations(store, {}), T));
+  results.tools.push(bench('find_person (roster)', () => findPerson(store, {}), T));
+  results.tools.push(bench('list_events', () => listEvents(store, { since: '2020-01-01', until: '2030-01-01', limit: 30 }), T));
+  results.tools.push(bench('list_calls', () => listCalls(store, { limit: 30 }), T));
   store.close();
 }
 
