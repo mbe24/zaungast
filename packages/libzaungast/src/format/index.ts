@@ -31,4 +31,7 @@ export { discoverTeamsDbs } from './discover.js';
 // Structural field-sampler for schema recovery — reads field NAMES only, so the raw value decoder
 // stays internal (see sample.ts). This is what describe_schema-style consumers use.
 export { sampleStoreFields, type StoreFieldSample } from './sample.js';
+// Propose-only schema recovery: the candidate-matching/scoring/assembly ALGORITHM over a sampled
+// snapshot (data only; the MCP describe_schema tool renders it). See propose.ts (Q1).
+export { proposeSchema, type SchemaProposal, type ProposedStore } from './propose.js';
 export type * from './types.js';
