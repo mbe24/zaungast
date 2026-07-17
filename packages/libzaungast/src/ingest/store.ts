@@ -40,8 +40,11 @@ export class ChatStore {
     this.db.exec(/* sql */ `
       create table conversations(
         id text primary key, handle text unique, kind text,
-        -- meta, written from conversation records:
-        topic text, team_id text, meta_last_ts integer default 0,
+        -- meta, written from conversation records. thread_type = Teams' OWN conversation-type
+        -- string (chat/channel/meeting/space/engagecommunity/…), faithful and distinct from the
+        -- id-derived "kind"; persisted so future team/community consumers can identify roots
+        -- (space) and communities (engagecommunity) by Teams' value, not id-pattern guessing.
+        topic text, team_id text, thread_type text, meta_last_ts integer default 0,
         -- derived, recomputed from messages:
         msg_count integer default 0, participant_names text, participant_count integer default 0,
         activity_ts integer default 0, last_ts integer default 0
@@ -175,12 +178,13 @@ export class ChatStore {
     kind: string;
     topic: string | null;
     teamId: string | null;
+    threadType: string | null;
     metaLastTs: number;
   }) {
     this.q(
-      `insert into conversations(id,handle,kind,topic,team_id,meta_last_ts) values(?,?,?,?,?,?)
-      on conflict(id) do update set kind=excluded.kind, topic=excluded.topic, team_id=excluded.team_id, meta_last_ts=excluded.meta_last_ts`,
-    ).run(c.id, this.handleFor('c', c.id), c.kind, c.topic, c.teamId, c.metaLastTs);
+      `insert into conversations(id,handle,kind,topic,team_id,thread_type,meta_last_ts) values(?,?,?,?,?,?,?)
+      on conflict(id) do update set kind=excluded.kind, topic=excluded.topic, team_id=excluded.team_id, thread_type=excluded.thread_type, meta_last_ts=excluded.meta_last_ts`,
+    ).run(c.id, this.handleFor('c', c.id), c.kind, c.topic, c.teamId, c.threadType, c.metaLastTs);
   }
 
   insertMessage(m: {

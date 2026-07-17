@@ -271,6 +271,9 @@ function applyConversationMeta(store: ChatStore, convRows: any[]) {
       kind: convKind(c.id),
       topic: c.topic || null,
       teamId: c.teamId || null,
+      // Teams' own conversation-type string (threadProperties.threadType), persisted verbatim.
+      // `kind` stays purely id-derived — this is the faithful raw value alongside it.
+      threadType: c.threadType || null,
       metaLastTs: Number(c.lastMessageTimeUtc) || 0,
     });
   }
@@ -489,7 +492,7 @@ export function applyIncremental(
     // conversations are cheap → fully reconcile each refresh: re-apply live meta, drop orphans.
     const convRows = extractEntity(snap, state.mapping, 'conversation', state.convTargets).records;
     const liveConvIds = new Set<string>(convRows.map((c: any) => c.id).filter(Boolean));
-    store.db.exec('update conversations set topic=null, team_id=null, meta_last_ts=0');
+    store.db.exec('update conversations set topic=null, team_id=null, thread_type=null, meta_last_ts=0');
     applyConversationMeta(store, convRows);
     store.db.exec('create temp table if not exists _liveconv(id text primary key)');
     store.db.exec('delete from _liveconv');
