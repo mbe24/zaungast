@@ -1,0 +1,19 @@
+[package]
+name = "libzaungast-native"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Native (Rust) accelerator for libzaungast: leveldb read + decode + SQLite write. WIP."
+
+[lib]
+name = "libzaungast_native"
+# rlib for now (cargo test + the diff bins). cdylib for the napi module lands in P5.
+crate-type = ["rlib"]
+
+[dependencies]
+# (none — P1 raw readers are pure std. rusqlite / serde_json land with P3/the store writer.)
+
+# The differential-harness binary: dump a per-file digest to compare against the TS reader.
+[[bin]]
+name = "difftable"
+path = "src/bin/difftable.rs"
