@@ -1,3 +1,4 @@
+import type { RecordingLink } from 'libzaungast';
 import type { ListCallsArgs } from '../schemas.js';
 import { listCallsShape } from '../schemas.js';
 import type { QueryTool } from './types.js';
@@ -17,15 +18,8 @@ function humanizeDuration(ms: number): string {
 // The recording/transcript pointer resolved into a `read_messages`-ready pivot: the announcement
 // message's conversation handle + id. Skips gracefully (returns '') if unresolvable — the
 // conversation may not be cached, or the JSON may be malformed.
-function renderRecordingPivot(view: View, recordingLinkJson: string | null | undefined): string {
-  if (!recordingLinkJson) return '';
-  let link: { conversationId?: string; linkedMessageId?: string };
-  try {
-    link = JSON.parse(recordingLinkJson);
-  } catch {
-    return '';
-  }
-  if (!link.conversationId || !link.linkedMessageId) return '';
+function renderRecordingPivot(view: View, link: RecordingLink | null): string {
+  if (!link) return ''; // library parses recording_link → RecordingLink | null (null if absent/incomplete)
   const conv = view.conversations.get(link.conversationId);
   if (!conv) return '';
   return ` recorded → ${conv.handle} m:${link.linkedMessageId}`;

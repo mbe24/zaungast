@@ -621,6 +621,23 @@ export function queryConversations(
 }
 
 // ---------- calls ----------
+// A call recording's pivot to the cached chat message that announced it (for a read_messages jump).
+// Parsed from the stored JSON; null when absent or incomplete.
+export interface RecordingLink {
+  conversationId: string;
+  linkedMessageId: string;
+}
+export function parseRecordingLink(json: string | null | undefined): RecordingLink | null {
+  if (!json) return null;
+  try {
+    const l = JSON.parse(json);
+    return l && l.conversationId && l.linkedMessageId
+      ? { conversationId: l.conversationId, linkedMessageId: l.linkedMessageId }
+      : null;
+  } catch {
+    return null;
+  }
+}
 export interface Call {
   id: string; // callId — stable identity for the row
   startTs: number;
@@ -632,7 +649,7 @@ export interface Call {
   hasVoicemail: boolean;
   spamLevel: string | null;
   isCurrentUserPart: boolean;
-  recordingLink: string | null;
+  recordingLink: RecordingLink | null;
   label: string; // resolved counterpart name / group topic+handle
 }
 
@@ -704,12 +721,28 @@ export function queryCalls(
     hasVoicemail: !!r.has_voicemail,
     spamLevel: r.spam_level,
     isCurrentUserPart: !!r.is_current_user_part,
-    recordingLink: r.recording_link,
+    recordingLink: parseRecordingLink(r.recording_link),
     label,
   }));
 }
 
 // ---------- events ----------
+// One attendee of a calendar event (name / email / response status), parsed from the stored JSON.
+export interface Attendee {
+  name: string;
+  email: string;
+  response: string; // e.g. accepted / declined / tentative / none
+}
+export function parseAttendees(json: string | null | undefined): Attendee[] {
+  if (!json) return [];
+  try {
+    const raw = JSON.parse(json);
+    if (!Array.isArray(raw)) return [];
+    return raw.map((a: any) => ({ name: a.n ?? '', email: a.e ?? '', response: a.r ?? '' }));
+  } catch {
+    return [];
+  }
+}
 // One calendar event, camelCase. The 0/1 SQLite flags are booleanized at this boundary (via
 // toCalendarEvent), matching Message/Call — a consumer can safely write `if (ev.isCancelled)`.
 export interface CalendarEvent {
@@ -726,7 +759,7 @@ export interface CalendarEvent {
   isCancelled: boolean;
   isConfidential: boolean;
   hasAttachment: boolean;
-  attendees: string | null;
+  attendees: Attendee[];
   bodyHtml: string | null;
 }
 
@@ -746,7 +779,7 @@ function toCalendarEvent(r: any): CalendarEvent {
     isCancelled: !!r.is_cancelled,
     isConfidential: !!r.is_confidential,
     hasAttachment: !!r.has_attach,
-    attendees: r.attendees ?? null,
+    attendees: parseAttendees(r.attendees),
     bodyHtml: r.body_html ?? null,
   };
 }

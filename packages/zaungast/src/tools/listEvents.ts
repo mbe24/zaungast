@@ -1,5 +1,5 @@
 import { htmlToText } from 'libzaungast';
-import type { CalendarEvent } from 'libzaungast';
+import type { CalendarEvent, Attendee } from 'libzaungast';
 import type { ListEventsArgs } from '../schemas.js';
 import { listEventsShape } from '../schemas.js';
 import type { QueryTool } from './types.js';
@@ -18,25 +18,14 @@ function eventTimeRange(startTs: number, endTs: number, isAllDay: boolean): stri
   return endTs > startTs ? `${startLabel}–${hm(endTs)}` : startLabel;
 }
 
-interface AttendeeRow {
-  n: string;
-  e: string;
-  r: string;
-}
 // Cap attendees exactly like reactions: total + accepted tally, plus ≤3 names + `+K` overflow —
-// large meetings carry 100+ attendees inline and must never be dumped raw.
-function renderAttendees(attendeesJson: string | null | undefined): string {
-  if (!attendeesJson) return 'no attendees';
-  let atts: AttendeeRow[];
-  try {
-    atts = JSON.parse(attendeesJson);
-  } catch {
-    return 'no attendees';
-  }
-  if (!Array.isArray(atts) || atts.length === 0) return 'no attendees';
+// large meetings carry 100+ attendees inline and must never be dumped raw. The library already
+// parsed CalendarEvent.attendees into typed Attendee[].
+function renderAttendees(atts: Attendee[]): string {
+  if (atts.length === 0) return 'no attendees';
   const total = atts.length;
-  const accepted = atts.filter((a) => /^accepted$/i.test(a.r)).length;
-  const names = atts.map((a) => a.n).filter(Boolean);
+  const accepted = atts.filter((a) => /^accepted$/i.test(a.response)).length;
+  const names = atts.map((a) => a.name).filter(Boolean);
   const shown = names.slice(0, 3);
   const extra = total - shown.length;
   const namesPart = shown.length ? `: ${shown.join(', ')}${extra > 0 ? ` +${extra}` : ''}` : '';
