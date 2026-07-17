@@ -26,7 +26,13 @@
 // imports). Only loadSnapshot (the grouped Snapshot) is public.
 export { loadSnapshot } from './chromium/indexeddb.js';
 export { fingerprint } from './fingerprint.js';
-export { loadMapping, selectMapping, entityTargets, extractEntity, extractRecords } from './resolver.js';
+export {
+  loadMapping,
+  selectMapping,
+  entityTargets,
+  extractEntity,
+  extractRecords,
+} from './resolver.js';
 export { discoverTeamsDbs } from './discover.js';
 // Structural field-sampler for schema recovery — reads field NAMES only, so the raw value decoder
 // stays internal (see sample.ts). This is what describe_schema-style consumers use.

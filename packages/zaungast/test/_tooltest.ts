@@ -12,7 +12,10 @@ const show = (title: string, out: string) =>
   console.log(`\n########## ${title} ##########\n${out}`);
 
 show('list_conversations {n:5}', listConversations(store, { n: 5 }));
-show('list_conversations {kind:"channel", n:4}', listConversations(store, { kind: 'channel', n: 4 }));
+show(
+  'list_conversations {kind:"channel", n:4}',
+  listConversations(store, { kind: 'channel', n: 4 }),
+);
 
 // pick the most-recent conversation to read (facade lists newest-first).
 const top = store.conversations.list({ n: 1 })[0];

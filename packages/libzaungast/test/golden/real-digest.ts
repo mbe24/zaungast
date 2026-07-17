@@ -14,12 +14,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  loadSnapshot,
-  fingerprint,
-  selectMapping,
-  loadMapping,
-} from '../../src/format/index.js';
+import { loadSnapshot, fingerprint, selectMapping, loadMapping } from '../../src/format/index.js';
 import { extractEntity } from '../../src/format/index.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -40,7 +35,8 @@ function autofind(root: string): string | undefined {
     } catch {
       continue;
     }
-    if (/\.leveldb$/i.test(d) && ents.some((e) => e.isFile() && e.name === 'CURRENT')) found.push(d);
+    if (/\.leveldb$/i.test(d) && ents.some((e) => e.isFile() && e.name === 'CURRENT'))
+      found.push(d);
     for (const e of ents) if (e.isDirectory()) stack.push(path.join(d, e.name));
   }
   found.sort(); // deterministic pick if several snapshots are present
@@ -119,9 +115,17 @@ if (process.env.UPDATE_GOLDEN) {
     ? (JSON.parse(fs.readFileSync(GOLDEN, 'utf8')) as typeof digest)
     : null;
   if (!have) {
-    ok('golden exists', false, 'run once with UPDATE_GOLDEN=1 on the machine holding the real data');
+    ok(
+      'golden exists',
+      false,
+      'run once with UPDATE_GOLDEN=1 on the machine holding the real data',
+    );
   } else {
-    ok('fingerprint matches', have.fingerprint === digest.fingerprint, `${have.fingerprint} vs ${digest.fingerprint}`);
+    ok(
+      'fingerprint matches',
+      have.fingerprint === digest.fingerprint,
+      `${have.fingerprint} vs ${digest.fingerprint}`,
+    );
     const names = new Set([...Object.keys(have.entities), ...Object.keys(digest.entities)]);
     for (const n of [...names].sort()) {
       const h = have.entities[n],
@@ -129,7 +133,9 @@ if (process.env.UPDATE_GOLDEN) {
       ok(
         `entity ${n} digest matches`,
         !!h && !!g && h.count === g.count && h.sha256 === g.sha256,
-        h && g ? `count ${h.count}->${g.count}, sha ${h.sha256.slice(0, 8)}->${g.sha256.slice(0, 8)}` : 'entity missing on one side',
+        h && g
+          ? `count ${h.count}->${g.count}, sha ${h.sha256.slice(0, 8)}->${g.sha256.slice(0, 8)}`
+          : 'entity missing on one side',
       );
     }
   }

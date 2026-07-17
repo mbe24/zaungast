@@ -49,7 +49,8 @@ export function buildServer(live: LiveTeamsStore): McpServer {
     server.registerTool(
       tool.name,
       { title: tool.title, description: tool.description, inputSchema: tool.inputSchema },
-      async (args: any) => (tool.kind === 'query' ? runQuery(tool.run, args) : runRaw(tool.run, args)),
+      async (args: any) =>
+        tool.kind === 'query' ? runQuery(tool.run, args) : runRaw(tool.run, args),
     );
   }
 

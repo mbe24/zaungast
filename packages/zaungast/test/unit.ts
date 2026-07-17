@@ -14,7 +14,11 @@ const ok = (n: string, c: boolean, d = '') => {
   }
 };
 const eq = (n: string, a: unknown, b: unknown) =>
-  ok(n, JSON.stringify(a) === JSON.stringify(b), `got ${JSON.stringify(a)} want ${JSON.stringify(b)}`);
+  ok(
+    n,
+    JSON.stringify(a) === JSON.stringify(b),
+    `got ${JSON.stringify(a)} want ${JSON.stringify(b)}`,
+  );
 
 console.log('=== parseTime future/past relatives ===');
 {

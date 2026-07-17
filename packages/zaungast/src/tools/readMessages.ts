@@ -1,11 +1,6 @@
 import { reactionGlyph } from '../util/emoji.js';
 import { byCodeUnit } from '../util/sort.js';
-import type {
-  Message,
-  ReactionGroup,
-  Conversation,
-  ThreadSummary,
-} from 'libzaungast';
+import type { Message, ReactionGroup, Conversation, ThreadSummary } from 'libzaungast';
 import type { ReadMessagesArgs } from '../schemas.js';
 import { readMessagesShape } from '../schemas.js';
 import type { QueryTool } from './types.js';
@@ -113,13 +108,7 @@ function whoLabel(r: Message, ownerFallback: string | null): string {
 // One rendered message at `indent`: `<indent><ts> <who>> <content><marks><suffix>`, plus an
 // indented reaction line beneath it when reacted. `who` is precomputed (name / "<name> (you)" /
 // "↳" burst mark); `suffix` (e.g. a thread tag) rides the text line, before any reaction line.
-function msgText(
-  r: Message,
-  who: string,
-  indent: string,
-  rx?: ReactionCtx,
-  suffix = '',
-): string {
+function msgText(r: Message, who: string, indent: string, rx?: ReactionCtx, suffix = ''): string {
   const marks = (r.hasAttachment ? ' [attachment]' : '') + (r.mentionsMe ? ' [@me]' : '');
   const line = `${indent}${fmtTs(r.ts)} ${who}> ${clip(r.content, 280)}${marks}${suffix}`;
   const rxLine = rx ? renderReactions(r.reactions, rx.view, rx.selfMri, rx.full) : '';
@@ -176,10 +165,7 @@ function renderThread(
 }
 
 // Split a thread's ts-ordered rows into { root, replies } (root = the id===root_id message).
-function splitThread(
-  rows: Message[],
-  rootId: string,
-): { root: Message; replies: Message[] } {
+function splitThread(rows: Message[], rootId: string): { root: Message; replies: Message[] } {
   const root = rows.find((r) => String(r.id) === rootId) ?? rows[0];
   return { root, replies: rows.filter((r) => r !== root) };
 }
@@ -292,8 +278,7 @@ function renderThreadView(
   hitId?: string,
 ): string {
   const rows = view.messages.thread(convId, rootId);
-  if (!rows.length)
-    return `${envelope(view)}\nthread m:${rootId} not found in this conversation`;
+  if (!rows.length) return `${envelope(view)}\nthread m:${rootId} not found in this conversation`;
   const { root, replies } = splitThread(rows, rootId);
   const rootMissing = String(root.id) !== rootId;
   const total = rows.length;

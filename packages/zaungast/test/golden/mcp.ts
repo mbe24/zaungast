@@ -45,15 +45,8 @@ class FrozenDate extends RealDate {
 (globalThis as unknown as { Date: typeof Date }).Date = FrozenDate as unknown as typeof Date;
 
 const { openStore } = await import('libzaungast');
-const {
-  listConversations,
-  readMessages,
-  search,
-  topTopics,
-  findPerson,
-  listEvents,
-  listCalls,
-} = await import('zaungast/tools.js');
+const { listConversations, readMessages, search, topTopics, findPerson, listEvents, listCalls } =
+  await import('zaungast/tools.js');
 const { generateFixtureWithTables } = await import('../../../libzaungast/test/fixture/generate.js');
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -72,7 +65,11 @@ const ok = (n: string, c: boolean, d = '') => {
 };
 
 // Startup determinism guard: the timezone MUST be UTC or the golden is machine-specific.
-ok('timezone is UTC (getTimezoneOffset === 0)', new Date(0).getTimezoneOffset() === 0, 'set TZ=UTC');
+ok(
+  'timezone is UTC (getTimezoneOffset === 0)',
+  new Date(0).getTimezoneOffset() === 0,
+  'set TZ=UTC',
+);
 
 // Wide absolute bounds (mirrors scripts/profile.mjs) so time-windowed tools are now-independent.
 const SINCE = '2020-01-01';
@@ -97,7 +94,10 @@ function render(dir: string): string {
   const add = (label: string, out: string) => parts.push(`########## ${label} ##########\n${out}`);
 
   add('list_conversations {n:5}', listConversations(store, { n: 5 }));
-  add('list_conversations {kind:"channel", n:4}', listConversations(store, { kind: 'channel', n: 4 }));
+  add(
+    'list_conversations {kind:"channel", n:4}',
+    listConversations(store, { kind: 'channel', n: 4 }),
+  );
   if (direct)
     add(
       `read_messages {conversation:"${direct.handle}", limit:6}`,
@@ -120,10 +120,19 @@ function render(dir: string): string {
   }
   add('search {query:"the", limit:10}', search(store, { query: 'the', limit: 10 }));
   add('search {mentions_me:true, limit:6}', search(store, { mentions_me: true, limit: 6 }));
-  add('top_topics {since,until (all), n:6}', topTopics(store, { since: SINCE, until: UNTIL, n: 6 }));
+  add(
+    'top_topics {since,until (all), n:6}',
+    topTopics(store, { since: SINCE, until: UNTIL, n: 6 }),
+  );
   add('find_person {} (roster)', findPerson(store, {}));
-  add('list_events {since,until (all)}', listEvents(store, { since: SINCE, until: UNTIL, limit: 30 }));
-  add('list_calls {since,until (all)}', listCalls(store, { since: SINCE, until: UNTIL, limit: 30 }));
+  add(
+    'list_events {since,until (all)}',
+    listEvents(store, { since: SINCE, until: UNTIL, limit: 30 }),
+  );
+  add(
+    'list_calls {since,until (all)}',
+    listCalls(store, { since: SINCE, until: UNTIL, limit: 30 }),
+  );
 
   store.close();
   return parts.join('\n\n') + '\n';

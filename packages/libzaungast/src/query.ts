@@ -36,10 +36,7 @@ export function convIdsFor(db: DB, arg: string): string[] {
 
 // A sender selector (p:handle or display-name substring) → a message-table WHERE fragment (aliased
 // `m.`) + params, or a `.miss` when a p:handle doesn't resolve.
-export function senderFilter(
-  db: DB,
-  arg: string,
-): { sql: string; params: any[]; miss?: string } {
+export function senderFilter(db: DB, arg: string): { sql: string; params: any[]; miss?: string } {
   if (arg.startsWith('p:')) {
     const r = db.prepare('select mri from people where handle=?').get(arg) as any;
     if (!r) return { sql: '1=0', params: [], miss: `no person matches ${arg}` };
@@ -77,11 +74,18 @@ export function resolveExcludes(
     if (!e) continue;
     if (e.startsWith('c:')) {
       const r = db.prepare('select id from conversations where handle=?').get(e) as any;
-      if (!r) return { convIds, mris, words, miss: { reason: 'no-such-excluded-conversation', value: e } };
+      if (!r)
+        return {
+          convIds,
+          mris,
+          words,
+          miss: { reason: 'no-such-excluded-conversation', value: e },
+        };
       convIds.push(r.id);
     } else if (e.startsWith('p:')) {
       const r = db.prepare('select mri from people where handle=?').get(e) as any;
-      if (!r) return { convIds, mris, words, miss: { reason: 'no-such-excluded-person', value: e } };
+      if (!r)
+        return { convIds, mris, words, miss: { reason: 'no-such-excluded-person', value: e } };
       mris.push(r.mri);
     } else words.push(e.toLowerCase());
   }
@@ -209,13 +213,15 @@ export function querySearch(store: ChatStore, opts: SearchOptions): SearchResult
   let inIds: string[] | undefined;
   if (opts.from) {
     const f = senderFilter(db, String(opts.from));
-    if (f.miss) return { ok: false, reason: { reason: 'no-such-sender', value: String(opts.from) } };
+    if (f.miss)
+      return { ok: false, reason: { reason: 'no-such-sender', value: String(opts.from) } };
     conds.push(f.sql);
     params.push(...f.params);
   }
   if (opts.in) {
     const ids = convIdsFor(db, String(opts.in));
-    if (!ids.length) return { ok: false, reason: { reason: 'no-such-conversation', value: String(opts.in) } };
+    if (!ids.length)
+      return { ok: false, reason: { reason: 'no-such-conversation', value: String(opts.in) } };
     inIds = ids;
     conds.push(`m.conv_id in (${ids.map(() => '?').join(',')})`);
     params.push(...ids);
@@ -250,7 +256,14 @@ export function querySearch(store: ChatStore, opts: SearchOptions): SearchResult
     conds.push('m.ts<?');
     params.push(opts.untilTs);
   }
-  const { rows, order } = runSearchQuery(db, opts.ftsEnabled, conds, params, opts.limit, opts.query);
+  const { rows, order } = runSearchQuery(
+    db,
+    opts.ftsEnabled,
+    conds,
+    params,
+    opts.limit,
+    opts.query,
+  );
   const coverage = computeCoverage(db, scopeConds, scopeParams, rows.length, opts.sinceTs);
   return { ok: true, rows, order, inIds, coverage };
 }
@@ -276,8 +289,11 @@ function computeCoverage(
   if (rowCount === 0) return stats();
   if (sinceTs) {
     const hi =
-      (db.prepare(`select max(m.ts) hi from messages m where ${scopeSql}`).get(...scopeParams) as any)
-        ?.hi ?? 0;
+      (
+        db
+          .prepare(`select max(m.ts) hi from messages m where ${scopeSql}`)
+          .get(...scopeParams) as any
+      )?.hi ?? 0;
     if (sinceTs > hi) return stats();
   }
   return undefined;
@@ -399,9 +415,8 @@ export function queryThread(db: DB, convId: string, rootId: string): any[] {
 // to a Message; it also backs the around→root_id pivot (root_id is on the raw row).
 export function messageById(store: ChatStore, convId: string, id: string): any | null {
   return (
-    (store.db
-      .prepare('select * from messages where conv_id=? and id=?')
-      .get(convId, id) as any) ?? null
+    (store.db.prepare('select * from messages where conv_id=? and id=?').get(convId, id) as any) ??
+    null
   );
 }
 
@@ -562,7 +577,9 @@ export function conversationById(store: ChatStore, idOrHandle: string): Conversa
 export function resolveConversations(store: ChatStore, sel: string): Conversation[] {
   const db = store.db;
   if (sel.startsWith('c:')) {
-    const rows = db.prepare(`select ${CONV_COLS} from conversations where handle=?`).all(sel) as any[];
+    const rows = db
+      .prepare(`select ${CONV_COLS} from conversations where handle=?`)
+      .all(sel) as any[];
     return rows.map(toConversation);
   }
   const like = `%${likeEscape(sel)}%`;
@@ -706,9 +723,7 @@ export function queryCalls(
     return { r, label };
   });
   const filtered = opts.participant
-    ? resolved.filter((x) =>
-        x.label.toLowerCase().includes(String(opts.participant).toLowerCase()),
-      )
+    ? resolved.filter((x) => x.label.toLowerCase().includes(String(opts.participant).toLowerCase()))
     : resolved;
   return filtered.slice(0, limit).map(({ r, label }) => ({
     id: r.id,
@@ -825,7 +840,9 @@ export function queryEvents(
   if (opts.hideCancelled) where.push('is_cancelled=0');
   const w = where.length ? 'where ' + where.join(' and ') : '';
   return (
-    db.prepare(`select * from events ${w} order by start_ts asc limit ?`).all(...params, limit) as any[]
+    db
+      .prepare(`select * from events ${w} order by start_ts asc limit ?`)
+      .all(...params, limit) as any[]
   ).map(toCalendarEvent);
 }
 
@@ -1042,6 +1059,8 @@ export function computeTopicsWindow(
     { '1d': 864e5, '7d': 7 * 864e5, '30d': 30 * 864e5 }[String(opts.windowKey || '7d')] ??
     7 * 864e5;
   const sinceTs = opts.explicit ? (opts.sinceTs ?? 0) : maxTs - windowMs;
-  const untilTs = opts.explicit ? (opts.untilTs ?? Number.MAX_SAFE_INTEGER) : Number.MAX_SAFE_INTEGER;
+  const untilTs = opts.explicit
+    ? (opts.untilTs ?? Number.MAX_SAFE_INTEGER)
+    : Number.MAX_SAFE_INTEGER;
   return { sinceTs, untilTs };
 }

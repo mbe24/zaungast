@@ -145,7 +145,14 @@ function collectSnapshot(map: Map<string, SnapshotRecord>, raw: number, lossy: b
       const bk = `${databaseId}:${objectStoreId}`;
       let b = buckets.get(bk);
       if (!b) {
-        b = { dbId: databaseId, osId: objectStoreId, dbName: null, storeName: null, records: [], maxSeq: 0 };
+        b = {
+          dbId: databaseId,
+          osId: objectStoreId,
+          dbName: null,
+          storeName: null,
+          records: [],
+          maxSeq: 0,
+        };
         buckets.set(bk, b);
       }
       b.records.push(e);

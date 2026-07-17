@@ -235,7 +235,10 @@ console.log(
       dump(partial.store) === dump(full.store),
     );
     ok(`[${label}] FTS consistent after deletion`, ftsConsistent(partial.store));
-    ok(`[${label}] FTS content == full rebuild after deletion`, ftsDump(partial.store) === ftsDump(full.store));
+    ok(
+      `[${label}] FTS content == full rebuild after deletion`,
+      ftsDump(partial.store) === ftsDump(full.store),
+    );
     partial.store.close();
     full.store.close();
     fs.rmSync(modified, { recursive: true, force: true });
