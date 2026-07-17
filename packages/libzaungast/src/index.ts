@@ -57,8 +57,8 @@ export type {
   ConvMessagesMiss,
 } from './query.js';
 
-// Public helpers + the store-metadata type. htmlToText is Teams-domain functionality (the library
-// hands out raw CalendarEvent.bodyHtml on purpose); isBotMri is a documented MRI-namespace fact.
+// Public helper + the store-metadata type. htmlToText is Teams-domain functionality (the library
+// hands out raw CalendarEvent.bodyHtml on purpose). Bot-ness is exposed as DATA on the rows
+// (Person.isBot / Message.senderIsBot), so the isBotMri predicate stays internal.
 export { htmlToText } from './util/text.js';
-export { isBotMri } from './ingest/store.js';
 export type { StoreMeta } from './ingest/store.js';

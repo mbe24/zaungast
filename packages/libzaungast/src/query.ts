@@ -115,6 +115,7 @@ export interface Message {
   kind: string;
   senderMri: string | null;
   senderName: string | null;
+  senderIsBot: boolean; // sender MRI is in the Bot Framework namespace (28:) — bot-ness as data
   isMine: boolean;
   hasAttachment: boolean;
   mentionsMe: boolean;
@@ -155,6 +156,7 @@ export function toMessage(r: any): Message {
     kind: r.kind,
     senderMri: r.sender_mri ?? null,
     senderName: r.sender_name ?? null,
+    senderIsBot: isBotMri(r.sender_mri),
     isMine: !!r.is_mine,
     hasAttachment: !!r.has_attach,
     mentionsMe: !!r.mentions_me,
