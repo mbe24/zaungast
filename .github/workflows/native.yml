@@ -6,11 +6,11 @@ name: Native engine
 # cross-target prebuild matrix (musl, aarch64, …) for publishing is a release concern; this job
 # covers the three host platforms a developer/CI actually runs on.
 
+# Manual-only: the native accelerator is optional/opt-in and can't be validated on the maintainer's
+# machine (endpoint policy blocks native builds), so this doesn't gate normal pushes/PRs. Run it by
+# hand from the Actions tab when you want to build the .node + check the dual-engine golden.
 on:
-  pull_request:
-    branches: ["main"]
-  push:
-    branches: ["main"]
+  workflow_dispatch:
 
 jobs:
   build-and-verify:
