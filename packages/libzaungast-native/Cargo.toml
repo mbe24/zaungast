@@ -13,7 +13,11 @@ crate-type = ["rlib"]
 [dependencies]
 # (none — P1 raw readers are pure std. rusqlite / serde_json land with P3/the store writer.)
 
-# The differential-harness binary: dump a per-file digest to compare against the TS reader.
+# Differential-harness binaries: dump digests to compare against the TS readers.
 [[bin]]
-name = "difftable"
+name = "difftable"       # SSTable layer: per-.ldb (count, lossy, crc)
 path = "src/bin/difftable.rs"
+
+[[bin]]
+name = "diffsnap"        # Snapshot layer: whole-dir dedup+buckets report
+path = "src/bin/diffsnap.rs"

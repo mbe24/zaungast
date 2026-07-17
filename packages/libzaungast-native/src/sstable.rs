@@ -26,7 +26,7 @@ const CRC32C_TABLE: [u32; 256] = {
     t
 };
 
-fn crc32c(buf: &[u8], start: usize, end: usize) -> u32 {
+pub(crate) fn crc32c(buf: &[u8], start: usize, end: usize) -> u32 {
     let mut c: u32 = 0xffffffff;
     let mut i = start;
     while i < end {
@@ -36,8 +36,19 @@ fn crc32c(buf: &[u8], start: usize, end: usize) -> u32 {
     c ^ 0xffffffff
 }
 
+// Streaming CRC32C (same table/polynomial) — for the differential-oracle digests over records.
+pub(crate) fn crc32c_init() -> u32 {
+    0xffffffff
+}
+pub(crate) fn crc32c_update(c: u32, b: u8) -> u32 {
+    CRC32C_TABLE[((c ^ b as u32) & 0xff) as usize] ^ (c >> 8)
+}
+pub(crate) fn crc32c_final(c: u32) -> u32 {
+    c ^ 0xffffffff
+}
+
 /// leveldb's mask: Mask(crc) = rotate_right(crc,15) + kMaskDelta (0xa282ead8). Unmask reverses it.
-fn unmask_crc(m: u32) -> u32 {
+pub(crate) fn unmask_crc(m: u32) -> u32 {
     let x = m.wrapping_sub(0xa282ead8);
     (x >> 17) | (x << 15)
 }

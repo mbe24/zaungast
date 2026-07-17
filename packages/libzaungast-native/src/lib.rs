@@ -8,5 +8,7 @@
 //! Layer status: P1 in progress — sstable reader (below); wal / idb-dedup / structured-clone /
 //! resolver / fingerprint / store to follow.
 
+pub mod idb;
 pub mod snappy;
 pub mod sstable;
+pub mod wal;

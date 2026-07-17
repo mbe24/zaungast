@@ -27,32 +27,45 @@ const REPO = path.resolve(CRATE, '..', '..'); // repo root
 const RUNNER = (process.env.ZAUNGAST_NATIVE_RUNNER || 'auto').toLowerCase();
 const IMAGE = process.env.ZAUNGAST_NATIVE_IMAGE || 'rust:1-slim-bookworm';
 
-const dirArg = process.argv[2];
-if (!dirArg) {
-  console.error('usage: node harness/run.mjs <leveldb-dir>   [env ZAUNGAST_NATIVE_RUNNER=auto|local|docker]');
+// layer config: which native bin + how it's invoked + which TS comparator.
+const LAYERS = {
+  sstable: { bin: 'difftable', mode: 'perfile', harness: 'diff-sstable.mjs' },
+  snapshot: { bin: 'diffsnap', mode: 'whole', harness: 'diff-snapshot.mjs' },
+};
+const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+const layerIdx = process.argv.indexOf('--layer');
+const layerName = layerIdx > 0 ? process.argv[layerIdx + 1] : 'sstable';
+const L = LAYERS[layerName];
+const dirArg = args[0];
+if (!L || !dirArg) {
+  console.error('usage: node harness/run.mjs <leveldb-dir> [--layer sstable|snapshot]   [env ZAUNGAST_NATIVE_RUNNER=auto|local|docker]');
   process.exit(2);
 }
 const dataAbs = path.resolve(dirArg);
+const exeName = (b) => (process.platform === 'win32' ? `${b}.exe` : b);
 
-// docker mode: build + run difftable over every .ldb inside a Linux container; returns the tsv text
-// (<file>\t<count>\t<clean|lossy>\t<crc>). Repo mounted read-only; build happens container-side.
+// docker mode: build + run the layer's bin inside a Linux container; repo mounted read-only, build
+// happens container-side. Returns the digest text (per-file lines, or the whole-dir report).
 function dockerDigests() {
   const rel = path.relative(REPO, dataAbs).split(path.sep).join('/');
   const containerData = `/work/${rel}`;
   const script = '/work/packages/libzaungast-native/harness/incontainer.sh';
-  console.error(`[runner=docker] image=${IMAGE}  data=${containerData}`);
+  console.error(`[runner=docker layer=${layerName}] image=${IMAGE}  data=${containerData}`);
   return execFileSync(
     'docker',
-    ['run', '--rm', '-v', `${REPO}:/work:ro`, IMAGE, 'bash', script, containerData],
+    ['run', '--rm', '-v', `${REPO}:/work:ro`, IMAGE, 'bash', script, containerData, L.bin, L.mode],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], maxBuffer: 256 * 1024 * 1024 },
   );
 }
 
-// local mode: cargo build, then run the native binary per .ldb on this host.
+// local mode: cargo build (all bins), then run the layer's bin on this host.
 function localDigests() {
-  const exe = path.join(CRATE, 'target', 'release', process.platform === 'win32' ? 'difftable.exe' : 'difftable');
-  console.error('[runner=local] cargo build --release --bin difftable');
-  execFileSync('cargo', ['build', '--release', '--bin', 'difftable'], { cwd: CRATE, stdio: ['ignore', 'inherit', 'inherit'] });
+  const exe = path.join(CRATE, 'target', 'release', exeName(L.bin));
+  console.error(`[runner=local layer=${layerName}] cargo build --release`);
+  execFileSync('cargo', ['build', '--release'], { cwd: CRATE, stdio: ['ignore', 'inherit', 'inherit'] });
+  if (L.mode === 'whole') {
+    return execFileSync(exe, [dataAbs], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 256 * 1024 * 1024 });
+  }
   const ldbs = fs.readdirSync(dataAbs).filter((f) => f.endsWith('.ldb')).sort();
   let out = '';
   for (const f of ldbs) {
@@ -90,8 +103,8 @@ if (RUNNER === 'docker') {
   }
 }
 
-const tsv = path.join(os.tmpdir(), `zaungast-native-sstable-${process.pid}.tsv`);
+const tsv = path.join(os.tmpdir(), `zaungast-native-${layerName}-${process.pid}.tsv`);
 fs.writeFileSync(tsv, digests);
-const r = spawnSync(process.execPath, [path.join(HERE, 'diff-sstable.mjs'), dataAbs, '--rust', tsv], { stdio: 'inherit' });
+const r = spawnSync(process.execPath, [path.join(HERE, L.harness), dataAbs, '--rust', tsv], { stdio: 'inherit' });
 fs.rmSync(tsv, { force: true });
 process.exit(r.status ?? 1);
