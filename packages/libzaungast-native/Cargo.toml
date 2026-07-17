@@ -69,3 +69,8 @@ required-features = ["harness"]
 name = "diffstore"       # store layer: full ChatStore build, per-table content digest
 path = "src/bin/diffstore.rs"
 required-features = ["harness"]
+
+[[bin]]
+name = "diffincr"        # incremental layer: native refresh(prev)==full, per-table digest (B vs C)
+path = "src/bin/diffincr.rs"
+required-features = ["harness"]

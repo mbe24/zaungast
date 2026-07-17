@@ -3,7 +3,7 @@
 // usable — has Rust read the leveldb dir and write the ChatStore .db end-to-end, which we then open
 // read-only. On absence/mismatch the `auto` engine falls back to the JS ingest; an explicit `native`
 // engine surfaces the reason instead. Native does FULL ingest only (incremental stays JS for now).
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
@@ -12,6 +12,13 @@ import { loadBundledMappingTexts } from '../format/resolver.js';
 import type { Ingested } from './ingest.js';
 
 export type Engine = 'auto' | 'js' | 'native';
+
+// A native-built store's on-disk handle: the current .db file + the temp dir holding it. The Session
+// keeps this on `Ingested.native` so a later native refresh can read the previous file + swap.
+export interface NativeHandle {
+  dbPath: string;
+  tempDir: string;
+}
 
 // The conformance version the TS side was built against. Native output is trusted (auto) only when
 // the addon's conformanceVersion() matches. Bump in lockstep with libzaungast-native/src/bindings.rs
@@ -30,6 +37,18 @@ interface NativeIngestResult {
   earliestTs: number;
   ftsEnabled: boolean;
 }
+interface NativeRefreshResult {
+  needFullRebuild: boolean;
+  skipped: boolean;
+  fingerprint: string;
+  schemaVersion: string | null;
+  selfMri: string | null;
+  lossy: boolean;
+  conversations: number;
+  messages: number;
+  people: number;
+  earliestTs: number;
+}
 interface NativeAddon {
   nativeIngest(
     dir: string,
@@ -37,6 +56,12 @@ interface NativeAddon {
     schema: string,
     mappings: string[],
   ): NativeIngestResult;
+  nativeRefresh(
+    dir: string,
+    prevPath: string,
+    newPath: string,
+    mappings: string[],
+  ): NativeRefreshResult;
   conformanceVersion(): number;
 }
 
@@ -104,7 +129,46 @@ export function nativeIngest(dir: string, engine: 'auto' | 'native'): Ingested |
     lossy: r.lossy,
     selfMri: r.selfMri,
   };
-  // state: null — native produces no incremental state yet, so a Session treats every refresh as a
-  // full rebuild (native incremental is a deferred phase).
-  return { store, meta, lossy: r.lossy, state: null };
+  // state stays null (JS-side IngestState is unused for native); `native` carries the file handle so
+  // the Session refreshes via nativeRefresh (new-file-swap) instead of JS applyIncremental.
+  return { store, meta, lossy: r.lossy, state: null, native: { dbPath, tempDir: tmp } };
+}
+
+// One native incremental refresh. `dir` is the (already-snapshotted, static) leveldb dir the Session
+// hands us; `prev` is the current native store's file handle. Rust copies prev→a new temp file,
+// applies the delta, and rewrites its meta; we open the new file read-only and hand back a swapped
+// store + meta. `needFullRebuild` (schema tripwire / stale file) and `skipped` (lossy) leave the
+// current store untouched — the Session full-rebuilds or keeps serving, respectively.
+export function nativeRefresh(
+  dir: string,
+  prev: NativeHandle,
+):
+  | { kind: 'swapped'; store: ChatStore; meta: StoreMeta; native: NativeHandle }
+  | { kind: 'needFullRebuild' }
+  | { kind: 'skipped' } {
+  const addon = loadAddon();
+  if (!addon) return { kind: 'needFullRebuild' }; // unreachable in practice (we only get here native)
+  const tmp = mkdtempSync(join(tmpdir(), 'zaungast-native-'));
+  const dbPath = join(tmp, 'store.db');
+  const r = addon.nativeRefresh(dir, prev.dbPath, dbPath, loadBundledMappingTexts());
+  if (r.needFullRebuild || r.skipped) {
+    rmSync(tmp, { recursive: true, force: true }); // discard the throwaway; keep the current store
+    return { kind: r.needFullRebuild ? 'needFullRebuild' : 'skipped' };
+  }
+  const store = new ChatStore({ openFile: dbPath, ftsEnabled: true, tempFile: tmp });
+  const now = Date.now();
+  const meta: StoreMeta = {
+    asOf: now,
+    fingerprint: r.fingerprint,
+    schemaVersion: r.schemaVersion,
+    schemaMatched: true,
+    counts: { conversations: r.conversations, messages: r.messages, people: r.people },
+    earliestTs: r.earliestTs,
+    ftsEnabled: true,
+    lastFullAt: now, // the Session overwrites this with the real last-full time
+    refreshMode: 'incremental',
+    lossy: r.lossy,
+    selfMri: r.selfMri,
+  };
+  return { kind: 'swapped', store, meta, native: { dbPath, tempDir: tmp } };
 }

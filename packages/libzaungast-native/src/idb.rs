@@ -40,9 +40,17 @@ struct Dedup {
     index: HashMap<Vec<u8>, usize>,
     raw: u64,
     lossy: bool,
+    // seqCap (tests/incremental differential only): ignore entries above this sequence, so the map
+    // holds OLDER versions and max_seq reflects the capped set — mirrors loadEntries' seqCap in TS.
+    seq_cap: Option<u64>,
 }
 impl Dedup {
     fn consider(&mut self, user_key: &[u8], value: Option<&[u8]>, seq: u64, rtype: u8) {
+        if let Some(cap) = self.seq_cap {
+            if seq > cap {
+                return;
+            }
+        }
         self.raw += 1;
         match self.index.get(user_key) {
             None => {
@@ -105,8 +113,8 @@ fn sorted_by_ext(dir: &str, ext: &str) -> std::io::Result<Vec<String>> {
     Ok(v)
 }
 
-fn build_dedup_map(dir: &str) -> std::io::Result<Dedup> {
-    let mut d = Dedup { order: Vec::new(), index: HashMap::new(), raw: 0, lossy: false };
+fn build_dedup_map(dir: &str, seq_cap: Option<u64>) -> std::io::Result<Dedup> {
+    let mut d = Dedup { order: Vec::new(), index: HashMap::new(), raw: 0, lossy: false, seq_cap };
     for f in sorted_by_ext(dir, ".ldb")? {
         let p = Path::new(dir).join(&f);
         match crate::sstable::read_table(&p.to_string_lossy()) {
@@ -282,7 +290,13 @@ fn collect_snapshot(d: Dedup) -> Snapshot {
 }
 
 pub fn load_snapshot(dir: &str) -> std::io::Result<Snapshot> {
-    Ok(collect_snapshot(build_dedup_map(dir)?))
+    Ok(collect_snapshot(build_dedup_map(dir, None)?))
+}
+
+/// Load a PARTIAL snapshot as of `seq_cap` (entries above it ignored) — the incremental differential
+/// uses this to build a "previous" store, then proves refresh(prev)==full. Mirrors TS seqCap.
+pub fn load_snapshot_capped(dir: &str, seq_cap: u64) -> std::io::Result<Snapshot> {
+    Ok(collect_snapshot(build_dedup_map(dir, Some(seq_cap))?))
 }
 
 // ---- differential oracle report (matches harness/diff-snapshot.mjs) ----

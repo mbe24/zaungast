@@ -20,6 +20,12 @@ use crate::ssv::Ssv;
 // libzaungast/src/schema.sql and hands us the exact string), so the two engines' schemas can't drift.
 const FTS_CREATE: &str = "create virtual table messages_fts using fts5(content, conv_id unindexed, id unindexed, tokenize='porter unicode61');";
 
+/// PRAGMA user_version stamped into every native-written .db — the freshness/staleness gate. TS
+/// validates it on open; a mismatch means the file was written by an incompatible lib version (or the
+/// schema generation was hand-bumped) → refuse to serve / full-rebuild. Schema-independent, readable
+/// without assuming any table exists. Bump whenever the on-disk store layout changes meaningfully.
+pub const USER_VERSION: i32 = 1;
+
 // ---- Ssv field accessors + JS coercions ----
 fn get<'a>(v: &'a Ssv, k: &str) -> Option<&'a Ssv> {
     match v {
@@ -570,12 +576,21 @@ pub fn ingest_to_file(
 
     let (schema_matched, schema_version, self_mri) = match selected {
         Some(m) => {
-            let self_mri = populate(&conn, &snap, m);
+            populate(&conn, &snap, m);
+            // Write the in-file contract (_meta + user_version) so a later refresh reads its floor +
+            // reuses this mapping. compute_state re-derives selfMri/targets/maxSeq from the snapshot.
             let ver = m.get("schemaVersion").and_then(|v| v.as_str()).map(|s| s.to_string());
-            (true, ver, self_mri)
+            let state = compute_state(&snap, m);
+            write_meta(&conn, &fp.hash, ver.as_deref(), snap.lossy, &state)?;
+            (true, ver, state.self_mri)
         }
         // Unknown schema: an empty store (schema only), mirroring TS ingest (store loads, no rows).
-        None => (false, None, None),
+        // Still stamp user_version + an empty _meta so the file is self-describing.
+        None => {
+            let empty = RefreshState { self_mri: None, max_seq: snap.max_seq, msg_targets: vec![], conv_targets: vec![] };
+            write_meta(&conn, &fp.hash, None, snap.lossy, &empty)?;
+            (false, None, None)
+        }
     };
 
     let count = |t: &str| -> i64 {
@@ -640,7 +655,10 @@ fn apply_conversation_meta(conn: &Connection, convs: &[Ssv], handles: &mut Handl
     }
 }
 
-fn apply_messages(conn: &Connection, msgs: &[Ssv], self_mri: Option<&str>) {
+// Insert/upsert message rows. Returns the id of every row processed (for a delta FTS refresh); the
+// full-ingest caller ignores it. Mirrors applyMessages in TS (which likewise returns touched ids).
+fn apply_messages(conn: &Connection, msgs: &[Ssv], self_mri: Option<&str>) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::with_capacity(msgs.len());
     let mut stmt = conn
         .prepare(
             "insert into messages
@@ -712,7 +730,9 @@ fn apply_messages(conn: &Connection, msgs: &[Ssv], self_mri: Option<&str>) {
             root_id,
         ])
         .unwrap();
+        ids.push(id_str);
     }
+    ids
 }
 
 fn replace_profiles(conn: &Connection, rows: &[Ssv]) {
@@ -885,6 +905,364 @@ fn refresh_fts(conn: &Connection) {
          insert into messages_fts(content,conv_id,id) select content,conv_id,id from messages where is_system=0 and content<>'';",
     )
     .unwrap();
+}
+
+// ---- incremental refresh (delta apply; port of applyIncremental) ----
+
+/// The state carried between refreshes (what a full ingest recorded so a later delta can validate the
+/// schema hasn't shifted + knows the sequence floor). Mirrors TS IngestState, minus the mapping (the
+/// caller reuses the same mapping — re-selected by schemaVersion from the file's _meta).
+pub struct RefreshState {
+    pub self_mri: Option<String>,
+    pub max_seq: u64,
+    pub msg_targets: Vec<String>,  // sorted (entity_targets_for sorts)
+    pub conv_targets: Vec<String>, // sorted
+}
+
+pub struct RefreshOutcome {
+    pub need_full_rebuild: bool, // schema tripwire / error → caller must full-rebuild
+    pub skipped: bool,           // lossy load → nothing applied, retry next refresh
+    pub new_max_seq: u64,
+}
+
+/// The RefreshState a full ingest of `snap` would record (self_mri + maxSeq + mapped-store targets).
+pub fn compute_state(snap: &Snapshot, mapping: &Value) -> RefreshState {
+    let msgs = extract_rows(snap, mapping, "message");
+    RefreshState {
+        self_mri: vote_self_mri(&msgs),
+        max_seq: snap.max_seq,
+        msg_targets: crate::resolver::entity_targets_for(snap, mapping, "message"),
+        conv_targets: crate::resolver::entity_targets_for(snap, mapping, "conversation"),
+    }
+}
+
+// delete messages whose owning chain is no longer live (whole-chain / compaction-elided deletion);
+// returns the deleted ids. Mirrors ChatStore.deleteMessagesForMissingChains.
+fn delete_messages_for_missing_chains(conn: &Connection, live: &HashSet<String>) -> Vec<String> {
+    conn.execute_batch("create temp table if not exists _live_chains(k text primary key); delete from _live_chains;")
+        .unwrap();
+    {
+        let mut ins = conn.prepare("insert or ignore into _live_chains values(?)").unwrap();
+        for k in live {
+            ins.execute(params![k]).unwrap();
+        }
+    }
+    let ids: Vec<String> = {
+        let mut stmt = conn.prepare("select id from messages where chain_key not in (select k from _live_chains)").unwrap();
+        stmt.query_map([], |r| r.get::<_, String>(0)).unwrap().filter_map(Result::ok).collect()
+    };
+    conn.execute_batch("delete from messages where chain_key not in (select k from _live_chains)").unwrap();
+    ids
+}
+
+// delete messages by chain_key; returns deleted ids. Mirrors ChatStore.deleteMessagesByChain.
+fn delete_messages_by_chain(conn: &Connection, chain_hex: &str) -> Vec<String> {
+    let ids: Vec<String> = {
+        let mut stmt = conn.prepare("select id from messages where chain_key=?").unwrap();
+        stmt.query_map(params![chain_hex], |r| r.get::<_, String>(0)).unwrap().filter_map(Result::ok).collect()
+    };
+    conn.execute("delete from messages where chain_key=?", params![chain_hex]).unwrap();
+    ids
+}
+
+// delta FTS: re-derive only the given ids from the (post-mutation) messages table. Mirrors
+// ChatStore.refreshFts(changedIds). Empty → no-op.
+fn refresh_fts_delta(conn: &Connection, ids: &HashSet<String>) {
+    if ids.is_empty() {
+        return;
+    }
+    conn.execute_batch("create temp table if not exists _chg(id text primary key); delete from _chg;").unwrap();
+    {
+        let mut ins = conn.prepare("insert or ignore into _chg values(?)").unwrap();
+        for id in ids {
+            ins.execute(params![id]).unwrap();
+        }
+    }
+    conn.execute_batch(
+        "delete from messages_fts where id in (select id from _chg);
+         insert into messages_fts(content,conv_id,id) select content,conv_id,id from messages where id in (select id from _chg) and is_system=0 and content<>'';",
+    )
+    .unwrap();
+}
+
+/// Apply an incremental delta onto an existing store (opened on the previous file). Port of
+/// applyIncremental: lossy-skip, schema tripwire, no-op fast-exit, then delete-missing-chains +
+/// delete-changed-chains + re-extract-changed + whole-replace profiles/events/calls + conversation
+/// reconcile + recomputeDerived + delta FTS. `mapping` MUST be the mapping the prior full ingest used.
+pub fn refresh_store(conn: &Connection, snap: &Snapshot, mapping: &Value, state: &RefreshState) -> RefreshOutcome {
+    // lossy load → don't apply (spuriously-absent chains would read as deletions); serve current.
+    if snap.lossy {
+        return RefreshOutcome { need_full_rebuild: false, skipped: true, new_max_seq: state.max_seq };
+    }
+    // schema tripwire: our mapped message/conversation stores resolve differently → full rebuild.
+    let msg_t = crate::resolver::entity_targets_for(snap, mapping, "message");
+    let conv_t = crate::resolver::entity_targets_for(snap, mapping, "conversation");
+    if msg_t != state.msg_targets || conv_t != state.conv_targets {
+        return RefreshOutcome { need_full_rebuild: true, skipped: false, new_max_seq: state.max_seq };
+    }
+    // no-op fast-exit: maxSeq counts tombstones too, so equal ⇒ nothing landed since the last apply.
+    if snap.max_seq == state.max_seq {
+        return RefreshOutcome { need_full_rebuild: false, skipped: false, new_max_seq: snap.max_seq };
+    }
+
+    // live + changed (seq > floor) chain keys, straight off the message buckets (hex, matching the
+    // chain_key column encoding). changed_records feed the message re-extract.
+    let mut live: HashSet<String> = HashSet::new();
+    let mut changed_chains: HashSet<String> = HashSet::new();
+    let mut changed_records: Vec<&crate::idb::SnapshotRecord> = Vec::new();
+    for sk in &state.msg_targets {
+        if let Some(b) = snap.buckets.iter().find(|b| format!("{}:{}", b.db_id, b.os_id) == *sk) {
+            for rec in &b.records {
+                let hex = crate::sha256::hex(&rec.key);
+                live.insert(hex.clone());
+                if rec.seq > state.max_seq {
+                    changed_chains.insert(hex);
+                    changed_records.push(rec);
+                }
+            }
+        }
+    }
+
+    let mut handles = Handles::new();
+    let self_mri = state.self_mri.as_deref();
+    conn.execute_batch("BEGIN").unwrap();
+    let mut fts_ids: HashSet<String> = HashSet::new();
+    for id in delete_messages_for_missing_chains(conn, &live) {
+        fts_ids.insert(id);
+    }
+    for ck in &changed_chains {
+        for id in delete_messages_by_chain(conn, ck) {
+            fts_ids.insert(id);
+        }
+    }
+    let new_rows = crate::resolver::extract_rows_from_records(&changed_records, mapping, "message");
+    for id in apply_messages(conn, &new_rows, self_mri) {
+        fts_ids.insert(id);
+    }
+    // cheap whole-store replaces (keeps the incremental==full invariant trivially true for these)
+    replace_profiles(conn, &extract_rows(snap, mapping, "profile"));
+    replace_events(conn, &extract_rows(snap, mapping, "event"));
+    replace_calls(conn, &extract_rows(snap, mapping, "call"));
+    // conversation reconcile: reset live-meta cols, re-apply, drop orphans (not referenced by messages)
+    let conv_rows = extract_rows(snap, mapping, "conversation");
+    conn.execute_batch("update conversations set topic=null, team_id=null, thread_type=null, meta_last_ts=0").unwrap();
+    apply_conversation_meta(conn, &conv_rows, &mut handles);
+    conn.execute_batch("create temp table if not exists _liveconv(id text primary key); delete from _liveconv;").unwrap();
+    {
+        let mut ins = conn.prepare("insert or ignore into _liveconv values(?)").unwrap();
+        for c in &conv_rows {
+            if let Some(id) = as_str(get(c, "id")) {
+                if !id.is_empty() {
+                    ins.execute(params![id]).unwrap();
+                }
+            }
+        }
+    }
+    conn.execute_batch(
+        "delete from conversations where id not in (select id from _liveconv) and id not in (select distinct conv_id from messages)",
+    )
+    .unwrap();
+    conn.execute_batch("COMMIT").unwrap();
+
+    recompute_derived(conn, self_mri, &mut handles);
+    refresh_fts_delta(conn, &fts_ids);
+    RefreshOutcome { need_full_rebuild: false, skipped: false, new_max_seq: snap.max_seq }
+}
+
+// ---- writer↔reader contract: PRAGMA user_version + the in-file _meta table ----
+// The .db file is the contract (self-describing), not an FFI-return sidecar. `_meta` carries the
+// StoreMeta bits NOT recoverable by query (fingerprint/schemaVersion/selfMri/lossy) PLUS the
+// incremental state (maxSeq + mapped-store targets) so a later refresh reads its floor from the file.
+
+/// Create + write the single-row `_meta` table and stamp user_version. `_meta` is native-only (not in
+/// schema.sql, so the store differential's fixed TABLES list ignores it).
+fn write_meta(
+    conn: &Connection,
+    fingerprint: &str,
+    schema_version: Option<&str>,
+    lossy: bool,
+    state: &RefreshState,
+) -> Result<(), String> {
+    let targets_json = |t: &[String]| serde_json::to_string(t).unwrap_or_else(|_| "[]".into());
+    conn.execute_batch(
+        "create table if not exists _meta(
+           fingerprint text, schema_version text, self_mri text, lossy int,
+           max_seq int, msg_targets text, conv_targets text);
+         delete from _meta;",
+    )
+    .map_err(|e| format!("_meta create: {e}"))?;
+    conn.execute(
+        "insert into _meta(fingerprint,schema_version,self_mri,lossy,max_seq,msg_targets,conv_targets)
+         values(?,?,?,?,?,?,?)",
+        params![
+            fingerprint,
+            schema_version,
+            state.self_mri,
+            lossy as i64,
+            state.max_seq as i64,
+            targets_json(&state.msg_targets),
+            targets_json(&state.conv_targets),
+        ],
+    )
+    .map_err(|e| format!("_meta insert: {e}"))?;
+    conn.pragma_update(None, "user_version", USER_VERSION)
+        .map_err(|e| format!("user_version: {e}"))?;
+    Ok(())
+}
+
+/// The `_meta` row + user_version read back from a native-written file. `stale` = user_version
+/// mismatch (an incompatible/older-lib file → caller must full-rebuild).
+pub struct FileMeta {
+    pub stale: bool,
+    pub fingerprint: String,
+    pub schema_version: Option<String>,
+    pub lossy: bool,
+    pub state: RefreshState,
+}
+
+fn read_meta(conn: &Connection) -> Result<FileMeta, String> {
+    let uv: i32 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .map_err(|e| format!("read user_version: {e}"))?;
+    if uv != USER_VERSION {
+        return Ok(FileMeta {
+            stale: true,
+            fingerprint: String::new(),
+            schema_version: None,
+            lossy: false,
+            state: RefreshState { self_mri: None, max_seq: 0, msg_targets: vec![], conv_targets: vec![] },
+        });
+    }
+    let parse_targets = |s: String| -> Vec<String> {
+        serde_json::from_str::<Vec<String>>(&s).unwrap_or_default()
+    };
+    conn.query_row(
+        "select fingerprint,schema_version,self_mri,lossy,max_seq,msg_targets,conv_targets from _meta limit 1",
+        [],
+        |r| {
+            Ok(FileMeta {
+                stale: false,
+                fingerprint: r.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                schema_version: r.get::<_, Option<String>>(1)?,
+                lossy: r.get::<_, i64>(3)? != 0,
+                state: RefreshState {
+                    self_mri: r.get::<_, Option<String>>(2)?,
+                    max_seq: r.get::<_, i64>(4)? as u64,
+                    msg_targets: parse_targets(r.get::<_, Option<String>>(5)?.unwrap_or_default()),
+                    conv_targets: parse_targets(r.get::<_, Option<String>>(6)?.unwrap_or_default()),
+                },
+            })
+        },
+    )
+    .map_err(|e| format!("read _meta: {e}"))
+}
+
+/// Incremental seam-A entry (across FFI calls): copy the previous file to `new_path`, read its
+/// `_meta` for the refresh floor + the same mapping (reused by schemaVersion), apply the delta up to
+/// the current sequence, and rewrite `_meta`. On a schema tripwire / stale file / lossy load it
+/// signals the caller to full-rebuild instead (need_full_rebuild) or serve-current (skipped). The
+/// previous file is never mutated (TS may still hold a read-only handle on it) — TS swaps to new_path.
+pub fn refresh_to_file(
+    dir: &str,
+    prev_path: &str,
+    new_path: &str,
+    mappings_json: &[String],
+) -> Result<RefreshFileOutcome, String> {
+    use crate::idb::load_snapshot;
+
+    let _ = std::fs::remove_file(new_path);
+    std::fs::copy(prev_path, new_path).map_err(|e| format!("copy prev→new: {e}"))?;
+    let conn = Connection::open(new_path).map_err(|e| format!("open {new_path}: {e}"))?;
+
+    let fm = read_meta(&conn)?;
+    if fm.stale {
+        return Ok(RefreshFileOutcome::rebuild()); // incompatible/older-lib file → full rebuild
+    }
+    let mappings: Vec<Value> = mappings_json
+        .iter()
+        .map(|s| serde_json::from_str::<Value>(s).map_err(|e| format!("mapping JSON: {e}")))
+        .collect::<Result<_, _>>()?;
+    // Reuse the SAME mapping the prior full ingest used, by schemaVersion (not re-selected).
+    let mapping = match mappings.iter().find(|m| {
+        m.get("schemaVersion").and_then(|v| v.as_str()) == fm.schema_version.as_deref()
+    }) {
+        Some(m) => m,
+        None => return Ok(RefreshFileOutcome::rebuild()), // mapping for that schemaVersion is gone
+    };
+
+    let snap = load_snapshot(dir).map_err(|e| format!("load_snapshot: {e}"))?;
+    let outcome = refresh_store(&conn, &snap, mapping, &fm.state);
+    if outcome.need_full_rebuild {
+        return Ok(RefreshFileOutcome::rebuild());
+    }
+    if outcome.skipped {
+        // lossy: nothing applied. The new_path is a byte-copy of prev; keep serving it unchanged.
+        return Ok(RefreshFileOutcome { need_full_rebuild: false, skipped: true, ..counts_of(&conn, &fm) });
+    }
+
+    // Rewrite _meta with the new state (recomputed from the full snapshot) + refresh user_version.
+    let new_state = compute_state(&snap, mapping);
+    let fp = crate::fingerprint::fingerprint(&snap);
+    write_meta(&conn, &fp.hash, fm.schema_version.as_deref(), snap.lossy, &new_state)?;
+
+    let out = RefreshFileOutcome {
+        need_full_rebuild: false,
+        skipped: false,
+        ..counts_of(&conn, &fm)
+    };
+    conn.close().map_err(|(_, e)| format!("close: {e}"))?;
+    Ok(out)
+}
+
+fn counts_of(conn: &Connection, fm: &FileMeta) -> RefreshFileOutcome {
+    let count = |t: &str| -> i64 { conn.query_row(&format!("select count(*) from {t}"), [], |r| r.get(0)).unwrap_or(0) };
+    let earliest_ts: i64 = conn
+        .query_row("select min(ts) from messages where ts>0", [], |r| r.get::<_, Option<i64>>(0))
+        .ok()
+        .flatten()
+        .unwrap_or(0);
+    RefreshFileOutcome {
+        need_full_rebuild: false,
+        skipped: false,
+        fingerprint: fm.fingerprint.clone(),
+        schema_version: fm.schema_version.clone(),
+        self_mri: fm.state.self_mri.clone(),
+        lossy: fm.lossy,
+        conversations: count("conversations"),
+        messages: count("messages"),
+        people: count("people"),
+        earliest_ts,
+    }
+}
+
+/// Result of a native file-refresh — the StoreMeta bits TS folds in after swapping to the new file.
+pub struct RefreshFileOutcome {
+    pub need_full_rebuild: bool,
+    pub skipped: bool,
+    pub fingerprint: String,
+    pub schema_version: Option<String>,
+    pub self_mri: Option<String>,
+    pub lossy: bool,
+    pub conversations: i64,
+    pub messages: i64,
+    pub people: i64,
+    pub earliest_ts: i64,
+}
+impl RefreshFileOutcome {
+    fn rebuild() -> Self {
+        RefreshFileOutcome {
+            need_full_rebuild: true,
+            skipped: false,
+            fingerprint: String::new(),
+            schema_version: None,
+            self_mri: None,
+            lossy: false,
+            conversations: 0,
+            messages: 0,
+            people: 0,
+            earliest_ts: 0,
+        }
+    }
 }
 
 // ---- per-table content differential report ----

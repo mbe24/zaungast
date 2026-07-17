@@ -8,7 +8,7 @@ import {
 } from '../format/index.js';
 import type { SnapshotRecord, Snapshot } from '../format/types.js';
 import { ChatStore, type StoreMeta } from './store.js';
-import { resolveEngine, nativeIngest, type Engine } from './native.js';
+import { resolveEngine, nativeIngest, type Engine, type NativeHandle } from './native.js';
 import { htmlToText, isSystemMessage, mentionedMris, hasAttachment } from '../util/text.js';
 
 export function convKind(id = ''): string {
@@ -35,6 +35,10 @@ export interface Ingested {
   meta: StoreMeta;
   state: IngestState | null;
   lossy: boolean;
+  // Set only when the native engine built this store: the current .db file + its temp dir. Its
+  // presence tells the Session to refresh via native (new-file-swap) rather than JS applyIncremental
+  // (which needs `state`, always null for native). Undefined for the JS engine → JS path unchanged.
+  native?: NativeHandle;
 }
 
 // Compact `properties.emotions` to the minimum the renderer needs and a stable JSON string:

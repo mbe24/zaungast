@@ -54,3 +54,47 @@ pub fn native_ingest(
         fts_enabled: o.fts_enabled,
     })
 }
+
+/// The result of a native incremental refresh. `needFullRebuild` → the delta couldn't apply (schema
+/// tripwire / stale file / mapping gone); the caller must full-rebuild via nativeIngest. `skipped` →
+/// a lossy load; nothing applied, `newPath` is a byte-copy of the previous file, keep serving it.
+#[napi(object)]
+pub struct RefreshResult {
+    pub need_full_rebuild: bool,
+    pub skipped: bool,
+    pub fingerprint: String,
+    pub schema_version: Option<String>,
+    pub self_mri: Option<String>,
+    pub lossy: bool,
+    pub conversations: u32,
+    pub messages: u32,
+    pub people: u32,
+    pub earliest_ts: f64,
+}
+
+/// Incremental refresh (seam A): copy `prevPath` → `newPath`, apply the delta from `dir` up to the
+/// current sequence, and rewrite the new file's in-file meta. The previous file is never mutated (TS
+/// may hold a read-only handle) — on success TS swaps to `newPath`. `mappings` are the bundled JSON
+/// texts (the same set as nativeIngest); the mapping is reused by schemaVersion from the prev file.
+#[napi]
+pub fn native_refresh(
+    dir: String,
+    prev_path: String,
+    new_path: String,
+    mappings: Vec<String>,
+) -> napi::Result<RefreshResult> {
+    let o = crate::writer::refresh_to_file(&dir, &prev_path, &new_path, &mappings)
+        .map_err(napi::Error::from_reason)?;
+    Ok(RefreshResult {
+        need_full_rebuild: o.need_full_rebuild,
+        skipped: o.skipped,
+        fingerprint: o.fingerprint,
+        schema_version: o.schema_version,
+        self_mri: o.self_mri,
+        lossy: o.lossy,
+        conversations: o.conversations as u32,
+        messages: o.messages as u32,
+        people: o.people as u32,
+        earliest_ts: o.earliest_ts as f64,
+    })
+}

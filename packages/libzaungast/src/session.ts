@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ingest, applyIncremental, type Ingested } from './ingest/ingest.js';
+import { nativeRefresh } from './ingest/native.js';
 import { discoverTeamsDbs } from './format/index.js';
 import { loadSnapshotReuse } from './format/chromium/indexeddb.js';
 
@@ -301,7 +302,9 @@ export class Session {
       forceFull ||
       this.pendingFull ||
       !this.cur ||
-      !this.cur.state ||
+      // JS needs `state` to apply incrementally; native refreshes via its file handle (`native`)
+      // instead, so a native store is incremental-capable even though its JS `state` is null.
+      (!this.cur.state && !this.cur.native) ||
       this.incrementalsSinceFull >= this.maxIncrementals ||
       now - this.lastFullAt > this.fullIntervalMs;
     this.pendingFull = false;
@@ -311,6 +314,36 @@ export class Session {
         doFull();
       } else if (snapLossy) {
         // lossy snapshot → do NOT run incremental (deletion reconcile can't be trusted); keep current
+      } else if (this.cur!.native) {
+        // Native incremental: Rust reads the (static) snapshot `dir`, writes a fresh .db as a delta
+        // of the previous file, and we swap to it. needFullRebuild → full; skipped (lossy) → keep.
+        let handled = false;
+        try {
+          const res = nativeRefresh(dir, this.cur!.native);
+          if (res.kind === 'skipped') {
+            handled = true; // lossy → keep current, retry
+          } else if (res.kind === 'needFullRebuild') {
+            doFull();
+            handled = true;
+          } else {
+            const prevStore = this.cur!.store;
+            this.cur = {
+              store: res.store,
+              meta: { ...res.meta, lastFullAt: this.lastFullAt },
+              state: null,
+              lossy: false,
+              native: res.native,
+            };
+            prevStore.close(); // closing the old store deletes its temp .db dir
+            this.incrementalsSinceFull++;
+            this.lastRebuildMs = Date.now() - t0;
+            caughtUp = true;
+            handled = true;
+          }
+        } catch {
+          /* any throw → full rebuild; never leave a torn native store */
+        }
+        if (!handled) doFull();
       } else {
         let handled = false;
         try {

@@ -56,6 +56,14 @@ const LAYERS = {
     binExtra: ['packages/libzaungast/src/schema.sql'],
     nodeFlags: ['--experimental-sqlite'], // TS ingest uses node:sqlite
   },
+  incr: {
+    bin: 'diffincr',
+    mode: 'whole',
+    harness: 'diff-incr.mjs',
+    extra: 'packages/libzaungast/src/schema/versions/teams-2026-07.json',
+    binExtra: ['packages/libzaungast/src/schema.sql'],
+    nodeFlags: ['--experimental-sqlite'], // three-way: native-incr == native-full == TS-full
+  },
 };
 const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 const layerIdx = process.argv.indexOf('--layer');

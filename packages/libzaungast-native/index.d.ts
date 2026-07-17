@@ -28,5 +28,34 @@ export function nativeIngest(
   mappings: string[],
 ): IngestResult;
 
+/** The result of a native incremental refresh (see nativeRefresh). */
+export interface RefreshResult {
+  /** delta couldn't apply (schema tripwire / stale file / mapping gone) — caller must full-rebuild. */
+  needFullRebuild: boolean;
+  /** lossy load — nothing applied; newPath is a byte-copy of prevPath; keep serving it. */
+  skipped: boolean;
+  fingerprint: string;
+  schemaVersion: string | null;
+  selfMri: string | null;
+  lossy: boolean;
+  conversations: number;
+  messages: number;
+  people: number;
+  earliestTs: number;
+}
+
+/**
+ * Incremental refresh (seam A): copy `prevPath` → `newPath`, apply the delta from `dir` up to the
+ * current sequence, rewrite the new file's meta. The previous file is never mutated — on success the
+ * caller swaps to `newPath`. `mappings` are the bundled JSON texts; the mapping is reused (by the
+ * prev file's schemaVersion). Synchronous.
+ */
+export function nativeRefresh(
+  dir: string,
+  prevPath: string,
+  newPath: string,
+  mappings: string[],
+): RefreshResult;
+
 /** Conformance version — the TS `auto` engine only trusts native when this matches its expectation. */
 export function conformanceVersion(): number;

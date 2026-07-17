@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use serde_json::Value;
 
 use crate::html::html_to_text;
-use crate::idb::Snapshot;
+use crate::idb::{Snapshot, SnapshotRecord};
 use crate::sstable::{crc32c_final, crc32c_init, crc32c_update};
 use crate::ssv::{canonical, decode_value, Ssv};
 
@@ -294,4 +294,35 @@ pub fn htmltext_report(snap: &Snapshot, mapping: &Value) -> String {
 /// The store-name SET from a fingerprint, for select_mapping's store-presence check.
 pub fn store_set_from_fp(stores: &[(String, String, Vec<String>)]) -> HashSet<String> {
     stores.iter().map(|(_, s, _)| s.clone()).collect()
+}
+
+/// The mapped-store targets ("dbId:osId", sorted) for one entity — the incremental schema-change
+/// tripwire set. Empty when the entity isn't in the mapping. Mirrors entityTargets in TS.
+pub fn entity_targets_for(snap: &Snapshot, mapping: &Value, name: &str) -> Vec<String> {
+    match mapping.get("entities").and_then(|e| e.get(name)) {
+        Some(d) => entity_targets(snap, &parse_def(d)),
+        None => Vec::new(),
+    }
+}
+
+/// Extract rows for one entity from a SPECIFIC set of records (not whole buckets) — the incremental
+/// delta re-extracts only the changed message-store records. Mirrors extractRecords in TS.
+pub fn extract_rows_from_records(records: &[&SnapshotRecord], mapping: &Value, name: &str) -> Vec<Ssv> {
+    let def = match mapping.get("entities").and_then(|e| e.get(name)) {
+        Some(d) => parse_def(d),
+        None => return Vec::new(),
+    };
+    let mut rows: Vec<Ssv> = Vec::new();
+    for rec in records {
+        let obj = match decode_value(rec.value.as_deref().unwrap_or(&[]), false) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if is_falsy(&obj) {
+            continue;
+        }
+        let rec_key: String = rec.key.iter().map(|&b| b as char).collect(); // latin1
+        rows_from_record(&obj, &rec_key, &def, &mut rows);
+    }
+    rows
 }

@@ -58,4 +58,5 @@ if (!addon) {
 }
 
 module.exports.nativeIngest = addon.nativeIngest;
+module.exports.nativeRefresh = addon.nativeRefresh;
 module.exports.conformanceVersion = addon.conformanceVersion;
