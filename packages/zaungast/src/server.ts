@@ -1,38 +1,12 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { LiveTeamsStore, StoreReading } from 'libzaungast';
-import {
-  listConversations,
-  readMessages,
-  search,
-  topTopics,
-  findPerson,
-  listEvents,
-  listCalls,
-} from './tools.js';
-import { describeSchema } from './tools/describeSchema.js';
-import {
-  listConversationsShape,
-  readMessagesShape,
-  searchShape,
-  topTopicsShape,
-  findPersonShape,
-  listEventsShape,
-  listCallsShape,
-  describeSchemaShape,
-} from './schemas.js';
-
-const HISTORY_NOTE =
-  'Note: this reads the LOCAL Teams cache — history is the synced slice on this device, not the full server archive.';
-
-// The owner's own messages are labelled `<name> (you)`; that speaker is the human account owner,
-// NOT you the assistant — attribute those lines to the user, never to yourself.
-const YOU_NOTE =
-  'The account owner\'s own messages are labelled "<name> (you)" — that speaker is the user, not you the assistant.';
+import type { Snapshot } from 'libzaungast/format/engine';
+import { TOOLS } from './tools.js';
 
 export function buildServer(live: LiveTeamsStore): McpServer {
   const server = new McpServer({ name: 'zaungast', version: '0.1.0' });
 
-  const run = (fn: (view: StoreReading, a: any) => string, args: any) => {
+  const runQuery = (fn: (view: StoreReading, a: any) => string, args: any) => {
     try {
       const view = live.current(); // one probe/refresh decision → a pinned, consistent reading
       if (!view.meta.schemaMatched) {
@@ -56,98 +30,28 @@ export function buildServer(live: LiveTeamsStore): McpServer {
     }
   };
 
-  server.registerTool(
-    'list_conversations',
-    {
-      title: 'List conversations',
-      description: `Your Teams sidebar: the newest N conversations (default), or filter by kind/participant/title/time. ${HISTORY_NOTE}`,
-      inputSchema: listConversationsShape,
-    },
-    async (args) => run(listConversations, args),
-  );
+  const runRaw = (fn: (snap: Snapshot, a: any) => string, args: any) => {
+    try {
+      // Sample the CONSISTENT tmp snapshot backing the current build (never the live Teams dir).
+      const snap = live.reloadSnapshot();
+      return {
+        content: [{ type: 'text' as const, text: fn(snap, args) }],
+      };
+    } catch (e: any) {
+      return {
+        content: [{ type: 'text' as const, text: `error: ${e?.message ?? String(e)}` }],
+        isError: true,
+      };
+    }
+  };
 
-  server.registerTool(
-    'read_messages',
-    {
-      title: 'Read a conversation',
-      description: `Read one conversation's messages in STORY ORDER (oldest→newest). Target by handle (c:xxxx) or title/participant substring. Page back with the returned older: cursor, or center on a message with around:. CHANNELS are grouped by reply-thread (root + replies, newest-active last); pass thread:m:<root> to read one thread in full — the digest prints the exact drill-in call. ${YOU_NOTE} ${HISTORY_NOTE}`,
-      inputSchema: readMessagesShape,
-    },
-    async (args) => run(readMessages, args),
-  );
-
-  server.registerTool(
-    'search',
-    {
-      title: 'Search messages',
-      description: `Full-text search across all messages with filters. Empty query = filtered browse. from/in accept display-name / title substrings or handles. mentions_me finds messages that @mention you. ${YOU_NOTE} ${HISTORY_NOTE}`,
-      inputSchema: searchShape,
-    },
-    async (args) => run(search, args),
-  );
-
-  server.registerTool(
-    'top_topics',
-    {
-      title: 'Trending topics',
-      description: `Distinctive/trending topics over a window (vs your baseline), overall or scoped to a person/conversation. Returns each topic with an exemplar message. ${HISTORY_NOTE}`,
-      inputSchema: topTopicsShape,
-    },
-    async (args) => run(topTopics, args),
-  );
-
-  server.registerTool(
-    'find_person',
-    {
-      title: 'Find a person',
-      description: `Resolve a name/nickname fragment to a person's canonical name and stable p:handle, with message count and last-contact time. Use when a name is ambiguous or unrecognized, or when you need contact stats or a p:handle. For ordinary filtering, just pass a name substring directly to search/read_messages 'from'/'participant' — don't call this first. Omit query to scan the roster (most-talked-to first).`,
-      inputSchema: findPersonShape,
-    },
-    async (args) => run(findPerson, args),
-  );
-
-  server.registerTool(
-    'list_events',
-    {
-      title: 'List calendar events',
-      description: `Your calendar: meetings and appointments, defaulting to a FORWARD window (today..+7d — pass since/until to look elsewhere). type:meeting|appointment|all; query/attendee filter by substring. Metadata by default (attendee names/response tallies, no join URLs — those are never stored); include_body only works on a single narrowed-down event and stays off for [confidential] events regardless. ${HISTORY_NOTE}`,
-      inputSchema: listEventsShape,
-    },
-    async (args) => run(listEvents, args),
-  );
-
-  server.registerTool(
-    'list_calls',
-    {
-      title: 'List call history',
-      description: `Your call log: who called whom, when, and for how long. direction:Outgoing|Incoming, missed:true for the callState=Missed subset, participant filters by resolved counterpart/group name. Deleted calls are filtered out. Tags recorded/voicemail/spam calls and pivots a recording to the chat message that announced it (read_messages around:) when cached. ${HISTORY_NOTE}`,
-      inputSchema: listCallsShape,
-    },
-    async (args) => run(listCalls, args),
-  );
-
-  server.registerTool(
-    'describe_schema',
-    {
-      title: 'Describe / recover schema',
-      description: `Inspect the raw Teams IndexedDB stores and PROPOSE a field mapping. Use when tools report the schema is unrecognized (after a Teams update), or to inspect the DB structure. Proposes only — applies nothing; a human verifies the proposal and saves it as a new schema version.`,
-      inputSchema: describeSchemaShape,
-    },
-    async (args) => {
-      try {
-        // Sample the CONSISTENT tmp snapshot backing the current build (never the live Teams dir).
-        const snap = live.reloadSnapshot();
-        return {
-          content: [{ type: 'text' as const, text: describeSchema(snap, args) }],
-        };
-      } catch (e: any) {
-        return {
-          content: [{ type: 'text' as const, text: `error: ${e?.message ?? String(e)}` }],
-          isError: true,
-        };
-      }
-    },
-  );
+  for (const tool of TOOLS) {
+    server.registerTool(
+      tool.name,
+      { title: tool.title, description: tool.description, inputSchema: tool.inputSchema },
+      async (args: any) => (tool.kind === 'query' ? runQuery(tool.run, args) : runRaw(tool.run, args)),
+    );
+  }
 
   return server;
 }

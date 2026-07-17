@@ -1,5 +1,7 @@
 import { fingerprint, sampleStoreFields } from 'libzaungast/format';
 import type { Snapshot } from 'libzaungast/format/engine';
+import { describeSchemaShape } from '../schemas.js';
+import type { RawTool } from './types.js';
 
 // Propose-only schema recovery: when a Teams update changes the DB layout (unknown
 // fingerprint), sample the raw stores and propose a field mapping for a human to verify and
@@ -199,3 +201,12 @@ export function describeSchema(snap: Snapshot, args: any = {}): string {
   );
   return lines.join('\n');
 }
+
+export const describeSchemaTool: RawTool = {
+  kind: 'raw',
+  name: 'describe_schema',
+  title: 'Describe / recover schema',
+  description: `Inspect the raw Teams IndexedDB stores and PROPOSE a field mapping. Use when tools report the schema is unrecognized (after a Teams update), or to inspect the DB structure. Proposes only — applies nothing; a human verifies the proposal and saves it as a new schema version.`,
+  inputSchema: describeSchemaShape,
+  run: describeSchema,
+};
