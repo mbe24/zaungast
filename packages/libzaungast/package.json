@@ -4,26 +4,32 @@
   "private": true,
   "description": "Read-only, offline reader for the local Microsoft Teams cache (Chromium IndexedDB-on-LevelDB): decodes it into clean, structured, query-able data — conversations, messages, people, events, calls. No Graph API, no cloud, no credentials. Not affiliated with or endorsed by Microsoft.",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
-      "types": "./src/index.ts",
       "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
     "./format": {
-      "types": "./src/format/index.ts",
       "development": "./src/format/index.ts",
+      "types": "./dist/format/index.d.ts",
       "default": "./dist/format/index.js"
     },
     "./format/engine": {
-      "types": "./src/format/engine.ts",
       "development": "./src/format/engine.ts",
+      "types": "./dist/format/engine.d.ts",
       "default": "./dist/format/engine.js"
     }
   },
   "files": [
     "dist"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mbe24/zaungast.git",
+    "directory": "packages/libzaungast"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json && node -e \"require('fs').cpSync('src/schema/versions','dist/schema/versions',{recursive:true})\""
   },

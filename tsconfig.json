@@ -12,6 +12,11 @@
     "declaration": false,
     "sourceMap": false,
     "types": ["node"],
+    // The whole in-repo src-resolution trick hangs on this: with customConditions:["development"],
+    // TS matches the `development` exports-map condition (→ ./src/*.ts) FIRST, so in-repo tooling
+    // typechecks against source, while external consumers (no `development` condition) fall through
+    // to `types` (→ ./dist/*.d.ts) and `default` (→ ./dist/*.js). Package `exports` MUST list
+    // `development` before `types`/`default` for this ordering to hold. (documented per §B)
     "customConditions": ["development"]
   }
 }
