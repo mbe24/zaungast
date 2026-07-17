@@ -9,6 +9,7 @@
 //! resolver / fingerprint / store to follow.
 
 pub mod fingerprint;
+pub mod html;
 pub mod idb;
 pub mod resolver;
 pub mod sha256;

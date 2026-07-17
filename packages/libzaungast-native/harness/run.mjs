@@ -40,6 +40,12 @@ const LAYERS = {
     harness: 'diff-extract.mjs',
     extra: 'packages/libzaungast/src/schema/versions/teams-2026-07.json',
   },
+  htmltext: {
+    bin: 'difftext',
+    mode: 'whole',
+    harness: 'diff-htmltext.mjs',
+    extra: 'packages/libzaungast/src/schema/versions/teams-2026-07.json',
+  },
 };
 const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 const layerIdx = process.argv.indexOf('--layer');

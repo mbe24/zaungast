@@ -7,6 +7,7 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
+use crate::html::html_to_text;
 use crate::idb::Snapshot;
 use crate::sstable::{crc32c_final, crc32c_init, crc32c_update};
 use crate::ssv::{canonical, decode_value, Ssv};
@@ -255,6 +256,39 @@ pub fn extract_report(snap: &Snapshot, mapping: &Value) -> String {
         let _ = writeln!(out, "E\t{}\t{}\t{}\t{}\t{:08x}", name, rows.len(), decoded, dropped, crc32c_final(c));
     }
     out
+}
+
+/// Extract just the rows for one entity (for downstream store-write / transform differentials).
+pub fn extract_rows(snap: &Snapshot, mapping: &Value, name: &str) -> Vec<Ssv> {
+    match mapping.get("entities").and_then(|e| e.get(name)) {
+        Some(d) => extract_entity(snap, &parse_def(d)).0,
+        None => Vec::new(),
+    }
+}
+
+/// htmltext-layer report: htmlToText over every message `content` (extraction order), crc32c'd.
+pub fn htmltext_report(snap: &Snapshot, mapping: &Value) -> String {
+    let rows = extract_rows(snap, mapping, "message");
+    let mut c = crc32c_init();
+    for row in &rows {
+        let content = match row {
+            Ssv::Object(props) => props
+                .iter()
+                .find(|(k, _)| k == "content")
+                .and_then(|(_, v)| if let Ssv::Str(s) = v { Some(s.as_str()) } else { None })
+                .unwrap_or(""),
+            _ => "",
+        };
+        let b = html_to_text(content);
+        let bytes = b.as_bytes();
+        for x in (bytes.len() as u32).to_le_bytes() {
+            c = crc32c_update(c, x);
+        }
+        for &x in bytes {
+            c = crc32c_update(c, x);
+        }
+    }
+    format!("HT\t{}\t{:08x}", rows.len(), crc32c_final(c))
 }
 
 /// The store-name SET from a fingerprint, for select_mapping's store-presence check.
