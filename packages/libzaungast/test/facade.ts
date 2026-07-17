@@ -109,6 +109,81 @@ try {
     `${summaries.length}`,
   );
 
+  // §C: the read_messages `older:` keyset cursor (res.nextOlder) — the one real behavior delta from
+  // the B3 rewire, validated on real data but not in CI until now. Pins: (a) a full page mid-history
+  // offers a cursor whose next page continues with no overlap/gap and paging reconstructs the whole
+  // history; (b) a page that fills exactly at the cache horizon still emits a cursor, and that cursor
+  // yields an empty page (an acceptable dead cursor — no crash, no further cursor); (c) an `around:`
+  // read is a centered window, not a paged read, so it emits no cursor.
+  console.log('\n=== messages.inConversation cursor paging (§C) ===');
+  {
+    // cursor paging is the FLAT-read behavior → pick the busiest flat conversation.
+    const flat = store.conversations
+      .list()
+      .filter((c) => c.kind === '1:1' || c.kind === 'group' || c.kind === 'meeting')
+      .sort((a, b) => b.msgCount - a.msgCount)[0];
+    const cid = flat!.id;
+    const full = store.messages.inConversation(cid, { limit: 100000 });
+    const N = full.ok ? full.rows.length : 0;
+    ok(`§C precondition: a flat conversation with ≥4 messages`, full.ok && N >= 4, `${flat?.kind} N=${N}`);
+
+    if (full.ok && N >= 4) {
+      const allIds = full.rows.map((r) => r.id); // oldest→newest
+      const L = 2;
+
+      // (a) full page mid-history → cursor → next page continues, no overlap / no gap
+      const p1 = store.messages.inConversation(cid, { limit: L });
+      ok('(a) first page fills to the limit', p1.ok && p1.rows.length === L);
+      ok('(a) a full page offers a nextOlder cursor', p1.ok && typeof p1.nextOlder === 'string');
+      if (p1.ok && p1.nextOlder) {
+        const p2 = store.messages.inConversation(cid, { limit: L, cursor: p1.nextOlder });
+        ok('(a) next page returns ok', p2.ok);
+        if (p2.ok) {
+          const s1 = new Set(p1.rows.map((r) => r.id));
+          ok('(a) no overlap between pages', p2.rows.every((r) => !s1.has(r.id)));
+          const o = p1.rows[0]; // p1 is oldest→newest, so rows[0] is its oldest
+          ok(
+            '(a) next page is entirely older than page 1 (no gap/skip)',
+            p2.rows.every((r) => r.ts < o.ts || (r.ts === o.ts && r.id < o.id)),
+          );
+          // full paging reconstructs the entire history in order, no dup/gap
+          const paged: string[] = [];
+          let cur: string | undefined;
+          for (let guard = 0; guard < 1000; guard++) {
+            const pg = store.messages.inConversation(cid, { limit: L, cursor: cur });
+            if (!pg.ok) break;
+            paged.unshift(...pg.rows.map((r) => r.id)); // older pages prepend
+            if (!pg.nextOlder || pg.rows.length === 0) break;
+            cur = pg.nextOlder;
+          }
+          ok(
+            '(a) paging reconstructs full history (no dup/gap)',
+            JSON.stringify(paged) === JSON.stringify(allIds),
+            `${paged.length} vs ${allIds.length}`,
+          );
+        }
+      }
+
+      // (b) a page filling exactly at the horizon still emits a cursor → that cursor yields empty
+      const exact = store.messages.inConversation(cid, { limit: N });
+      ok(
+        '(b) exact-horizon full page still offers a (dead) cursor',
+        exact.ok && exact.rows.length === N && typeof exact.nextOlder === 'string',
+      );
+      if (exact.ok && exact.nextOlder) {
+        const dead = store.messages.inConversation(cid, { limit: L, cursor: exact.nextOlder });
+        ok('(b) dead cursor yields an empty page (no crash)', dead.ok && dead.rows.length === 0);
+        ok('(b) dead cursor emits no further cursor', dead.ok && dead.nextOlder === undefined);
+      }
+
+      // (c) around: a centered window emits no older cursor
+      const mid = full.rows[Math.floor(N / 2)];
+      const ar = store.messages.inConversation(cid, { around: `m:${mid.id}`, limit: L });
+      ok('(c) around: read returns ok', ar.ok);
+      ok('(c) around: emits no nextOlder cursor', ar.ok && ar.nextOlder === undefined);
+    }
+  }
+
   console.log('\n=== people (find / nameFor) ===');
   const ppl = store.people.find();
   ok('people.find() returns rows', ppl.rows.length > 0, `${ppl.mode}/${ppl.rows.length}`);
