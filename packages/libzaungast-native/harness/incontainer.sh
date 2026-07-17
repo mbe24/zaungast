@@ -8,9 +8,10 @@
 #     bash /work/packages/libzaungast-native/harness/incontainer.sh <leveldb-dir> <bin> <perfile|whole>
 # Emits digests on stdout (build log → stderr).
 set -euo pipefail
-DATA="${1:?usage: incontainer.sh <leveldb-dir> <bin> <perfile|whole>}"
+DATA="${1:?usage: incontainer.sh <leveldb-dir> <bin> <perfile|whole> [extra args...]}"
 BIN="${2:?bin name}"
 MODE="${3:-perfile}"
+EXTRA=("${@:4}") # any trailing args passed straight to the bin (e.g. the mapping path)
 # copy source to a writable dir (the /work mount is read-only)
 mkdir -p /build/src
 cp /work/packages/libzaungast-native/Cargo.toml /build/
@@ -18,7 +19,7 @@ cp -r /work/packages/libzaungast-native/src/. /build/src/
 cd /build
 cargo build --release >&2   # builds all [[bin]] targets
 if [ "$MODE" = "whole" ]; then
-  "./target/release/$BIN" "$DATA" 2>/dev/null
+  "./target/release/$BIN" "$DATA" "${EXTRA[@]}" 2>/dev/null
 else
   for f in "$DATA"/*.ldb; do
     printf '%s\t' "$(basename "$f")"

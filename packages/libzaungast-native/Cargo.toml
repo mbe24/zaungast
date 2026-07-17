@@ -11,7 +11,8 @@ name = "libzaungast_native"
 crate-type = ["rlib"]
 
 [dependencies]
-# (none — P1 raw readers are pure std. rusqlite / serde_json land with P3/the store writer.)
+serde_json = "1"
+snap = "1"       # standard raw-block Snappy (byte-identical output; verified vs the TS reader)
 
 # Differential-harness binaries: dump digests to compare against the TS readers.
 [[bin]]
@@ -29,3 +30,7 @@ path = "src/bin/diffssv.rs"
 [[bin]]
 name = "difffp"          # Fingerprint layer: schema hash + per-store report
 path = "src/bin/difffp.rs"
+
+[[bin]]
+name = "diffextract"     # Extract layer: per-entity extracted-row canonical digest
+path = "src/bin/diffextract.rs"

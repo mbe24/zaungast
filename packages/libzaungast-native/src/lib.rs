@@ -10,6 +10,7 @@
 
 pub mod fingerprint;
 pub mod idb;
+pub mod resolver;
 pub mod sha256;
 pub mod snappy;
 pub mod ssv;
