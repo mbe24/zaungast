@@ -64,7 +64,21 @@ function readTablesInto(
 ): boolean {
   let lossy = false;
   for (const f of files) {
-    let res = cache?.get(f);
+    let hit = cache?.get(f);
+    // Self-validate a cache hit by on-disk size: `.ldb` are immutable by name, so a size change means
+    // the file was re-copied (H-A partial→complete, or the rare H-C filename reuse) → the cached parse
+    // is stale, drop it and re-read. (snapshotReuse still re-copies on a live-vs-snapshot size diff —
+    // that re-copy is what changes the size we re-stat here; the engine can't see the live file.)
+    if (hit) {
+      let curSize = -1;
+      try {
+        curSize = fs.statSync(path.join(dir, f)).size;
+      } catch {
+        curSize = -1;
+      }
+      if (curSize !== hit.size) hit = undefined;
+    }
+    let res = hit?.res;
     if (!res) {
       try {
         res = readTable(path.join(dir, f));
@@ -73,7 +87,18 @@ function readTablesInto(
         lossy = true;
         continue;
       }
-      if (cache && !res.lossy) cache.set(f, res);
+      // Cache a CLEAN parse with its on-disk size (for the self-validation above). Only when a cache
+      // is in play — the non-reuse loadSnapshot path passes no cache and must not pay an extra stat.
+      // A stat failure just skips caching (the read itself already succeeded — never mark it lossy).
+      if (cache && !res.lossy) {
+        let size = -1;
+        try {
+          size = fs.statSync(path.join(dir, f)).size;
+        } catch {
+          size = -1;
+        }
+        if (size >= 0) cache.set(f, { res, size });
+      }
     }
     if (res.lossy) lossy = true;
     if (foldTable(res, consider)) lossy = true;

@@ -70,9 +70,12 @@ export interface LoadEntriesReuseResult {
   compacted: boolean;
 }
 
-// Cache of already-parsed (immutable) .ldb tables, keyed by filename, used by
-// the copy-reuse incremental path (loadEntriesReuse).
-export type LdbCache = Map<string, TableReadResult>;
+// Cache of already-parsed (immutable) .ldb tables, keyed by filename, used by the copy-reuse
+// incremental path (loadEntriesReuse). Each entry stores the parse + the on-disk file size at parse
+// time; a cache hit is self-validated by re-stat'ing the file — a size change means the .ldb was
+// re-copied (H-A partial→complete / the rare H-C filename reuse), so the cached parse is stale and is
+// dropped + re-read. Owned by the JS engine instance (createJsEngine).
+export type LdbCache = Map<string, { res: TableReadResult; size: number }>;
 
 // ---- Snapshot: the engine seam ----
 // A `Snapshot` is what a storage engine produces: live records already grouped by object store,

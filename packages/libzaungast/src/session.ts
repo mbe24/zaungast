@@ -1,11 +1,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { applyIncremental, type Ingested } from './ingest/ingest.js';
-import { jsEngine } from './ingest/js-engine.js';
+import { type Ingested } from './ingest/ingest.js';
+import { createJsEngine, type JsEngine } from './ingest/js-engine.js';
 import { nativeRefresh } from './ingest/native.js';
 import { discoverTeamsDbs } from './format/index.js';
-import { loadSnapshotReuse } from './format/chromium/indexeddb.js';
 
 // Self-heal backstop: force a full rebuild at least this often, so any incremental drift is
 // bounded to minutes. (Correctness doesn't depend on it — incremental reconciles deletions —
@@ -98,7 +97,7 @@ export class Session {
   private lastRebuildMs = 0;
   private lastFullAt = 0;
   private incrementalsSinceFull = 0;
-  private ldbCache = new Map<string, any>(); // filename → parsed sstable (copy-reuse mode)
+  private readonly engine: JsEngine = createJsEngine(); // owns the JS copy-reuse parse cache
   private pendingFull = false; // copy-reuse latched a "must full-rebuild" (H-D)
   private readonly minDebounceMs: number;
   private readonly maxIncrementals: number;
@@ -159,9 +158,10 @@ export class Session {
       const src = path.join(liveDir, f),
         dst = path.join(dir, f);
       if (f.endsWith('.ldb')) {
-        // .ldb are immutable → skip only if the dest is a COMPLETE copy (same size). A size
-        // mismatch means a prior partial copy (H-A) or — extremely rare — a recreated DB reusing
-        // the filename (H-C); either way re-copy and drop the now-suspect cached parse.
+        // .ldb are immutable → skip re-copy only if the dest is a COMPLETE copy (same size). A size
+        // mismatch means a prior partial copy (H-A) or — extremely rare — a recreated DB reusing the
+        // filename (H-C); either way re-copy. The re-copy changes the dest size, which the JS engine's
+        // parse cache self-validates against (dropping the now-stale cached parse) on the next load.
         try {
           const ss = fs.statSync(src),
             ds = fs.existsSync(dst) ? fs.statSync(dst) : null;
@@ -169,7 +169,6 @@ export class Session {
         } catch {
           /* src vanished → copy will fail → lossy */
         }
-        this.ldbCache.delete(f);
       }
       if (!copyFileWithRetry(src, dst)) lossy = true;
     }
@@ -195,42 +194,34 @@ export class Session {
     } catch {
       return false;
     }
-    // compaction pre-check: a cached .ldb gone from live → defer to the reparse path (which
-    // reconciles compaction-elided deletions via its fresh full read). Prune the dead cache
-    // entries so copy-reuse can resume next refresh instead of bailing until the backstop.
-    const liveLdb = new Set(fs.readdirSync(liveDir).filter((f) => f.endsWith('.ldb')));
-    let compacted = false;
-    for (const f of this.ldbCache.keys())
-      if (!liveLdb.has(f)) {
-        this.ldbCache.delete(f);
-        compacted = true;
-      }
-    if (compacted) return false;
 
     const t0 = Date.now();
     try {
-      // H-E: snapshotReuse + loadEntriesReuse are inside the try so a throw there (e.g. an
-      // rmSync EPERM in the mirror-delete) also falls back to the reparse path, not aborts.
+      // Snapshot PRODUCTION stays here (mirror live → the persistent snapshot dir; the tmp-safety
+      // contract is the Session's). The JS engine then decodes + applies over that dir, reusing its
+      // own .ldb parse cache. H-E: snapshotReuse + the engine load are inside the try so a throw
+      // (e.g. an rmSync EPERM in the mirror-delete) also falls back to the reparse path, not aborts.
       const lossy = this.snapshotReuse(liveDir, this.snapshotDir);
-      const loaded = loadSnapshotReuse(this.snapshotDir, this.ldbCache);
-      if (lossy || loaded.lossy) {
+      if (lossy) {
         this.lastIngestAt = Date.now();
         return true;
-      } // skip, keep current, retry
-      if (loaded.compacted) return false; // secondary safety net (pre-check should have caught it)
-
-      const r = applyIncremental(this.cur.store, this.cur.state, loaded);
-      if (r.skipped) {
+      } // lossy mirror → keep current, retry
+      // Compaction (a cached .ldb gone) surfaces as reuseRefresh → 'defer' (loadSnapshotReuse detects
+      // it + prunes the dead entries so reuse resumes next time): we defer to the shared
+      // reparse-incremental refresh, whose fresh full read reconciles the compaction-elided deletions.
+      const res = this.engine.reuseRefresh(this.cur, this.snapshotDir);
+      if (res === 'defer') return false;
+      if (res.kind === 'skipped') {
         this.lastIngestAt = Date.now();
         return true;
       }
-      // H-D: a needFullRebuild (or a post-COMMIT-throw funneled through it) demands a fresh FULL
-      // rebuild, not a reparse-incremental — latch it so refresh() forces a full.
-      if (r.needFullRebuild) {
+      // H-D: a needFull (or a post-COMMIT-throw funneled through it) demands a fresh FULL rebuild,
+      // not a reparse-incremental — latch it so refresh() forces a full.
+      if (res.kind === 'needFull') {
         this.pendingFull = true;
         return false;
       }
-      this.cur.state.maxSeq = r.newMaxSeq;
+      // 'inplace': the engine mutated the store + advanced its own state; the Session stamps policy.
       this.incrementalsSinceFull++;
       const c = this.cur.store.counts();
       this.cur.meta = {
@@ -282,7 +273,7 @@ export class Session {
     // keep it and retry next refresh. Accept a lossy full only as a cold start (nothing yet) —
     // but then do NOT mark the source caught-up, so it keeps retrying and the meta stays lossy.
     const doFull = (): void => {
-      const next = jsEngine.full(dir);
+      const next = this.engine.full(dir);
       const lossy = snapLossy || next.lossy;
       if (lossy && this.cur?.meta.schemaMatched) {
         next.store.close();
@@ -295,8 +286,7 @@ export class Session {
       this.incrementalsSinceFull = 0;
       this.lastRebuildMs = Date.now() - t0;
       caughtUp = !lossy;
-      // fresh full snapshot dir → drop the copy-reuse cache; the next reuse repopulates from it
-      this.ldbCache.clear();
+      // (the JS engine clears its own copy-reuse parse cache inside engine.full)
     };
 
     const wantFull =
@@ -350,7 +340,7 @@ export class Session {
         try {
           // JS incremental via jsEngine (mutates the store + advances state in place); the Session
           // owns the policy re-stamp (meta + counters) on a successful 'inplace' apply.
-          const res = jsEngine.refresh(this.cur!, dir);
+          const res = this.engine.refresh(this.cur!, dir);
           if (res.kind === 'skipped') {
             handled = true;
           } // lossy read → keep current, retry
