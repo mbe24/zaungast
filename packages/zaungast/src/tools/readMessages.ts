@@ -22,7 +22,7 @@ import {
 // Resolve a `conversation` selector (handle or title/participant substring) to a single
 // conversation id, or an early-return string (ambiguous-picker text, or a "no match" message)
 // when it can't unambiguously resolve. `conversations.resolve` returns candidate views newest-first.
-function resolveConversationArg(
+export function resolveConversationArg(
   view: View,
   conversation: string,
 ): { id: string } | { early: string } {
@@ -46,7 +46,7 @@ function resolveConversationArg(
 // most-recent, per-group `+K` overflow), groups 4–5 show glyph+count only, group 6+ collapses to
 // `+N more` (N = remaining reactor count, so the histogram total stays honest). `full` drops all
 // caps and names everyone — for "did person X react?". Returns '' when there are no reactions.
-function renderReactions(
+export function renderReactions(
   reactions: ReactionGroup[],
   view: View,
   selfMri: string | null,
@@ -101,7 +101,7 @@ interface ReactionCtx {
 }
 
 // Sender label: the owner as "<name> (you)", everyone else by display name.
-function whoLabel(r: Message, ownerFallback: string | null): string {
+export function whoLabel(r: Message, ownerFallback: string | null): string {
   return r.isMine ? ownerLabel(r.senderName, ownerFallback) : r.senderName || '(unknown)';
 }
 
@@ -366,6 +366,7 @@ export function readMessages(view: View, args: ReadMessagesArgs = {} as ReadMess
   const bt = badTime(args, ['since', 'until']);
   if (bt) return bt;
   if (!args.conversation) return 'error: conversation (handle or title substring) is required';
+  if (args.around && args.thread) return 'error: pass either around: or thread:, not both';
   const resolved = resolveConversationArg(view, String(args.conversation));
   if ('early' in resolved) return resolved.early;
   const id = resolved.id;
@@ -409,7 +410,7 @@ export const readMessagesTool: QueryTool = {
   kind: 'query',
   name: 'read_messages',
   title: 'Read a conversation',
-  description: `Read one conversation's messages in STORY ORDER (oldest→newest). Target by handle (c:xxxx) or title/participant substring. Page back with the returned older: cursor, or center on a message with around:. CHANNELS are grouped by reply-thread (root + replies, newest-active last); pass thread:m:<root> to read one thread in full — the digest prints the exact drill-in call. ${YOU_NOTE} ${HISTORY_NOTE}`,
+  description: `Read one conversation's messages in STORY ORDER (oldest→newest). Target by handle (c:xxxx) or title/participant substring. Page back with the returned older: cursor, or center on a message with around:. CHANNELS are grouped by reply-thread (root + replies, newest-active last); pass thread:m:<root> to read one thread in full — the digest prints the exact drill-in call. To read ONE message's COMPLETE body, use get_message with its m:<id>. ${YOU_NOTE} ${HISTORY_NOTE}`,
   inputSchema: readMessagesShape,
   run: readMessages,
 };

@@ -5,6 +5,7 @@
 import type { Tool } from './tools/types.js';
 import { listConversations, listConversationsTool } from './tools/listConversations.js';
 import { readMessages, readMessagesTool } from './tools/readMessages.js';
+import { getMessage, getMessageTool } from './tools/getMessage.js';
 import { search, searchTool } from './tools/search.js';
 import { topTopics, topTopicsTool } from './tools/topTopics.js';
 import { findPerson, findPersonTool } from './tools/findPerson.js';
@@ -13,11 +14,21 @@ import { listCalls, listCallsTool } from './tools/listCalls.js';
 import { describeSchemaTool } from './tools/describeSchema.js';
 
 export { fmtTs, parseTime } from './tools/shared.js';
-export { listConversations, readMessages, search, topTopics, findPerson, listEvents, listCalls };
+export {
+  listConversations,
+  readMessages,
+  getMessage,
+  search,
+  topTopics,
+  findPerson,
+  listEvents,
+  listCalls,
+};
 
 export const TOOLS: Tool[] = [
   listConversationsTool,
   readMessagesTool,
+  getMessageTool,
   searchTool,
   topTopicsTool,
   findPersonTool,

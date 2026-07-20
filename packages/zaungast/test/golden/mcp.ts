@@ -45,8 +45,16 @@ class FrozenDate extends RealDate {
 (globalThis as unknown as { Date: typeof Date }).Date = FrozenDate as unknown as typeof Date;
 
 const { openStore } = await import('libzaungast');
-const { listConversations, readMessages, search, topTopics, findPerson, listEvents, listCalls } =
-  await import('zaungast/tools.js');
+const {
+  listConversations,
+  readMessages,
+  getMessage,
+  search,
+  topTopics,
+  findPerson,
+  listEvents,
+  listCalls,
+} = await import('zaungast/tools.js');
 const { generateFixtureWithTables } = await import('../../../libzaungast/test/fixture/generate.js');
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -112,11 +120,25 @@ function render(dir: string): string {
       `read_messages {conversation:"${chan.handle}", reactions:"full"}`,
       readMessages(store, { conversation: chan.handle, limit: 40, reactions: 'full' }),
     );
-    if (threadRootId)
+    if (threadRootId) {
       add(
         `read_messages {conversation:"${chan.handle}", thread:"m:${threadRootId}"}`,
         readMessages(store, { conversation: chan.handle, thread: `m:${threadRootId}` }),
       );
+      // get_message: full single-message render. The thread root has no pivot pointer (rootId===id);
+      // a reply (rootId!==id) shows the "in thread …" pivot. Exercises the full-body envelope.
+      add(
+        `get_message {conversation:"${chan.handle}", message:"m:${threadRootId}"} (thread root)`,
+        getMessage(store, { conversation: chan.handle, message: `m:${threadRootId}` }),
+      );
+      const cm2 = store.messages.inConversation(chan.id, { limit: 500 });
+      const reply = cm2.ok ? cm2.rows.find((r) => r.rootId !== r.id) : undefined;
+      if (reply)
+        add(
+          `get_message {conversation:"${chan.handle}", message:"m:${reply.id}"} (reply → pivot)`,
+          getMessage(store, { conversation: chan.handle, message: `m:${reply.id}` }),
+        );
+    }
   }
   add('search {query:"the", limit:10}', search(store, { query: 'the', limit: 10 }));
   add('search {mentions_me:true, limit:6}', search(store, { mentions_me: true, limit: 6 }));

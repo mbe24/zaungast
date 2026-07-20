@@ -21,6 +21,7 @@ import {
   topTopics,
   findPerson,
   readMessages,
+  getMessage,
   listEvents,
   listCalls,
 } from 'zaungast/tools.js';
@@ -128,6 +129,35 @@ ok(
   ownSearch.slice(0, 300),
 );
 ok('no bare "ME>" label remains in search', !/(^|\s)ME>/.test(ownSearch), ownSearch.slice(0, 300));
+
+// ---- 8a. get_message: fetch ONE message in full (untruncated body, char-window head, thread pivot).
+console.log('\n=== get_message (single message, full body) ===');
+{
+  const gc = store.conversations.list({ kind: 'channel' })[0];
+  const gm = store.messages.inConversation(gc.id, { limit: 500 });
+  const root = gm.ok ? gm.rows.find((r) => r.rootId === r.id) : undefined;
+  const reply = gm.ok ? gm.rows.find((r) => r.rootId !== r.id) : undefined;
+  if (root) {
+    const out = getMessage(store, { conversation: gc.handle, message: `m:${root.id}` });
+    ok('get_message returns the full body verbatim', out.includes(root.content), out.slice(0, 200));
+    ok(
+      'get_message head shows the char window',
+      /full body · chars 0\.\.\d+\/\d+/.test(out),
+      out.slice(0, 200),
+    );
+    ok('get_message on a thread root shows NO pivot', !/in thread m:/.test(out), out);
+  }
+  if (reply) {
+    const out = getMessage(store, { conversation: gc.handle, message: `m:${reply.id}` });
+    ok(
+      'get_message on a reply shows the thread pivot',
+      new RegExp(`in thread m:${reply.rootId}`).test(out),
+      out,
+    );
+  }
+  const miss = getMessage(store, { conversation: gc.handle, message: 'm:doesnotexist' });
+  ok('get_message reports a missing id', /not found in this conversation/.test(miss), miss);
+}
 
 // ---- 8b. channel reply-chain rendering (digest / thread mode / around-pivot) ----
 console.log('\n=== channel threaded rendering ===');

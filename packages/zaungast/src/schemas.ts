@@ -45,6 +45,17 @@ export const readMessagesShape = {
     .describe('"full" lists every reactor by name (default shows a capped summary)'),
 };
 
+export const getMessageShape = {
+  conversation: z.string().describe('conversation handle (c:xxxx) or title/participant substring'),
+  message: z.string().describe('the message id to fetch — the m:… value from a search hit'),
+  offset: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe('start the body this many characters in (default 0), to continue a long body'),
+};
+
 export const searchShape = {
   query: z.string().optional().describe('FTS query; omit to browse by filters only'),
   from: z.string().optional().describe('sender: display-name substring or p:handle'),
@@ -116,6 +127,7 @@ export const describeSchemaShape = {
 
 export type ListConversationsArgs = z.infer<z.ZodObject<typeof listConversationsShape>>;
 export type ReadMessagesArgs = z.infer<z.ZodObject<typeof readMessagesShape>>;
+export type GetMessageArgs = z.infer<z.ZodObject<typeof getMessageShape>>;
 export type SearchArgs = z.infer<z.ZodObject<typeof searchShape>>;
 export type TopTopicsArgs = z.infer<z.ZodObject<typeof topTopicsShape>>;
 export type FindPersonArgs = z.infer<z.ZodObject<typeof findPersonShape>>;

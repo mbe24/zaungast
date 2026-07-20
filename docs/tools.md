@@ -88,6 +88,24 @@ How it's rendered (tuned against real data, where 16% of messages carry reaction
 - `reactions: full` drops the caps and lists every reactor for every emoji — for when you need to
   know whether a _specific_ person reacted.
 
+## `get_message`
+
+Fetch **one** message in full — its complete, untruncated body (line breaks preserved) plus its
+reactions. `read_messages` browses a conversation and clips each body to a preview; `get_message`
+reads a single message end-to-end.
+
+| Arg            | Description                                                                       |
+| -------------- | --------------------------------------------------------------------------------- |
+| `conversation` | `c:` handle or title/participant substring (**required**).                        |
+| `message`      | The message id — the `m:…` value from a search hit or thread root (**required**). |
+| `offset`       | Start the body this many characters in (default 0), to continue a long body.      |
+
+The header names the conversation, the `m:<id>`, and the character window
+(`full body · chars 0..N/total`); a body longer than ~4000 characters ends with a
+`… +N chars · get_message(offset:<n>)` continuation you can follow. If the message sits inside a
+thread, an `in thread m:<root> · read_messages(thread: m:<root>)` pointer lets you pivot to its
+surrounding context.
+
 ## `search`
 
 Full-text search (FTS5) with filters. An empty `query` becomes a filtered browse.
