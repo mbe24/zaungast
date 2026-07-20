@@ -8,7 +8,8 @@ import {
 } from '../format/index.js';
 import type { SnapshotRecord, Snapshot } from '../format/types.js';
 import { ChatStore, type StoreMeta } from './store.js';
-import { resolveEngine, nativeIngest, type Engine, type NativeHandle } from './native.js';
+import { resolveEngine, type Engine } from './engine.js';
+import { nativeIngest, type NativeHandle } from './native.js';
 import { htmlToText, isSystemMessage, mentionedMris, hasAttachment } from '../util/text.js';
 
 export function convKind(id = ''): string {

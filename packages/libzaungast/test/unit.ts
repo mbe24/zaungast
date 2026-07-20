@@ -8,7 +8,7 @@ import { htmlToText, isSystemMessage, mentionedMris } from '../src/util/text.js'
 import { makeHandle } from '../src/util/handles.js';
 import { makeExtractor } from '../src/util/topics.js';
 import { isBotMri } from '../src/ingest/store.js';
-import { resolveEngine } from '../src/ingest/native.js';
+import { resolveEngine } from '../src/ingest/engine.js';
 import { discoverTeamsDbs } from '../src/format/index.js';
 import fs from 'node:fs';
 import os from 'node:os';

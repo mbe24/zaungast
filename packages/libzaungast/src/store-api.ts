@@ -9,7 +9,7 @@
 // Error contract (stated once): a FALLIBLE facade query returns `{ ok: false, reason: QueryMiss } |
 // { ok: true, … }`; an INFALLIBLE one returns its rows/value directly. Never a silent fall-through.
 import { ingest, type Ingested } from './ingest/ingest.js';
-import type { Engine } from './ingest/native.js';
+import type { Engine } from './ingest/engine.js';
 import type { ChatStore, StoreMeta } from './ingest/store.js';
 import { Session, type SessionOptions } from './session.js';
 import { loadSnapshot, fingerprint, selectMapping } from './format/index.js';

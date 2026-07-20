@@ -11,8 +11,6 @@ import { ChatStore, SCHEMA_SQL, type StoreMeta } from './store.js';
 import { loadBundledMappingTexts } from '../format/resolver.js';
 import type { Ingested } from './ingest.js';
 
-export type Engine = 'auto' | 'js' | 'native';
-
 // A native-built store's on-disk handle: the current .db file + the temp dir holding it. The Session
 // keeps this on `Ingested.native` so a later native refresh can read the previous file + swap.
 export interface NativeHandle {
@@ -75,18 +73,6 @@ function loadAddon(): NativeAddon | null {
     cached = null; // not installed / no prebuilt binary for this platform
   }
   return cached;
-}
-
-// Resolve the effective engine: explicit env override (ZAUNGAST_ENGINE) wins, then the option, else
-// the default 'js'. An unrecognized env value is ignored (falls through to the option/default).
-//
-// Default is 'js' (NOT 'auto'): the native engine is not picked up implicitly, even when a prebuilt
-// addon is present, until it's proven across platforms. Opt in per-call with engine:'auto'|'native'
-// or globally with ZAUNGAST_ENGINE. Revisit the default once native has real multi-platform mileage.
-export function resolveEngine(opt?: Engine): Engine {
-  const env = (process.env.ZAUNGAST_ENGINE || '').toLowerCase();
-  if (env === 'js' || env === 'native' || env === 'auto') return env;
-  return opt ?? 'js';
 }
 
 // Run the native FULL ingest. Returns an Ingested on success, or null when native is unavailable and
