@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ingest, applyIncremental, type Ingested } from './ingest/ingest.js';
+import { applyIncremental, type Ingested } from './ingest/ingest.js';
+import { jsEngine } from './ingest/js-engine.js';
 import { nativeRefresh } from './ingest/native.js';
 import { discoverTeamsDbs } from './format/index.js';
 import { loadSnapshotReuse } from './format/chromium/indexeddb.js';
@@ -281,7 +282,7 @@ export class Session {
     // keep it and retry next refresh. Accept a lossy full only as a cold start (nothing yet) —
     // but then do NOT mark the source caught-up, so it keeps retrying and the meta stays lossy.
     const doFull = (): void => {
-      const next = ingest(dir);
+      const next = jsEngine.full(dir);
       const lossy = snapLossy || next.lossy;
       if (lossy && this.cur?.meta.schemaMatched) {
         next.store.close();
@@ -347,15 +348,16 @@ export class Session {
       } else {
         let handled = false;
         try {
-          const r = applyIncremental(this.cur!.store, this.cur!.state!, dir);
-          if (r.skipped) {
+          // JS incremental via jsEngine (mutates the store + advances state in place); the Session
+          // owns the policy re-stamp (meta + counters) on a successful 'inplace' apply.
+          const res = jsEngine.refresh(this.cur!, dir);
+          if (res.kind === 'skipped') {
             handled = true;
           } // lossy read → keep current, retry
-          else if (r.needFullRebuild) {
+          else if (res.kind === 'needFull') {
             doFull();
             handled = true;
-          } else {
-            this.cur!.state!.maxSeq = r.newMaxSeq;
+          } else if (res.kind === 'inplace') {
             this.incrementalsSinceFull++;
             const c = this.cur!.store.counts();
             this.cur!.meta = {

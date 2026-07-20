@@ -1,6 +1,26 @@
-// Ingest-engine SELECTION POLICY: which backend runs, and how it's chosen. Kept separate from
-// native.ts (which is native MECHANISM only) — two of the three engine values ('js', 'auto') have
-// nothing to do with native, so the vocabulary + default belong here, not in the native module.
+// The ingest-engine SEAM: the pluggable engine contract (IngestEngine) + the current selection
+// policy (Engine string / resolveEngine). Kept separate from native.ts (native MECHANISM only).
+import type { Ingested } from './ingest.js';
+
+// The outcome of one incremental refresh, as a discriminated union so the Session stays
+// engine-agnostic:
+//   inplace  — the engine mutated prev.store in place (JS); the caller re-stamps meta + counters.
+//   swapped  — the engine produced a fresh store to swap in (native new-file-swap).
+//   skipped  — nothing applied (e.g. a lossy read); keep serving the current store, retry next time.
+//   needFull — the delta can't apply (schema tripwire / stale) → the caller must full-rebuild.
+export type RefreshResult =
+  | { kind: 'inplace' }
+  | { kind: 'swapped'; next: Ingested }
+  | { kind: 'skipped' }
+  | { kind: 'needFull' };
+
+// A pluggable ingest engine: build a full store from a snapshot dir, or apply an incremental refresh
+// onto a prior build. The JS engine (jsEngine) is the default; a native engine implements the same
+// contract. `full`'s `seqCap` (tests only) builds a partial store as of an earlier sequence.
+export interface IngestEngine {
+  full(dir: string, opts?: { seqCap?: number }): Ingested;
+  refresh(prev: Ingested, dir: string): RefreshResult;
+}
 
 export type Engine = 'auto' | 'js' | 'native';
 
