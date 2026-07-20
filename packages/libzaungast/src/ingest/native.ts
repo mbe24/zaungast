@@ -28,7 +28,7 @@ const EXPECTED_CONFORMANCE = 1;
 interface NativeIngestResult {
   fingerprint: string;
   schemaMatched: boolean;
-  schemaVersion: string | null;
+  mappingVersion: string | null;
   lossy: boolean;
   selfMri: string | null;
   conversations: number;
@@ -41,7 +41,7 @@ interface NativeRefreshResult {
   needFullRebuild: boolean;
   skipped: boolean;
   fingerprint: string;
-  schemaVersion: string | null;
+  mappingVersion: string | null;
   selfMri: string | null;
   lossy: boolean;
   conversations: number;
@@ -119,7 +119,7 @@ export function nativeIngest(dir: string, engine: 'auto' | 'native'): Ingested |
   const meta: StoreMeta = {
     asOf: now,
     fingerprint: r.fingerprint,
-    schemaVersion: r.schemaVersion,
+    mappingVersion: r.mappingVersion,
     schemaMatched: r.schemaMatched,
     counts: { conversations: r.conversations, messages: r.messages, people: r.people },
     earliestTs: r.earliestTs,
@@ -160,7 +160,7 @@ export function nativeRefresh(
   const meta: StoreMeta = {
     asOf: now,
     fingerprint: r.fingerprint,
-    schemaVersion: r.schemaVersion,
+    mappingVersion: r.mappingVersion,
     schemaMatched: true,
     counts: { conversations: r.conversations, messages: r.messages, people: r.people },
     earliestTs: r.earliestTs,

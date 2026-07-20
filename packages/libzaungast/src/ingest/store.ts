@@ -11,7 +11,7 @@ export const SCHEMA_SQL = readFileSync(new URL('../schema.sql', import.meta.url)
 export interface StoreMeta {
   asOf: number; // ingest completion time (epoch ms)
   fingerprint: string;
-  schemaVersion: string | null;
+  mappingVersion: string | null;
   schemaMatched: boolean; // false = unknown Teams schema; store is empty, run describe_schema
   counts: { conversations: number; messages: number; people: number };
   earliestTs: number;

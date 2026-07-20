@@ -6,7 +6,7 @@ const { store, meta } = ingest(dir);
 const ms = Date.now() - t0;
 
 console.log(
-  `ingest ${ms}ms · fingerprint ${meta.fingerprint} · schema ${meta.schemaVersion} · fts ${meta.ftsEnabled}`,
+  `ingest ${ms}ms · fingerprint ${meta.fingerprint} · mapping ${meta.mappingVersion} · fts ${meta.ftsEnabled}`,
 );
 console.log(
   `counts: ${meta.counts.conversations} conv · ${meta.counts.messages} msg · ${meta.counts.people} people`,

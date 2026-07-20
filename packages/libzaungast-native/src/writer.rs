@@ -574,12 +574,12 @@ pub fn ingest_to_file(
     conn.execute_batch(schema).map_err(|e| format!("schema exec: {e}"))?;
     conn.execute_batch(FTS_CREATE).map_err(|e| format!("fts create: {e}"))?;
 
-    let (schema_matched, schema_version, self_mri) = match selected {
+    let (schema_matched, mapping_version, self_mri) = match selected {
         Some(m) => {
             populate(&conn, &snap, m);
             // Write the in-file contract (_meta + user_version) so a later refresh reads its floor +
             // reuses this mapping. compute_state re-derives selfMri/targets/maxSeq from the snapshot.
-            let ver = m.get("schemaVersion").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let ver = m.get("mappingVersion").and_then(|v| v.as_str()).map(|s| s.to_string());
             let state = compute_state(&snap, m);
             write_meta(&conn, &fp.hash, ver.as_deref(), snap.lossy, &state)?;
             (true, ver, state.self_mri)
@@ -604,7 +604,7 @@ pub fn ingest_to_file(
     let outcome = IngestOutcome {
         fingerprint: fp.hash.clone(),
         schema_matched,
-        schema_version,
+        mapping_version,
         lossy: snap.lossy,
         self_mri,
         conversations: count("conversations"),
@@ -621,7 +621,7 @@ pub fn ingest_to_file(
 pub struct IngestOutcome {
     pub fingerprint: String,
     pub schema_matched: bool,
-    pub schema_version: Option<String>,
+    pub mapping_version: Option<String>,
     pub lossy: bool,
     pub self_mri: Option<String>,
     pub conversations: i64,
@@ -911,7 +911,7 @@ fn refresh_fts(conn: &Connection) {
 
 /// The state carried between refreshes (what a full ingest recorded so a later delta can validate the
 /// schema hasn't shifted + knows the sequence floor). Mirrors TS IngestState, minus the mapping (the
-/// caller reuses the same mapping — re-selected by schemaVersion from the file's _meta).
+/// caller reuses the same mapping — re-selected by mappingVersion from the file's _meta).
 pub struct RefreshState {
     pub self_mri: Option<String>,
     pub max_seq: u64,
@@ -1071,7 +1071,7 @@ pub fn refresh_store(conn: &Connection, snap: &Snapshot, mapping: &Value, state:
 
 // ---- writer↔reader contract: PRAGMA user_version + the in-file _meta table ----
 // The .db file is the contract (self-describing), not an FFI-return sidecar. `_meta` carries the
-// StoreMeta bits NOT recoverable by query (fingerprint/schemaVersion/selfMri/lossy) PLUS the
+// StoreMeta bits NOT recoverable by query (fingerprint/mappingVersion/selfMri/lossy) PLUS the
 // incremental state (maxSeq + mapped-store targets) so a later refresh reads its floor from the file.
 
 /// Create + write the single-row `_meta` table and stamp user_version. `_meta` is native-only (not in
@@ -1079,24 +1079,24 @@ pub fn refresh_store(conn: &Connection, snap: &Snapshot, mapping: &Value, state:
 fn write_meta(
     conn: &Connection,
     fingerprint: &str,
-    schema_version: Option<&str>,
+    mapping_version: Option<&str>,
     lossy: bool,
     state: &RefreshState,
 ) -> Result<(), String> {
     let targets_json = |t: &[String]| serde_json::to_string(t).unwrap_or_else(|_| "[]".into());
     conn.execute_batch(
         "create table if not exists _meta(
-           fingerprint text, schema_version text, self_mri text, lossy int,
+           fingerprint text, mapping_version text, self_mri text, lossy int,
            max_seq int, msg_targets text, conv_targets text);
          delete from _meta;",
     )
     .map_err(|e| format!("_meta create: {e}"))?;
     conn.execute(
-        "insert into _meta(fingerprint,schema_version,self_mri,lossy,max_seq,msg_targets,conv_targets)
+        "insert into _meta(fingerprint,mapping_version,self_mri,lossy,max_seq,msg_targets,conv_targets)
          values(?,?,?,?,?,?,?)",
         params![
             fingerprint,
-            schema_version,
+            mapping_version,
             state.self_mri,
             lossy as i64,
             state.max_seq as i64,
@@ -1115,7 +1115,7 @@ fn write_meta(
 pub struct FileMeta {
     pub stale: bool,
     pub fingerprint: String,
-    pub schema_version: Option<String>,
+    pub mapping_version: Option<String>,
     pub lossy: bool,
     pub state: RefreshState,
 }
@@ -1128,7 +1128,7 @@ fn read_meta(conn: &Connection) -> Result<FileMeta, String> {
         return Ok(FileMeta {
             stale: true,
             fingerprint: String::new(),
-            schema_version: None,
+            mapping_version: None,
             lossy: false,
             state: RefreshState { self_mri: None, max_seq: 0, msg_targets: vec![], conv_targets: vec![] },
         });
@@ -1137,13 +1137,13 @@ fn read_meta(conn: &Connection) -> Result<FileMeta, String> {
         serde_json::from_str::<Vec<String>>(&s).unwrap_or_default()
     };
     conn.query_row(
-        "select fingerprint,schema_version,self_mri,lossy,max_seq,msg_targets,conv_targets from _meta limit 1",
+        "select fingerprint,mapping_version,self_mri,lossy,max_seq,msg_targets,conv_targets from _meta limit 1",
         [],
         |r| {
             Ok(FileMeta {
                 stale: false,
                 fingerprint: r.get::<_, Option<String>>(0)?.unwrap_or_default(),
-                schema_version: r.get::<_, Option<String>>(1)?,
+                mapping_version: r.get::<_, Option<String>>(1)?,
                 lossy: r.get::<_, i64>(3)? != 0,
                 state: RefreshState {
                     self_mri: r.get::<_, Option<String>>(2)?,
@@ -1158,7 +1158,7 @@ fn read_meta(conn: &Connection) -> Result<FileMeta, String> {
 }
 
 /// Incremental seam-A entry (across FFI calls): copy the previous file to `new_path`, read its
-/// `_meta` for the refresh floor + the same mapping (reused by schemaVersion), apply the delta up to
+/// `_meta` for the refresh floor + the same mapping (reused by mappingVersion), apply the delta up to
 /// the current sequence, and rewrite `_meta`. On a schema tripwire / stale file / lossy load it
 /// signals the caller to full-rebuild instead (need_full_rebuild) or serve-current (skipped). The
 /// previous file is never mutated (TS may still hold a read-only handle on it) — TS swaps to new_path.
@@ -1182,12 +1182,12 @@ pub fn refresh_to_file(
         .iter()
         .map(|s| serde_json::from_str::<Value>(s).map_err(|e| format!("mapping JSON: {e}")))
         .collect::<Result<_, _>>()?;
-    // Reuse the SAME mapping the prior full ingest used, by schemaVersion (not re-selected).
+    // Reuse the SAME mapping the prior full ingest used, by mappingVersion (not re-selected).
     let mapping = match mappings.iter().find(|m| {
-        m.get("schemaVersion").and_then(|v| v.as_str()) == fm.schema_version.as_deref()
+        m.get("mappingVersion").and_then(|v| v.as_str()) == fm.mapping_version.as_deref()
     }) {
         Some(m) => m,
-        None => return Ok(RefreshFileOutcome::rebuild()), // mapping for that schemaVersion is gone
+        None => return Ok(RefreshFileOutcome::rebuild()), // mapping for that mappingVersion is gone
     };
 
     let snap = load_snapshot(dir).map_err(|e| format!("load_snapshot: {e}"))?;
@@ -1203,7 +1203,7 @@ pub fn refresh_to_file(
     // Rewrite _meta with the new state (recomputed from the full snapshot) + refresh user_version.
     let new_state = compute_state(&snap, mapping);
     let fp = crate::fingerprint::fingerprint(&snap);
-    write_meta(&conn, &fp.hash, fm.schema_version.as_deref(), snap.lossy, &new_state)?;
+    write_meta(&conn, &fp.hash, fm.mapping_version.as_deref(), snap.lossy, &new_state)?;
 
     let out = RefreshFileOutcome {
         need_full_rebuild: false,
@@ -1225,7 +1225,7 @@ fn counts_of(conn: &Connection, fm: &FileMeta) -> RefreshFileOutcome {
         need_full_rebuild: false,
         skipped: false,
         fingerprint: fm.fingerprint.clone(),
-        schema_version: fm.schema_version.clone(),
+        mapping_version: fm.mapping_version.clone(),
         self_mri: fm.state.self_mri.clone(),
         lossy: fm.lossy,
         conversations: count("conversations"),
@@ -1240,7 +1240,7 @@ pub struct RefreshFileOutcome {
     pub need_full_rebuild: bool,
     pub skipped: bool,
     pub fingerprint: String,
-    pub schema_version: Option<String>,
+    pub mapping_version: Option<String>,
     pub self_mri: Option<String>,
     pub lossy: bool,
     pub conversations: i64,
@@ -1254,7 +1254,7 @@ impl RefreshFileOutcome {
             need_full_rebuild: true,
             skipped: false,
             fingerprint: String::new(),
-            schema_version: None,
+            mapping_version: None,
             self_mri: None,
             lossy: false,
             conversations: 0,

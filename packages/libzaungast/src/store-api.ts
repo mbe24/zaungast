@@ -141,7 +141,7 @@ export type TopicsComputeResult =
 export interface StoreInspection {
   fingerprint: string;
   schemaMatched: boolean;
-  schemaVersion: string | null;
+  mappingVersion: string | null;
   lossy: boolean;
 }
 
@@ -472,7 +472,7 @@ export function inspect(dir: string): StoreInspection {
   return {
     fingerprint: fp.hash,
     schemaMatched: !!mapping,
-    schemaVersion: mapping?.schemaVersion ?? null,
+    mappingVersion: mapping?.mappingVersion ?? null,
     lossy: snap.lossy,
   };
 }

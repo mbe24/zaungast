@@ -290,7 +290,7 @@ export const CONVERSATIONS: ConversationDef[] = [
   },
 ];
 
-// ---- calendar ("event" mapping entity — src/schema/versions/teams-2026-07.json) ----
+// ---- calendar ("event" mapping entity — the bundled Teams mapping) ----
 // Fixed ISO timestamps (no Date.now()/no-arg new Date()), clustered near BASE_TS's month so a
 // single since:'2026-01-01' window in tests covers everything deterministically.
 const evIso = (day: number, hour: number, minute = 0): string =>

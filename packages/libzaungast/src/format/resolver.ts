@@ -22,27 +22,32 @@ export function loadMapping(path: string): Mapping {
   return JSON.parse(fs.readFileSync(path, 'utf8'));
 }
 
-// The mapping files bundled with the package (src/schema/versions/*.json; copied to dist/ by the
-// build, so this resolves the same in dev and prod). Loaded once and cached — they're static
-// shipped data.
+// The mapping files bundled with the package live in src/schema/versions/ (copied to dist/ by the
+// build, so this resolves the same in dev and prod). The SET + ORDER is declared explicitly in the
+// registry (../schema/mappings.json) — NOT discovered by globbing the dir. Globbing would (a) pick up
+// stray/draft files and (b) leave selection precedence to filesystem order once multiple mappings
+// coexist; the registry is the single, reviewable source of truth (listed newest/most-specific first,
+// which is the precedence for selectMapping's coarse store-presence fallback). Adding a mapping = add
+// one line there. The harness reads the same registry, so the filename is hardcoded in exactly one place.
 const VERSIONS_DIR = fileURLToPath(new URL('../schema/versions/', import.meta.url));
+const REGISTRY = fileURLToPath(new URL('../schema/mappings.json', import.meta.url));
+let mappingFiles: string[] | null = null;
+function bundledMappingFiles(): string[] {
+  if (!mappingFiles) mappingFiles = JSON.parse(fs.readFileSync(REGISTRY, 'utf8')) as string[];
+  return mappingFiles;
+}
+
 let bundledMappings: Mapping[] | null = null;
 export function loadBundledMappings(): Mapping[] {
   if (!bundledMappings)
-    bundledMappings = fs
-      .readdirSync(VERSIONS_DIR)
-      .filter((f) => f.endsWith('.json'))
-      .map((f) => loadMapping(path.join(VERSIONS_DIR, f)));
+    bundledMappings = bundledMappingFiles().map((f) => loadMapping(path.join(VERSIONS_DIR, f)));
   return bundledMappings;
 }
 
 // Raw JSON text of every bundled mapping — handed verbatim to the native engine, which does its own
 // fingerprint + selectMapping (seam A: the expensive read lives in Rust, so TS can't pre-select).
 export function loadBundledMappingTexts(): string[] {
-  return fs
-    .readdirSync(VERSIONS_DIR)
-    .filter((f) => f.endsWith('.json'))
-    .map((f) => fs.readFileSync(path.join(VERSIONS_DIR, f), 'utf8'));
+  return bundledMappingFiles().map((f) => fs.readFileSync(path.join(VERSIONS_DIR, f), 'utf8'));
 }
 
 // Pick a mapping for the given fingerprint: exact hash match, else store-presence match. Defaults to

@@ -27,6 +27,13 @@ const REPO = path.resolve(CRATE, '..', '..'); // repo root
 const RUNNER = (process.env.ZAUNGAST_NATIVE_RUNNER || 'auto').toLowerCase();
 const IMAGE = process.env.ZAUNGAST_NATIVE_IMAGE || 'rust:1-slim-bookworm';
 
+// The mapping the diff bins compare against — read from the single-source registry
+// (schema/mappings.json), NOT hardcoded here, so a rename/version bump touches only the registry.
+// The diff bins take one mapping file; use the first (highest-precedence) registered entry.
+const MAPPING = `packages/libzaungast/src/schema/versions/${
+  JSON.parse(fs.readFileSync(path.join(REPO, 'packages/libzaungast/src/schema/mappings.json'), 'utf8'))[0]
+}`;
+
 // layer config: which native bin + how it's invoked + which TS comparator.
 const LAYERS = {
   sstable: { bin: 'difftable', mode: 'perfile', harness: 'diff-sstable.mjs' },
@@ -38,19 +45,19 @@ const LAYERS = {
     bin: 'diffextract',
     mode: 'whole',
     harness: 'diff-extract.mjs',
-    extra: 'packages/libzaungast/src/schema/versions/teams-2026-07.json',
+    extra: MAPPING,
   },
   htmltext: {
     bin: 'difftext',
     mode: 'whole',
     harness: 'diff-htmltext.mjs',
-    extra: 'packages/libzaungast/src/schema/versions/teams-2026-07.json',
+    extra: MAPPING,
   },
   store: {
     bin: 'diffstore',
     mode: 'whole',
     harness: 'diff-store.mjs',
-    extra: 'packages/libzaungast/src/schema/versions/teams-2026-07.json',
+    extra: MAPPING,
     // binExtra: passed to the Rust bin ONLY (after `extra`), not to the TS harness. The store bin
     // reads the DDL from the SAME single-source schema.sql the TS ingest uses (Topic 1 seam proof).
     binExtra: ['packages/libzaungast/src/schema.sql'],
@@ -60,7 +67,7 @@ const LAYERS = {
     bin: 'diffincr',
     mode: 'whole',
     harness: 'diff-incr.mjs',
-    extra: 'packages/libzaungast/src/schema/versions/teams-2026-07.json',
+    extra: MAPPING,
     binExtra: ['packages/libzaungast/src/schema.sql'],
     nodeFlags: ['--experimental-sqlite'], // three-way: native-incr == native-full == TS-full
   },

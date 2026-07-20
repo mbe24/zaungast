@@ -153,8 +153,8 @@ const mappings = fs
 const { mapping, via } = selectMapping(fp, { mappings });
 ok(
   'mapping resolved',
-  mapping?.schemaVersion === 'teams-2026-07',
-  `via=${via} got=${mapping?.schemaVersion}`,
+  mapping?.mappingVersion === '1.0.0',
+  `via=${via} got=${mapping?.mappingVersion}`,
 );
 console.log(`  resolved via: ${via}`);
 
@@ -205,7 +205,7 @@ eq(
 );
 
 // ---- 3b. reactions (decode round-trip): message.properties.emotions, mapped by the
-// 'reactions' field ("properties.emotions") in teams-2026-07.json, must decode back out of the
+// 'reactions' field ("properties.emotions") in the Teams mapping, must decode back out of the
 // generated leveldb bytes exactly as declared in data.ts — keys, reactor MRIs, per-reactor
 // counts, and times. This is decode-level only: no tool-rendering assertions here.
 console.log('\n=== reactions (decode round-trip) ===');

@@ -7,3 +7,4 @@ import { fileURLToPath } from 'node:url';
 const pkg = fileURLToPath(new URL('..', import.meta.url)); // packages/libzaungast/
 cpSync(`${pkg}src/schema/versions`, `${pkg}dist/schema/versions`, { recursive: true });
 copyFileSync(`${pkg}src/schema.sql`, `${pkg}dist/schema.sql`);
+copyFileSync(`${pkg}src/schema/mappings.json`, `${pkg}dist/schema/mappings.json`); // the mapping registry

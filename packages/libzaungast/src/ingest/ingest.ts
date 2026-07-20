@@ -304,7 +304,7 @@ function finalMeta(
   return {
     asOf: Date.now(),
     fingerprint: fp.hash,
-    schemaVersion: mapping?.schemaVersion ?? null,
+    mappingVersion: mapping?.mappingVersion ?? null,
     schemaMatched: true,
     counts: { conversations: c.conversations, messages: c.messages, people: c.people },
     earliestTs: c.earliestTs,
@@ -409,7 +409,7 @@ export function ingest(dir: string, opts: { seqCap?: number; engine?: Engine } =
       meta: {
         asOf: Date.now(),
         fingerprint: ex.fp.hash,
-        schemaVersion: null,
+        mappingVersion: null,
         schemaMatched: false,
         counts: { conversations: 0, messages: 0, people: 0 },
         earliestTs: 0,

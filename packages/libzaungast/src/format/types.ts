@@ -197,7 +197,7 @@ export interface EntityDef {
 }
 
 export interface Mapping {
-  schemaVersion: string;
+  mappingVersion: string; // semver of THIS mapping artifact (our revision), not a Teams version
   description?: string;
   knownFingerprints?: string[];
   match?: { requireStores?: string[] };

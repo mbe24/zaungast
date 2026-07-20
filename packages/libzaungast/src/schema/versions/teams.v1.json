@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "teams-2026-07",
+  "mappingVersion": "1.0.0",
   "description": "New Teams (MSTeams/EBWebView) https_teams.microsoft.com IndexedDB. First known-good mapping.",
   "knownFingerprints": ["a2b71d03bf1d8da7"],
   "match": {

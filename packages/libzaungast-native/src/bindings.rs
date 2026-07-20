@@ -19,7 +19,7 @@ pub fn conformance_version() -> u32 {
 pub struct IngestResult {
     pub fingerprint: String,
     pub schema_matched: bool,
-    pub schema_version: Option<String>,
+    pub mapping_version: Option<String>,
     pub lossy: bool,
     pub self_mri: Option<String>,
     pub conversations: u32,
@@ -44,7 +44,7 @@ pub fn native_ingest(
     Ok(IngestResult {
         fingerprint: o.fingerprint,
         schema_matched: o.schema_matched,
-        schema_version: o.schema_version,
+        mapping_version: o.mapping_version,
         lossy: o.lossy,
         self_mri: o.self_mri,
         conversations: o.conversations as u32,
@@ -63,7 +63,7 @@ pub struct RefreshResult {
     pub need_full_rebuild: bool,
     pub skipped: bool,
     pub fingerprint: String,
-    pub schema_version: Option<String>,
+    pub mapping_version: Option<String>,
     pub self_mri: Option<String>,
     pub lossy: bool,
     pub conversations: u32,
@@ -75,7 +75,7 @@ pub struct RefreshResult {
 /// Incremental refresh (seam A): copy `prevPath` → `newPath`, apply the delta from `dir` up to the
 /// current sequence, and rewrite the new file's in-file meta. The previous file is never mutated (TS
 /// may hold a read-only handle) — on success TS swaps to `newPath`. `mappings` are the bundled JSON
-/// texts (the same set as nativeIngest); the mapping is reused by schemaVersion from the prev file.
+/// texts (the same set as nativeIngest); the mapping is reused by mappingVersion from the prev file.
 #[napi]
 pub fn native_refresh(
     dir: String,
@@ -89,7 +89,7 @@ pub fn native_refresh(
         need_full_rebuild: o.need_full_rebuild,
         skipped: o.skipped,
         fingerprint: o.fingerprint,
-        schema_version: o.schema_version,
+        mapping_version: o.mapping_version,
         self_mri: o.self_mri,
         lossy: o.lossy,
         conversations: o.conversations as u32,

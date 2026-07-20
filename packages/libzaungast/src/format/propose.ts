@@ -111,7 +111,7 @@ function buildEntity(cand: any, iterate?: string): any {
 // keyed by the entity name the resolver expects.
 function buildProposal(fpHash: string, msgCand: any[], convCand: any[]): any {
   const proposal: any = {
-    schemaVersion: 'teams-PROPOSED',
+    mappingVersion: '0.0.0-proposed',
     knownFingerprints: [fpHash],
     match: { requireStores: [] },
     entities: {},

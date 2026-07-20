@@ -148,7 +148,7 @@ function buildReplychainRecord(conv: ConversationDef): Record<string, unknown> {
   return { id: conv.id, conversationId: conv.id, messageMap };
 }
 
-// Inverse of the 'event' mapping entity (src/schema/versions/teams-2026-07.json): field names
+// Inverse of the 'event' mapping entity (the bundled Teams mapping): field names
 // here are the RAW Teams calendar record's, not the mapped/derived ones. NOTE: real Teams data
 // decodes startTime/endTime as an actual structured-clone Date (see ingest.ts's toEpochMs doc) —
 // the fixture's encodeValue has no Date case, so these travel as plain ISO strings instead;

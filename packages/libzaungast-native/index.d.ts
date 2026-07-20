@@ -6,7 +6,7 @@
 export interface IngestResult {
   fingerprint: string;
   schemaMatched: boolean;
-  schemaVersion: string | null;
+  mappingVersion: string | null;
   lossy: boolean;
   selfMri: string | null;
   conversations: number;
@@ -35,7 +35,7 @@ export interface RefreshResult {
   /** lossy load — nothing applied; newPath is a byte-copy of prevPath; keep serving it. */
   skipped: boolean;
   fingerprint: string;
-  schemaVersion: string | null;
+  mappingVersion: string | null;
   selfMri: string | null;
   lossy: boolean;
   conversations: number;
@@ -48,7 +48,7 @@ export interface RefreshResult {
  * Incremental refresh (seam A): copy `prevPath` → `newPath`, apply the delta from `dir` up to the
  * current sequence, rewrite the new file's meta. The previous file is never mutated — on success the
  * caller swaps to `newPath`. `mappings` are the bundled JSON texts; the mapping is reused (by the
- * prev file's schemaVersion). Synchronous.
+ * prev file's mappingVersion). Synchronous.
  */
 export function nativeRefresh(
   dir: string,
