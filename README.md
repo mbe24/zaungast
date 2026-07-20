@@ -131,6 +131,7 @@ block (as above).
 | `TEAMS_LEVELDB_DIR`    | auto-discovered | Absolute path to the `…indexeddb.leveldb` folder (examples below). Set only if auto-discovery fails, or to pin one profile when you have several. |
 | `ZAUNGAST_INCREMENTAL` | `copy-reuse`    | Refresh mode: `copy-reuse` (faster) or `reparse` (simpler).                                                                                       |
 | `ZAUNGAST_DB_DIR`      | unset           | Read a static _copy_ of the database directly (offline analysis); skips discovery and live refresh.                                               |
+| `ZAUNGAST_ENGINE`      | `js`            | Ingest engine: `js` (built-in, zero-dep), `native` (require the optional `libzaungast-native` accelerator; errors if unavailable), or `auto` (native when available, else JS). See [Configuration → Native engine](docs/configuration.md). |
 
 `TEAMS_LEVELDB_DIR` points at the folder ending in **`.indexeddb.leveldb`** (the one holding
 `CURRENT`, `MANIFEST-*`, `*.ldb`/`*.log`) — **not** its parent `IndexedDB` directory:
