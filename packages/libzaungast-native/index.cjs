@@ -2,10 +2,12 @@
 // platform/arch/libc and re-exports its symbols (napi-rs maps Rust snake_case → JS camelCase, so
 // `native_ingest` → `nativeIngest`, `conformance_version` → `conformanceVersion`).
 //
-// napi-rs's `napi build` regenerates a richer version of this file (with optional-dependency
-// fallback per triple). This hand-written loader is the committed baseline: it finds a colocated
-// `.node` built locally or shipped in this package, and throws a clear, actionable error otherwise
-// — libzaungast's engine switch catches that and falls back to the JS engine.
+// CommonJS on purpose (`.cjs`): the package is `type: module`, but the ESM shim (src/native.ts)
+// requires this loader via createRequire — a native addon is a CJS artifact. This hand-written loader
+// is the committed one; the build routes napi-rs's own generated loader to a scratch file so it never
+// clobbers this. It finds a colocated `.node` (built locally or shipped) and throws a clear, actionable
+// error otherwise — createNativeEngine() catches that and reports the engine unavailable, so the
+// consumer falls back to libzaungast's built-in JS engine.
 'use strict';
 
 const { existsSync } = require('node:fs');

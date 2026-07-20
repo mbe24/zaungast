@@ -1,2 +1,6 @@
 /target
 Cargo.lock
+dist
+*.node
+.napi-loader.cjs
+.napi-loader.d.ts

@@ -2,13 +2,21 @@
   "name": "libzaungast-native",
   "version": "0.0.0",
   "private": true,
-  "description": "Optional native (Rust) accelerator for libzaungast: reads the Teams leveldb dir and writes the ChatStore SQLite file end-to-end (seam A). Install alongside libzaungast to opt into the native engine; libzaungast never depends on it.",
-  "main": "index.js",
-  "types": "index.d.ts",
-  "type": "commonjs",
+  "description": "Optional native (Rust) accelerator for libzaungast: reads the Teams leveldb dir and writes the ChatStore SQLite file end-to-end (seam A). Install alongside libzaungast to opt into the native engine via createNativeEngine(); libzaungast never depends on it.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "license": "Apache-2.0",
   "engines": {
     "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "libzaungast": "*"
   },
   "napi": {
     "name": "libzaungast-native",
@@ -22,13 +30,13 @@
     }
   },
   "files": [
-    "index.js",
-    "index.d.ts",
+    "dist",
+    "index.cjs",
     "*.node"
   ],
   "scripts": {
-    "build": "napi build --platform --release --features napi",
-    "build:debug": "napi build --platform --features napi",
+    "build": "napi build --platform --release --features napi --js .napi-loader.cjs --dts .napi-loader.d.ts && tsc -p tsconfig.json",
+    "build:debug": "napi build --platform --features napi --js .napi-loader.cjs --dts .napi-loader.d.ts && tsc -p tsconfig.json",
     "artifacts": "napi artifacts",
     "prepublishOnly": "napi prepublish -t npm"
   },
