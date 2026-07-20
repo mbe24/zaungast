@@ -80,7 +80,7 @@ create table calls(
   participants text,           -- compact JSON [{mri,name}] for MultiParty
   group_thread_id text,        -- groupChatThreadId (19:…@thread.v2) for MultiParty chat pivot
   has_recording integer default 0,
-  recording_link text,         -- JSON {conversationId, linkedMessageId} for read_messages pivot
+  recording_link text,         -- JSON {conversationId, linkedMessageId} for get_message pivot
   has_voicemail integer default 0,
   spam_level text,             -- spamRiskLevel; render [spam?] only when risky (non-null/none)
   is_current_user_part integer default 1,

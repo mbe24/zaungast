@@ -18,27 +18,34 @@ export const listConversationsShape = {
     .describe('include 0-message conversations (team roots); off by default'),
 };
 
-export const readMessagesShape = {
+export const readConversationShape = {
   conversation: z.string().describe('conversation handle (c:xxxx) or title/participant substring'),
   limit: z.number().int().min(1).max(200).optional().describe('default 40'),
   since: z.string().optional(),
   until: z.string().optional(),
+  cursor: z.string().optional().describe('the older:… value from a previous result, to page back'),
+  reactions: z
+    .enum(['full'])
+    .optional()
+    .describe('"full" lists every reactor by name (default shows a capped summary)'),
+};
+
+export const readThreadShape = {
+  conversation: z.string().describe('conversation handle (c:xxxx) or title/participant substring'),
+  thread: z
+    .string()
+    .describe('the reply-chain to read — the m:… of its root OR of any reply in the chain'),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe('window size for a huge chain (default 30)'),
   cursor: z
     .string()
     .optional()
-    .describe('the older:… (or in-thread more:…) value from a previous result, to page'),
-  around: z
-    .string()
-    .optional()
-    .describe(
-      'a message id (the m:… value from a search hit) to center on (its thread, in channels)',
-    ),
-  thread: z
-    .string()
-    .optional()
-    .describe(
-      'in a channel, a thread id (the m:… of a reply-chain root) to read that thread in full',
-    ),
+    .describe('the more:… (before m:…) value from a previous result, to page back'),
   reactions: z
     .enum(['full'])
     .optional()
@@ -126,7 +133,8 @@ export const describeSchemaShape = {
 };
 
 export type ListConversationsArgs = z.infer<z.ZodObject<typeof listConversationsShape>>;
-export type ReadMessagesArgs = z.infer<z.ZodObject<typeof readMessagesShape>>;
+export type ReadConversationArgs = z.infer<z.ZodObject<typeof readConversationShape>>;
+export type ReadThreadArgs = z.infer<z.ZodObject<typeof readThreadShape>>;
 export type GetMessageArgs = z.infer<z.ZodObject<typeof getMessageShape>>;
 export type SearchArgs = z.infer<z.ZodObject<typeof searchShape>>;
 export type TopTopicsArgs = z.infer<z.ZodObject<typeof topTopicsShape>>;

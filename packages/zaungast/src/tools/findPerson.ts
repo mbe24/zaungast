@@ -30,7 +30,7 @@ export const findPersonTool: QueryTool = {
   kind: 'query',
   name: 'find_person',
   title: 'Find a person',
-  description: `Resolve a name/nickname fragment to a person's canonical name and stable p:handle, with message count and last-contact time. Use when a name is ambiguous or unrecognized, or when you need contact stats or a p:handle. For ordinary filtering, just pass a name substring directly to search/read_messages 'from'/'participant' — don't call this first. Omit query to scan the roster (most-talked-to first).`,
+  description: `Resolve a name/nickname fragment to a person's canonical name and stable p:handle, with message count and last-contact time. Use when a name is ambiguous or unrecognized, or when you need contact stats or a p:handle. For ordinary filtering, just pass a name substring directly to search (from/in) or read_conversation (conversation) — don't call this first. Omit query to scan the roster (most-talked-to first).`,
   inputSchema: findPersonShape,
   run: findPerson,
 };

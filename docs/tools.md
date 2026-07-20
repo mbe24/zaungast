@@ -22,41 +22,36 @@ Your Teams sidebar. With no arguments, returns the most-recently-active conversa
 | `since`         | ISO date or relative (`-7d`, `-24h`).                         |
 | `include_empty` | Include 0-message conversations (team roots); off by default. |
 
-## `read_messages`
+## `read_conversation`
 
-One conversation's messages in **story order** (oldest→newest). The header shows the local
-cache span and an `older:` cursor for paging.
+Browse one conversation's messages in **story order** (oldest→newest). The header shows the local
+cache span and an `older:` cursor for paging back.
 
-| Arg               | Description                                                                          |
-| ----------------- | ------------------------------------------------------------------------------------ |
-| `conversation`    | `c:` handle or title/participant substring (**required**).                           |
-| `limit`           | Default 40, max 200.                                                                 |
-| `since` / `until` | Time window (ISO or relative).                                                       |
-| `cursor`          | The `older:…` (or in-thread `more:…`) value from a previous result, to page.         |
-| `around`          | A message id (`m:…` from a search hit) to center on (its thread, in channels).       |
-| `thread`          | In a channel, a thread id (`m:…` of a reply-chain root) to read that thread in full. |
-| `reactions`       | `full` to list every reactor by name (default shows a capped summary).               |
+| Arg               | Description                                                            |
+| ----------------- | ---------------------------------------------------------------------- |
+| `conversation`    | `c:` handle or title/participant substring (**required**).             |
+| `limit`           | Default 40, max 200.                                                   |
+| `since` / `until` | Time window (ISO or relative).                                         |
+| `cursor`          | The `older:…` value from a previous result, to page back.              |
+| `reactions`       | `full` to list every reactor by name (default shows a capped summary). |
 
-Consecutive messages from the same sender are collapsed with `↳`. Markers: `[@me]`,
-`[attachment]`.
+Consecutive messages from the same sender are collapsed with `↳`. Markers: `[@me]`, `[attachment]`.
 
 ### Channels are threaded
 
 In **channels**, output is grouped by reply-chain instead of interleaved by time: each thread
-shows its **root** in full, then replies indented beneath it, and threads are ordered by **last
-activity** (most-recently-active at the bottom). Small threads (≤5 messages) show every reply;
-larger ones show the root + last 3 replies and a drill-in marker naming the exact call:
+shows its **root** in full, then recent replies indented beneath it, threads ordered by **last
+activity** (most-recently-active at the bottom). Big threads show the root + last 3 replies and a
+drill-in marker naming the exact call:
 
 ```
 09:14 Hana Björk> proposal: move CI to the new runners  [thread m:1747033 · 20 replies · last 10:41]
-  +17 earlier · read_messages(thread: m:1747033)
+  +17 earlier · read_thread(thread: m:1747033)
   16:20 Bob Ito> staging is green on the new pool
   10:41 Hana Björk> 🎉
 ```
 
-Pass `thread: m:<root>` to read one thread in full (it inlines up to ~40 messages, then pages
-backward with a `more: before m:<id>` cursor and reports `complete` when done). `around: m:<id>`
-in a channel resolves to that message's thread (marking the hit with `→`). 1:1, group, and
+To read one thread in full, use **`read_thread`** with its `m:<id>` (below). 1:1, group, and
 meeting conversations stay flat and chronological.
 
 Your own messages are labelled **`<Your Name> (you)`** (not `ME`), and the result header carries a
@@ -87,6 +82,24 @@ How it's rendered (tuned against real data, where 16% of messages carry reaction
   this fully renders 99.9% of reacted messages without a `+N more`.
 - `reactions: full` drops the caps and lists every reactor for every emoji — for when you need to
   know whether a _specific_ person reacted.
+
+## `read_thread`
+
+Read **one** channel reply-chain in full (root + all replies, in order).
+
+| Arg            | Description                                                                           |
+| -------------- | ------------------------------------------------------------------------------------- |
+| `conversation` | `c:` handle or title/participant substring (**required**).                            |
+| `thread`       | The chain to read — the `m:…` of its **root, or of any reply** in it (**required**).  |
+| `limit`        | Window size for a very long chain (default 30).                                       |
+| `cursor`       | The `more:…` (`before m:…`) value from a previous result, to page back.               |
+| `reactions`    | `full` to list every reactor by name.                                                 |
+
+It inlines the whole chain up to ~40 messages; larger chains window (newest, or centered on a
+targeted reply) and page backward with a `more: before m:<id>` cursor, reporting `complete` when
+done. Passing a reply's `m:<id>` (instead of the root) centers on it and marks it with `→`.
+Reactions render exactly as in `read_conversation`. Use `read_conversation` to browse the whole
+channel; use this to read one discussion end-to-end.
 
 ## `get_message`
 

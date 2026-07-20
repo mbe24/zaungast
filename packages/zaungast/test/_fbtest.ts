@@ -2,7 +2,7 @@
 // MCP renderers. Real-data smoke test (ZAUNGAST_TEST_DIR).
 import { openStore } from 'libzaungast';
 import { loadSnapshot } from 'libzaungast/format';
-import { search, topTopics, findPerson, readMessages } from 'zaungast/tools.js';
+import { search, topTopics, findPerson, readConversation } from 'zaungast/tools.js';
 import { describeSchema } from 'zaungast/tools/describeSchema.js';
 
 const DIR = process.argv[2] ?? process.env.ZAUNGAST_TEST_DIR;
@@ -98,11 +98,11 @@ console.log('=== describe_schema nested labeling ===');
   ok('labels the record level', /record fields:/.test(ds));
 }
 
-console.log('=== read_messages header ===');
+console.log('=== read_conversation header ===');
 {
   ok(
     'header shows local cache bounds',
-    /local cache .+–.+/.test(readMessages(store, { conversation: busiest.handle, limit: 2 })),
+    /local cache .+–.+/.test(readConversation(store, { conversation: busiest.handle, limit: 2 })),
   );
 }
 

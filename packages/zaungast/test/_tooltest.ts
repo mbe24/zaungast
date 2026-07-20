@@ -1,5 +1,5 @@
 import { openStore } from 'libzaungast';
-import { listConversations, readMessages, search, topTopics } from 'zaungast/tools.js';
+import { listConversations, readConversation, search, topTopics } from 'zaungast/tools.js';
 
 const DIR = process.argv[2] ?? process.env.ZAUNGAST_TEST_DIR;
 if (!DIR) {
@@ -21,8 +21,8 @@ show(
 const top = store.conversations.list({ n: 1 })[0];
 if (top)
   show(
-    `read_messages {conversation:"${top.handle}", limit:6}`,
-    readMessages(store, { conversation: top.handle, limit: 6 }),
+    `read_conversation {conversation:"${top.handle}", limit:6}`,
+    readConversation(store, { conversation: top.handle, limit: 6 }),
   );
 
 show('search {query:"weekend", limit:4}', search(store, { query: 'weekend', limit: 4 }));

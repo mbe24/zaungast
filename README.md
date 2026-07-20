@@ -109,7 +109,8 @@ fails or to pin a specific profile. From-source setup and other clients are cove
 | Tool                 | What it does                                                                                          |
 | -------------------- | ----------------------------------------------------------------------------------------------------- |
 | `list_conversations` | Your Teams sidebar — newest conversations, or filter by kind/participant/title/time.                  |
-| `read_messages`      | One conversation's messages in story order (window / cursor / around a hit).                          |
+| `read_conversation`  | Browse one conversation's messages in story order (window / date-range / page back).                  |
+| `read_thread`        | Read one channel reply-chain in full (root + all replies).                                            |
 | `get_message`        | One message in full — complete untruncated body + reactions, by conversation + `m:<id>`.              |
 | `search`             | Full-text search + filters (from, in, kind, `mentions_me`, has-attachment, date).                     |
 | `list_events`        | Calendar meetings & appointments (forward window by default); metadata-only, join-URLs never exposed. |

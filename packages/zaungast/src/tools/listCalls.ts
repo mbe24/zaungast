@@ -15,7 +15,7 @@ function humanizeDuration(ms: number): string {
   return `${h}h${pad(m % 60)}m`;
 }
 
-// The recording/transcript pointer resolved into a `read_messages`-ready pivot: the announcement
+// The recording/transcript pointer resolved into a `get_message`-ready pivot: the announcement
 // message's conversation handle + id. Skips gracefully (returns '') if unresolvable — the
 // conversation may not be cached, or the JSON may be malformed.
 function renderRecordingPivot(view: View, link: RecordingLink | null): string {
@@ -59,7 +59,7 @@ export const listCallsTool: QueryTool = {
   kind: 'query',
   name: 'list_calls',
   title: 'List call history',
-  description: `Your call log: who called whom, when, and for how long. direction:Outgoing|Incoming, missed:true for the callState=Missed subset, participant filters by resolved counterpart/group name. Deleted calls are filtered out. Tags recorded/voicemail/spam calls and pivots a recording to the chat message that announced it (read_messages around:) when cached. ${HISTORY_NOTE}`,
+  description: `Your call log: who called whom, when, and for how long. direction:Outgoing|Incoming, missed:true for the callState=Missed subset, participant filters by resolved counterpart/group name. Deleted calls are filtered out. Tags recorded/voicemail/spam calls and pivots a recording to the chat message that announced it (read it with get_message) when cached. ${HISTORY_NOTE}`,
   inputSchema: listCallsShape,
   run: listCalls,
 };

@@ -15,7 +15,7 @@ export function likeEscape(s: string): string {
 }
 
 // ---------- resolvers (name/handle → ids) ----------
-// Shared by the message-oriented tools (read_messages/search/top_topics). Pure resolution over the
+// Shared by the message-oriented tools (read_conversation/search/top_topics). Pure resolution over the
 // store; the MCP layer wraps these with agent-facing disambiguation/coverage text.
 
 // A conversation selector (c:handle or title/participant substring) → matching conversation ids.
@@ -638,7 +638,7 @@ export function queryConversations(
 }
 
 // ---------- calls ----------
-// A call recording's pivot to the cached chat message that announced it (for a read_messages jump).
+// A call recording's pivot to the cached chat message that announced it (for a get_message jump).
 // Parsed from the stored JSON; null when absent or incomplete.
 export interface RecordingLink {
   conversationId: string;

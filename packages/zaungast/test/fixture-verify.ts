@@ -1,6 +1,7 @@
 // MCP tool-surface regression test. Generates the synthetic fixture into a temp dir, opens it via
 // the PUBLIC libzaungast facade (`openStore`), and smoke-tests the whole zaungast MCP tool surface
-// (search / list_conversations / top_topics / find_person / read_messages / list_events /
+// (search / list_conversations / top_topics / find_person / read_conversation / read_thread /
+// get_message / list_events /
 // list_calls) against it — reaction rendering, the (you) identity label, channel reply-chain
 // rendering, and the list_events / list_calls render contracts. Runs in CI with no real Teams cache
 // (no PII). Sets a non-zero exit code on any failure.
@@ -20,7 +21,8 @@ import {
   listConversations,
   topTopics,
   findPerson,
-  readMessages,
+  readConversation,
+  readThread,
   getMessage,
   listEvents,
   listCalls,
@@ -69,9 +71,9 @@ ok('find_person resolves a seeded student', /Ada Lovelace/i.test(person), person
 // ---- 7. reactions RENDERED by read_messages: glyph mapping, two-level cap, you-first, and the
 // crucial end-to-end guarantee — a profiles-only reactor (never posted) resolves to a NAME in the
 // actual tool output, not just in the decoded record.
-console.log('\n=== reactions (read_messages rendering) ===');
+console.log('\n=== reactions (read_conversation rendering) ===');
 // Find the conversation that CONTAINS a message matching `contentLike` (the facade equivalent of the
-// old raw `... from messages where content like ?`), then render it whole through the read_messages
+// old raw `... from messages where content like ?`), then render it whole through the read_conversation
 // tool. `messages.search` returns SearchHits carrying `convId`; `conversations.get` maps id→handle.
 const renderConv = (contentLike: string, opts: { reactions?: 'full' } = {}): string => {
   const res = store.messages.search({ query: contentLike, limit: 20 });
@@ -79,7 +81,7 @@ const renderConv = (contentLike: string, opts: { reactions?: 'full' } = {}): str
     ? res.rows.find((r) => r.content.toLowerCase().includes(contentLike.toLowerCase()))
     : undefined;
   const c = hit ? store.conversations.get(hit.convId) : null;
-  return readMessages(store, { conversation: c!.handle, limit: 60, ...opts });
+  return readConversation(store, { conversation: c!.handle, limit: 60, ...opts });
 };
 
 const single = renderConv('Haha fitting');
@@ -114,9 +116,9 @@ ok(
 // Ada is SELF in this fixture; she authored "Sure, sharing now." in the study-group conversation.
 console.log('\n=== identity label (owner = you) ===');
 ok('owner message labelled by real name + (you)', /Ada Lovelace \(you\)>/.test(multi), multi);
-ok('no bare "ME>" label remains in read_messages', !/(^|\s)ME>/.test(multi), multi);
+ok('no bare "ME>" label remains in read_conversation', !/(^|\s)ME>/.test(multi), multi);
 ok(
-  'read_messages header carries the (you) viewer legend',
+  'read_conversation header carries the (you) viewer legend',
   /viewer: Ada Lovelace[^\n]*\(you\)/.test(multi),
   multi,
 );
@@ -168,7 +170,7 @@ const bigRoot = store.messages
   .threadSummaries(chConv.id, {})
   .slice()
   .sort((a, b) => b.count - a.count)[0].rootId;
-const digest = readMessages(store, { conversation: chConv.handle, limit: 40 });
+const digest = readConversation(store, { conversation: chConv.handle, limit: 40 });
 ok(
   'digest declares last-activity thread ordering',
   /threads by last activity/.test(digest),
@@ -181,7 +183,7 @@ ok(
 );
 ok(
   'big thread truncated to root + last 3 with a verbatim drill-in call',
-  new RegExp(`\\+3 earlier · read_messages\\(thread: m:${bigRoot}\\)`).test(digest),
+  new RegExp(`\\+3 earlier · read_thread\\(thread: m:${bigRoot}\\)`).test(digest),
   digest,
 );
 ok('big thread earliest reply is hidden in the digest', !/CLRS chapter 8/.test(digest), digest);
@@ -197,7 +199,7 @@ ok(
   digest,
 );
 
-const tmode = readMessages(store, { conversation: chConv.handle, thread: 'm:' + bigRoot });
+const tmode = readThread(store, { conversation: chConv.handle, thread: 'm:' + bigRoot });
 ok(
   'thread mode inlines the whole 7-msg chain and says complete',
   /showing 7\/7 · complete/.test(tmode),
@@ -211,11 +213,11 @@ ok(
   tmode.slice(0, 160),
 );
 
-// Any non-system reply (id !== root) in the big chain — the around-pivot target.
+// Any non-system reply (id !== root) in the big chain — the reply-pivot target.
 const chReply = store.messages.thread(chConv.id, bigRoot).find((r) => r.id !== bigRoot)!;
-const around = readMessages(store, { conversation: chConv.handle, around: 'm:' + chReply.id });
+const around = readThread(store, { conversation: chConv.handle, thread: 'm:' + chReply.id });
 ok(
-  'around: in a channel resolves to the hit thread and marks the hit with →',
+  'read_thread with a reply id resolves to its chain and marks the hit with →',
   new RegExp(`thread m:${chReply.rootId}`).test(around) && /→ /.test(around),
   around.slice(0, 300),
 );

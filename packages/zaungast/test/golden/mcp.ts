@@ -47,7 +47,8 @@ class FrozenDate extends RealDate {
 const { openStore } = await import('libzaungast');
 const {
   listConversations,
-  readMessages,
+  readConversation,
+  readThread,
   getMessage,
   search,
   topTopics,
@@ -108,22 +109,22 @@ function render(dir: string): string {
   );
   if (direct)
     add(
-      `read_messages {conversation:"${direct.handle}", limit:6}`,
-      readMessages(store, { conversation: direct.handle, limit: 6 }),
+      `read_conversation {conversation:"${direct.handle}", limit:6}`,
+      readConversation(store, { conversation: direct.handle, limit: 6 }),
     );
   if (chan) {
     add(
-      `read_messages {conversation:"${chan.handle}", limit:40} (channel digest)`,
-      readMessages(store, { conversation: chan.handle, limit: 40 }),
+      `read_conversation {conversation:"${chan.handle}", limit:40} (channel digest)`,
+      readConversation(store, { conversation: chan.handle, limit: 40 }),
     );
     add(
-      `read_messages {conversation:"${chan.handle}", reactions:"full"}`,
-      readMessages(store, { conversation: chan.handle, limit: 40, reactions: 'full' }),
+      `read_conversation {conversation:"${chan.handle}", reactions:"full"}`,
+      readConversation(store, { conversation: chan.handle, limit: 40, reactions: 'full' }),
     );
     if (threadRootId) {
       add(
-        `read_messages {conversation:"${chan.handle}", thread:"m:${threadRootId}"}`,
-        readMessages(store, { conversation: chan.handle, thread: `m:${threadRootId}` }),
+        `read_thread {conversation:"${chan.handle}", thread:"m:${threadRootId}"}`,
+        readThread(store, { conversation: chan.handle, thread: `m:${threadRootId}` }),
       );
       // get_message: full single-message render. The thread root has no pivot pointer (rootId===id);
       // a reply (rootId!==id) shows the "in thread …" pivot. Exercises the full-body envelope.

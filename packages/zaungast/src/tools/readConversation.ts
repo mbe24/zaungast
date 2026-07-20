@@ -1,8 +1,8 @@
 import { reactionGlyph } from '../util/emoji.js';
 import { byCodeUnit } from '../util/sort.js';
 import type { Message, ReactionGroup, Conversation, ThreadSummary } from 'libzaungast';
-import type { ReadMessagesArgs } from '../schemas.js';
-import { readMessagesShape } from '../schemas.js';
+import type { ReadConversationArgs, ReadThreadArgs } from '../schemas.js';
+import { readConversationShape, readThreadShape } from '../schemas.js';
 import type { QueryTool } from './types.js';
 import type { View } from './shared.js';
 import {
@@ -18,6 +18,12 @@ import {
   parseTime,
   viewerLegend,
 } from './shared.js';
+
+// The two conversation READERS that share message-rendering machinery:
+//   • read_conversation — browse a conversation's timeline (flat window for 1:1/group, thread digest
+//     for channels); windowed / date-range / paged.
+//   • read_thread       — read ONE channel reply-chain in full.
+// (get_message, the single-message reader, lives in getMessage.ts and reuses the exports below.)
 
 // Resolve a `conversation` selector (handle or title/participant substring) to a single
 // conversation id, or an early-return string (ambiguous-picker text, or a "no match" message)
@@ -171,15 +177,15 @@ function splitThread(rows: Message[], rootId: string): { root: Message; replies:
 }
 
 // ---------- channel (reply-chain) rendering ----------
-const THREAD_INLINE_MAX = 40; // a thread this size or smaller renders whole in thread mode
-const THREAD_WINDOW = 30; // else this many replies per page
+const THREAD_INLINE_MAX = 40; // a thread this size or smaller renders whole in read_thread
+const THREAD_WINDOW = 30; // else this many replies per page (default; read_thread's `limit` overrides)
 
 function channelHead(conv: Conversation, extra: string): string {
   return `${conv.handle} [channel] "${conv.topic || conv.participantNames}" · ${extra}`;
 }
 
 // One thread in the DIGEST: root always in full; ≤5-message threads show every reply (no marker);
-// ≥6 show root + last 3 + a "+N earlier · read_messages(thread: m:…)" drill-in. A zero-reply thread
+// ≥6 show root + last 3 + a "+N earlier · read_thread(thread: m:…)" drill-in. A zero-reply thread
 // is a bare root line (no thread tag). `rows` are the thread's non-system messages, ts-ascending.
 function renderDigestThread(
   rows: Message[],
@@ -198,7 +204,7 @@ function renderDigestThread(
   if (rows.length <= 5)
     return renderThread(root, replies, ownerNm, rx, { suffix, preReplies: missNote });
   const shown = replies.slice(-3);
-  const pre = `+${nReplies - shown.length} earlier · read_messages(thread: m:${rootId})`;
+  const pre = `+${nReplies - shown.length} earlier · read_thread(thread: m:${rootId})`;
   return renderThread(root, shown, ownerNm, rx, {
     suffix,
     preReplies: missNote ? `${missNote}  ${pre}` : pre,
@@ -211,7 +217,7 @@ function renderChannelDigest(
   view: View,
   conv: Conversation,
   convId: string,
-  args: ReadMessagesArgs,
+  args: ReadConversationArgs,
   limit: number,
   since: number | undefined,
   until: number | undefined,
@@ -264,15 +270,15 @@ function renderChannelDigest(
   return `${[envelope(view), head, legend].filter(Boolean).join('\n')}\n${body}`;
 }
 
-// A single reply-chain: thread mode (read it in full) and the around-pivot (center on a hit).
-// Inlines the whole chain up to THREAD_INLINE_MAX; larger chains window (newest, or around the
-// hit) and page backward with a keyset `more: before m:<id>` cursor.
+// A single reply-chain read in full: inlines the whole chain up to THREAD_INLINE_MAX; larger chains
+// window (newest, or around the hit) and page backward with a keyset `more: before m:<id>` cursor.
+// `hitId` (set when the caller targeted a reply, not the root) centers + marks that message.
 function renderThreadView(
   view: View,
   conv: Conversation,
   convId: string,
   rootId: string,
-  args: ReadMessagesArgs,
+  args: ReadThreadArgs,
   ownerNm: string | null,
   rx: ReactionCtx,
   hitId?: string,
@@ -282,6 +288,7 @@ function renderThreadView(
   const { root, replies } = splitThread(rows, rootId);
   const rootMissing = String(root.id) !== rootId;
   const total = rows.length;
+  const win = Math.min(Number(args.limit) || THREAD_WINDOW, 200); // read_thread's page size for a huge chain
 
   const beforeM = args.cursor && /^before m:(.+)$/.exec(String(args.cursor));
   let shown: Message[];
@@ -291,18 +298,18 @@ function renderThreadView(
       0,
       replies.findIndex((r) => String(r.id) === hitId),
     );
-    const start = Math.max(0, idx - Math.floor(THREAD_WINDOW / 2));
-    shown = replies.slice(start, start + THREAD_WINDOW);
+    const start = Math.max(0, idx - Math.floor(win / 2));
+    shown = replies.slice(start, start + win);
     earlier = start;
   } else if (beforeM) {
     const cutId = beforeM[1];
     const cut = replies.find((r) => String(r.id) === cutId);
     const cutTs = cut ? cut.ts : Infinity;
     const older = replies.filter((r) => r.ts < cutTs || (r.ts === cutTs && String(r.id) < cutId));
-    shown = older.slice(-THREAD_WINDOW);
+    shown = older.slice(-win);
     earlier = older.length - shown.length;
   } else if (total > THREAD_INLINE_MAX) {
-    shown = replies.slice(-THREAD_WINDOW);
+    shown = replies.slice(-win);
     earlier = replies.length - shown.length;
   } else {
     shown = replies;
@@ -325,32 +332,7 @@ function renderThreadView(
   return `${[envelope(view), head, legend].filter(Boolean).join('\n')}\n${lines.join('\n')}`;
 }
 
-// Dispatch a channel read: a specific thread, an around-pivot (→ the hit's thread), or the digest.
-function renderChannel(
-  view: View,
-  conv: Conversation,
-  convId: string,
-  args: ReadMessagesArgs,
-  limit: number,
-  since: number | undefined,
-  until: number | undefined,
-  ownerNm: string | null,
-  rx: ReactionCtx,
-): string {
-  if (args.thread) {
-    const rootId = String(args.thread).replace(/^m:/, '');
-    return renderThreadView(view, conv, convId, rootId, args, ownerNm, rx);
-  }
-  if (args.around) {
-    const aid = String(args.around).replace(/^m:/, '');
-    const arow = view.messages.get(convId, aid);
-    if (!arow) return `${envelope(view)}\nmessage m:${aid} not found in this conversation`;
-    return renderThreadView(view, conv, convId, String(arow.rootId), args, ownerNm, rx, aid);
-  }
-  return renderChannelDigest(view, conv, convId, args, limit, since, until, ownerNm, rx);
-}
-
-function buildReadMessagesHead(
+function buildConversationHead(
   conv: Conversation,
   shown: number,
   total: number,
@@ -362,11 +344,17 @@ function buildReadMessagesHead(
   return `${conv.handle} [${conv.kind}] "${conv.topic || conv.participantNames}" · showing ${shown}/${total} · local cache ${fmtTs(earliest)}–${fmtTs(newest)}${olderSuffix}`;
 }
 
-export function readMessages(view: View, args: ReadMessagesArgs = {} as ReadMessagesArgs): string {
+// read_conversation — browse one conversation's messages in story order. Channels render as a
+// thread digest; 1:1/group stay flat and chronological. Windowed by `since`/`until`/`limit`, paged
+// back with the returned `older:` cursor. To read one thread in full use read_thread; for one
+// message's complete body use get_message.
+export function readConversation(
+  view: View,
+  args: ReadConversationArgs = {} as ReadConversationArgs,
+): string {
   const bt = badTime(args, ['since', 'until']);
   if (bt) return bt;
   if (!args.conversation) return 'error: conversation (handle or title substring) is required';
-  if (args.around && args.thread) return 'error: pass either around: or thread:, not both';
   const resolved = resolveConversationArg(view, String(args.conversation));
   if ('early' in resolved) return resolved.early;
   const id = resolved.id;
@@ -380,37 +368,66 @@ export function readMessages(view: View, args: ReadMessagesArgs = {} as ReadMess
     selfMri: view.meta.selfMri,
     full: String(args.reactions) === 'full',
   };
-  // Channels render by reply-chain (thread digest / a single thread / an around-pivot); everything
-  // else (1:1, group, meeting) stays flat and chronological.
   if (conv.kind === 'channel')
-    return renderChannel(view, conv, id, args, limit, since, until, ownerNm, rx);
+    return renderChannelDigest(view, conv, id, args, limit, since, until, ownerNm, rx);
 
   const res = view.messages.inConversation(id, {
     sinceTs: since,
     untilTs: until,
     cursor: args.cursor != null ? String(args.cursor) : undefined,
-    around: args.around != null ? String(args.around) : undefined,
     limit,
   });
   if (!res.ok) return describeMiss(res.reason);
   const rows = res.rows;
 
   const { total, earliestTs, newestTs } = view.messages.stats(id);
-  // The older: cursor is now the library's own keyset token (offered when the window filled).
   const olderCursor = res.nextOlder ?? '';
-  const head = buildReadMessagesHead(conv, rows.length, total, earliestTs, newestTs, olderCursor);
+  const head = buildConversationHead(conv, rows.length, total, earliestTs, newestTs, olderCursor);
   const lines = renderMessageLines(rows, ownerNm, rx);
-  // Emit the (you)-legend only when owner-authored rows are actually shown (else it's dead weight).
   const legend = rows.some((r) => r.isMine) ? viewerLegend(ownerNm) : '';
   const out = [envelope(view), head, legend].filter(Boolean).join('\n');
   return `${out}\n${lines.join('\n') || '(no messages)'}`;
 }
 
-export const readMessagesTool: QueryTool = {
+export const readConversationTool: QueryTool = {
   kind: 'query',
-  name: 'read_messages',
+  name: 'read_conversation',
   title: 'Read a conversation',
-  description: `Read one conversation's messages in STORY ORDER (oldest→newest). Target by handle (c:xxxx) or title/participant substring. Page back with the returned older: cursor, or center on a message with around:. CHANNELS are grouped by reply-thread (root + replies, newest-active last); pass thread:m:<root> to read one thread in full — the digest prints the exact drill-in call. To read ONE message's COMPLETE body, use get_message with its m:<id>. ${YOU_NOTE} ${HISTORY_NOTE}`,
-  inputSchema: readMessagesShape,
-  run: readMessages,
+  description: `Browse one conversation's messages in STORY ORDER (oldest→newest). Target by handle (c:xxxx) or title/participant substring; window with since/until, page back with the returned older: cursor. CHANNELS render as a thread digest (root + recent replies, threads by last activity); to read one thread in full use read_thread with its m:<id>. For one message's complete body use get_message. ${YOU_NOTE} ${HISTORY_NOTE}`,
+  inputSchema: readConversationShape,
+  run: readConversation,
+};
+
+// read_thread — read ONE channel reply-chain in full. `thread` accepts the m:<id> of the chain's
+// root OR of any reply in it (resolves to the chain either way); a reply id centers + marks that
+// message. Pages a very long chain backward with the returned `more: before m:<id>` cursor.
+export function readThread(view: View, args: ReadThreadArgs = {} as ReadThreadArgs): string {
+  if (!args.conversation) return 'error: conversation (handle or title substring) is required';
+  if (!args.thread) return 'error: thread (the m:… id of the chain root or any reply) is required';
+  const resolved = resolveConversationArg(view, String(args.conversation));
+  if ('early' in resolved) return resolved.early;
+  const convId = resolved.id;
+  const conv = view.conversations.get(convId)!;
+  if (conv.kind !== 'channel')
+    return `${envelope(view)}\nread_thread is for channel reply-chains — this conversation is a ${conv.kind}; use read_conversation instead`;
+  const ownerNm = ownerDisplayName(view);
+  const rx: ReactionCtx = {
+    view,
+    selfMri: view.meta.selfMri,
+    full: String(args.reactions) === 'full',
+  };
+  const givenId = String(args.thread).replace(/^m:/, '');
+  const msg = view.messages.get(convId, givenId);
+  const rootId = msg ? String(msg.rootId) : givenId; // uncached root → treat the given id as the root
+  const hitId = msg && String(msg.id) !== rootId ? givenId : undefined; // a reply → center + mark it
+  return renderThreadView(view, conv, convId, rootId, args, ownerNm, rx, hitId);
+}
+
+export const readThreadTool: QueryTool = {
+  kind: 'query',
+  name: 'read_thread',
+  title: 'Read a thread',
+  description: `Read ONE channel reply-chain in full (root + all replies, in order). Target by conversation (c:xxxx or substring) plus thread:m:<id> — the m:<id> of the chain's root OR of any reply in it (either resolves to the whole chain; a reply is centered and marked →). Page a very long chain back with the returned more: cursor. Use read_conversation to browse the whole channel; use this to read one discussion end-to-end. ${YOU_NOTE} ${HISTORY_NOTE}`,
+  inputSchema: readThreadShape,
+  run: readThread,
 };

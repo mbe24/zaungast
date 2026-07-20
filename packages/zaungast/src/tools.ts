@@ -4,7 +4,8 @@
 // cross-cutting helpers live in tools/shared.ts.
 import type { Tool } from './tools/types.js';
 import { listConversations, listConversationsTool } from './tools/listConversations.js';
-import { readMessages, readMessagesTool } from './tools/readMessages.js';
+import { readConversation, readConversationTool } from './tools/readConversation.js';
+import { readThread, readThreadTool } from './tools/readConversation.js';
 import { getMessage, getMessageTool } from './tools/getMessage.js';
 import { search, searchTool } from './tools/search.js';
 import { topTopics, topTopicsTool } from './tools/topTopics.js';
@@ -16,7 +17,8 @@ import { describeSchemaTool } from './tools/describeSchema.js';
 export { fmtTs, parseTime } from './tools/shared.js';
 export {
   listConversations,
-  readMessages,
+  readConversation,
+  readThread,
   getMessage,
   search,
   topTopics,
@@ -27,7 +29,8 @@ export {
 
 export const TOOLS: Tool[] = [
   listConversationsTool,
-  readMessagesTool,
+  readConversationTool,
+  readThreadTool,
   getMessageTool,
   searchTool,
   topTopicsTool,

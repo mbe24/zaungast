@@ -102,7 +102,7 @@ export function search(view: View, args: SearchArgs = {}): string {
   const { lines, legend } = buildSearchResults(view, rows, ownerNm);
   const coverage = res.coverage ? coverageNoteText(res.coverage.hi, res.coverage.lo) : '';
   // Owner-label legend, only when a hit is owner-authored (search interleaves conversations, so
-  // the (you) rows can be scattered — the legend matters here at least as much as in read_messages).
+  // the (you) rows can be scattered — the legend matters here at least as much as in read_conversation).
   const vlegend = rows.some((r) => r.isMine) ? viewerLegend(ownerNm) : '';
 
   const head = [

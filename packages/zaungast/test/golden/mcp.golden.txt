@@ -9,7 +9,7 @@ c:e7d8cd [1:1] "Alan Turing" · 3 msg · last 03-02 09:10
 as_of 06-01 12:00 (tz+0) · 1 conversations
 c:f7edc6 [channel] "CS101 Algorithms - General" · 11 msg · last 03-02 10:40
 
-########## read_messages {conversation:"c:e7d8cd", limit:6} ##########
+########## read_conversation {conversation:"c:e7d8cd", limit:6} ##########
 as_of 06-01 12:00 (tz+0)
 c:e7d8cd [1:1] "Alan Turing" · showing 3/3 · local cache 03-02 09:00–03-02 09:10
 viewer: Ada Lovelace — "(you)" marks this account's owner, not the assistant
@@ -18,7 +18,7 @@ viewer: Ada Lovelace — "(you)" marks this account's owner, not the assistant
 03-02 09:10 Ada Lovelace (you)> Haha fitting given the professor's name. Let's meet before class.
       👍 1 · Alan Turing
 
-########## read_messages {conversation:"c:f7edc6", limit:40} (channel digest) ##########
+########## read_conversation {conversation:"c:f7edc6", limit:40} (channel digest) ##########
 as_of 06-01 12:00 (tz+0)
 c:f7edc6 [channel] "CS101 Algorithms - General" · 11 msgs / 3 threads · showing 3 threads, 8 msgs · threads by last activity · local cache 03-02 09:45–03-02 10:35
 viewer: Ada Lovelace — "(you)" marks this account's owner, not the assistant
@@ -29,12 +29,12 @@ viewer: Ada Lovelace — "(you)" marks this account's owner, not the assistant
   03-02 10:05 Ada Lovelace (you)> I'll post the recording link after class.
 
 03-02 10:00 Barbara Liskov> Reading list for the sorting unit — suggestions? 📚  [thread m:1772445600000 · 6 replies · last 03-02 10:35]
-  +3 earlier · read_messages(thread: m:1772445600000)
+  +3 earlier · read_thread(thread: m:1772445600000)
   03-02 10:25 Radia Perlman> The Knuth volume if you dare.
   03-02 10:30 Barbara Liskov> Thanks all - great suggestions.
   03-02 10:35 Grace Hopper> I'll pin these to the channel.
 
-########## read_messages {conversation:"c:f7edc6", reactions:"full"} ##########
+########## read_conversation {conversation:"c:f7edc6", reactions:"full"} ##########
 as_of 06-01 12:00 (tz+0)
 c:f7edc6 [channel] "CS101 Algorithms - General" · 11 msgs / 3 threads · showing 3 threads, 8 msgs · threads by last activity · local cache 03-02 09:45–03-02 10:35
 viewer: Ada Lovelace — "(you)" marks this account's owner, not the assistant
@@ -45,12 +45,12 @@ viewer: Ada Lovelace — "(you)" marks this account's owner, not the assistant
   03-02 10:05 Ada Lovelace (you)> I'll post the recording link after class.
 
 03-02 10:00 Barbara Liskov> Reading list for the sorting unit — suggestions? 📚  [thread m:1772445600000 · 6 replies · last 03-02 10:35]
-  +3 earlier · read_messages(thread: m:1772445600000)
+  +3 earlier · read_thread(thread: m:1772445600000)
   03-02 10:25 Radia Perlman> The Knuth volume if you dare.
   03-02 10:30 Barbara Liskov> Thanks all - great suggestions.
   03-02 10:35 Grace Hopper> I'll pin these to the channel.
 
-########## read_messages {conversation:"c:f7edc6", thread:"m:1772444700000"} ##########
+########## read_thread {conversation:"c:f7edc6", thread:"m:1772444700000"} ##########
 as_of 06-01 12:00 (tz+0)
 c:f7edc6 [channel] "CS101 Algorithms - General" · thread m:1772444700000 · showing 3/3 · complete
 viewer: Ada Lovelace — "(you)" marks this account's owner, not the assistant
@@ -67,7 +67,7 @@ c:f7edc6 [channel] "CS101 Algorithms - General" · m:1772444700000 · full body 
 as_of 06-01 12:00 (tz+0)
 c:f7edc6 [channel] "CS101 Algorithms - General" · m:1772445300000 · full body · chars 0..30/30
 03-02 09:55 Alan Turing> Are the lectures recorded too?
-in thread m:1772444700000 · read_messages(thread: m:1772444700000)
+in thread m:1772444700000 · read_thread(thread: m:1772444700000)
 
 ########## search {query:"the", limit:10} ##########
 as_of 06-01 12:00 (tz+0) · order:relevance · 10 hits
