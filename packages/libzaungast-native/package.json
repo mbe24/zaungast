@@ -35,8 +35,8 @@
     "*.node"
   ],
   "scripts": {
-    "build": "napi build --platform --release --features napi --js .napi-loader.cjs --dts .napi-loader.d.ts && tsc -p tsconfig.json",
-    "build:debug": "napi build --platform --features napi --js .napi-loader.cjs --dts .napi-loader.d.ts && tsc -p tsconfig.json",
+    "build": "napi build --platform --release --features napi --js index.cjs --dts index.d.ts && tsc -p tsconfig.json",
+    "build:debug": "napi build --platform --features napi --js index.cjs --dts index.d.ts && tsc -p tsconfig.json",
     "artifacts": "napi artifacts",
     "prepublishOnly": "napi prepublish -t npm"
   },

@@ -2,5 +2,7 @@
 Cargo.lock
 dist
 *.node
-.napi-loader.cjs
-.napi-loader.d.ts
+# napi-rs generates these at build time (napi build --js index.cjs --dts index.d.ts): the CJS addon
+# loader + the addon's type surface. Not committed — a fresh checkout has no native engine until built.
+index.cjs
+index.d.ts
