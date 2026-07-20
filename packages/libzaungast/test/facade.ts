@@ -10,6 +10,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { openStore, openLiveStore, tryOpen, inspect } from 'libzaungast';
+import type { IngestEngine } from '../src/ingest/engine.js';
+import { createJsEngine } from '../src/ingest/js-engine.js';
 import { generateFixtureWithTables } from './fixture/generate.js';
 
 let pass = 0,
@@ -262,40 +264,30 @@ try {
     JSON.stringify(bad).slice(0, 100),
   );
 
-  console.log('\n=== engine switch (js / auto / native) ===');
-  // 'js' is the explicit TS path — must match the default open.
-  const jsStore = openStore(dir, { engine: 'js' });
+  console.log('\n=== engine injection seam ===');
+  // Omitting `engine` uses the built-in JS engine — that's the `store` opened above. Injecting a
+  // custom IngestEngine must be honored: openStore routes the full build through the injected engine,
+  // never the internal default. Wrap createJsEngine in a spy so we can prove the call landed and the
+  // resulting store is equivalent (libzaungast has no engine of its own to fall back to).
+  let injectedFullCalls = 0;
+  const inner = createJsEngine();
+  const spyEngine: IngestEngine = {
+    full: (d, o) => {
+      injectedFullCalls++;
+      return inner.full(d, o);
+    },
+    refresh: (p, d) => inner.refresh(p, d),
+    reuseRefresh: (p, s) => inner.reuseRefresh!(p, s),
+  };
+  const injStore = openStore(dir, { engine: spyEngine });
   ok(
-    "engine:'js' matches default counts",
-    jsStore.meta.counts.messages === store.meta.counts.messages &&
-      jsStore.meta.counts.conversations === store.meta.counts.conversations,
-    `${JSON.stringify(jsStore.meta.counts)} vs ${JSON.stringify(store.meta.counts)}`,
+    'injected engine.full drives openStore (equivalent store)',
+    injectedFullCalls === 1 &&
+      injStore.meta.counts.messages === store.meta.counts.messages &&
+      injStore.meta.counts.conversations === store.meta.counts.conversations,
+    `fullCalls=${injectedFullCalls}; ${JSON.stringify(injStore.meta.counts)} vs ${JSON.stringify(store.meta.counts)}`,
   );
-  jsStore.close();
-  // 'auto' with no native addon installed → silent fall back to JS (same result, no throw).
-  const autoStore = openStore(dir, { engine: 'auto' });
-  ok(
-    "engine:'auto' falls back to JS and works",
-    autoStore.meta.schemaMatched === true &&
-      autoStore.meta.counts.messages === store.meta.counts.messages,
-    JSON.stringify(autoStore.meta.counts),
-  );
-  autoStore.close();
-  // 'native': if the addon is installed it must produce the same store; if not, it must throw a
-  // clear, actionable error naming the missing package (never a silent fallback). Robust to both so
-  // the test passes with or without a locally-built .node.
-  let nativeOk = false;
-  let nativeMsg = '';
-  try {
-    const ns = openStore(dir, { engine: 'native' });
-    nativeOk = ns.meta.counts.messages === store.meta.counts.messages;
-    nativeMsg = `native addon present; counts ${JSON.stringify(ns.meta.counts)}`;
-    ns.close();
-  } catch (e) {
-    nativeMsg = (e as Error).message;
-    nativeOk = /libzaungast-native/.test(nativeMsg);
-  }
-  ok("engine:'native' works if installed, else errors clearly", nativeOk, nativeMsg);
+  injStore.close();
 
   store.close();
 

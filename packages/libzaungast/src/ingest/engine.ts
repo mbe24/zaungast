@@ -1,5 +1,9 @@
-// The ingest-engine SEAM: the pluggable engine contract (IngestEngine) + the current selection
-// policy (Engine string / resolveEngine). Kept separate from native.ts (native MECHANISM only).
+// The ingest-engine SEAM: the pluggable engine contract (IngestEngine) + the refresh-outcome union
+// (RefreshResult). An engine builds a full store or applies an incremental; the Session drives it
+// engine-agnostically. The JS engine (createJsEngine) is the built-in default; an external engine
+// (e.g. the native accelerator, libzaungast-native) implements the same contract and is INJECTED by
+// the consumer via openStore/openLiveStore's `engine` option. This is engine-author SPI — re-exported
+// through the 'libzaungast/engine-spi' subpath, not the client API.
 import type { Ingested } from './ingest.js';
 
 // The outcome of one incremental refresh, as a discriminated union so the Session stays
@@ -24,18 +28,4 @@ export interface IngestEngine {
   // snapshot dir. Engines that don't offer it (e.g. native) simply omit it — the Session then skips
   // copy-reuse and uses `refresh`. Returns 'defer' when the caller must fall back to `refresh`.
   reuseRefresh?(prev: Ingested, snapshotDir: string): RefreshResult | 'defer';
-}
-
-export type Engine = 'auto' | 'js' | 'native';
-
-// Resolve the effective engine: explicit env override (ZAUNGAST_ENGINE) wins, then the option, else
-// the default 'js'. An unrecognized env value is ignored (falls through to the option/default).
-//
-// Default is 'js' (NOT 'auto'): the native engine is not picked up implicitly, even when a prebuilt
-// addon is present, until it's proven across platforms. Opt in per-call with engine:'auto'|'native'
-// or globally with ZAUNGAST_ENGINE. Revisit the default once native has real multi-platform mileage.
-export function resolveEngine(opt?: Engine): Engine {
-  const env = (process.env.ZAUNGAST_ENGINE || '').toLowerCase();
-  if (env === 'js' || env === 'native' || env === 'auto') return env;
-  return opt ?? 'js';
 }

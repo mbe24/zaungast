@@ -7,8 +7,9 @@
 //
 // Error contract (stated once): a FALLIBLE facade query returns `{ ok: false, reason: QueryMiss } |
 // { ok: true, … }`; an INFALLIBLE one returns its rows/value directly. Never a silent fall-through.
-import { ingest, type Ingested } from './ingest/ingest.js';
-import type { Engine } from './ingest/engine.js';
+import type { Ingested } from './ingest/ingest.js';
+import type { IngestEngine } from './ingest/engine.js';
+import { createJsEngine } from './ingest/js-engine.js';
 import type { ChatStore, StoreMeta } from './ingest/store.js';
 import { Session, type SessionOptions } from './session.js';
 import { loadSnapshot, fingerprint, selectMapping } from './format/index.js';
@@ -59,11 +60,11 @@ export interface OpenStoreOptions {
   // Extra phrase-extractor stopwords merged into the language defaults for `topics.compute`
   // (union'd with any per-call `extraStopwords`). Omit for the default en+de behavior.
   extraStopwords?: Iterable<string>;
-  // Ingest engine: 'js' (default — the TS reference, zero-dep), 'native' (require the optional
-  // libzaungast-native accelerator; error if absent), or 'auto' (use native when installed +
-  // conformant, else JS). Env ZAUNGAST_ENGINE overrides this. Omit for 'js' — native is opt-in only
-  // until it has multi-platform mileage; 'auto' will NOT be picked up implicitly.
-  engine?: Engine;
+  // Ingest engine (advanced): inject a custom IngestEngine — e.g. the native accelerator from
+  // libzaungast-native, constructed via its createNativeEngine(). Omit for the built-in JS engine
+  // (the zero-dep TS reference). The engine-author contract lives at the 'libzaungast/engine-spi'
+  // subpath; libzaungast never depends on any engine — the consumer chooses and injects one.
+  engine?: IngestEngine;
 }
 
 // openLiveStore layers the auto-refreshing Session's options on top of the facade options.
@@ -424,7 +425,8 @@ class LiveTeamsStoreImpl implements LiveTeamsStore {
 // "lossy" load — `store.meta` tells the truth (schemaMatched / lossy); it throws only if `dir`
 // cannot be read at all. Use `using store = openStore(dir)` for automatic disposal.
 export function openStore(dir: string, opts: OpenStoreOptions = {}): TeamsStore {
-  return new StaticTeamsStore(ingest(dir, { engine: opts.engine }), opts.extraStopwords);
+  const engine = opts.engine ?? createJsEngine();
+  return new StaticTeamsStore(engine.full(dir), opts.extraStopwords);
 }
 
 // A live, auto-refreshing store over the Session machinery (the MCP server's mode). Reads go through
@@ -450,7 +452,8 @@ export function tryOpen(
   | { ok: false; reason: 'unreadable'; error: string } {
   let ingested: Ingested;
   try {
-    ingested = ingest(dir, { engine: opts.engine });
+    const engine = opts.engine ?? createJsEngine();
+    ingested = engine.full(dir);
   } catch (e) {
     return { ok: false, reason: 'unreadable', error: (e as Error).message };
   }

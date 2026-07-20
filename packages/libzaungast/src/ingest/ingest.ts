@@ -8,8 +8,6 @@ import {
 } from '../format/index.js';
 import type { SnapshotRecord, Snapshot } from '../format/types.js';
 import { ChatStore, type StoreMeta } from './store.js';
-import { resolveEngine, type Engine } from './engine.js';
-import { nativeIngest } from './native.js';
 import { htmlToText, isSystemMessage, mentionedMris, hasAttachment } from '../util/text.js';
 
 export function convKind(id = ''): string {
@@ -384,19 +382,27 @@ function extractForFullIngest(dir: string, opts: { seqCap?: number }): FullExtra
   };
 }
 
+// Engine-author primitive (SPI): adopt a pre-written store .db file as an `Ingested`. An engine that
+// builds the ChatStore .db itself (e.g. the native accelerator writes it end-to-end in Rust) calls
+// this to wrap the finished file — `ChatStore` stays internal to libzaungast. Engine-neutral: `state`
+// is null (an engine needing a private refresh handle overrides it on the returned object). `tempDir`,
+// when given, is the throwaway dir holding the .db that `store.close()` removes recursively.
+export function openStoreFile(
+  dbPath: string,
+  meta: StoreMeta,
+  opts: { ftsEnabled: boolean; tempDir?: string },
+): Ingested {
+  const store = new ChatStore({
+    openFile: dbPath,
+    ftsEnabled: opts.ftsEnabled,
+    tempFile: opts.tempDir,
+  });
+  return { store, meta, lossy: meta.lossy, state: null };
+}
+
 // FULL rebuild from a fresh snapshot dir. `seqCap` (tests only) builds a PARTIAL store as of
 // an earlier sequence, so a following applyIncremental can be proven to reach a full rebuild.
-export function ingest(dir: string, opts: { seqCap?: number; engine?: Engine } = {}): Ingested {
-  // Engine switch: the native engine does the whole FULL ingest in Rust (read → decode → write the
-  // ChatStore .db) and we open it read-only; JS is the default and the `auto` fallback. `seqCap`
-  // (partial builds for the incremental tests) forces JS — native has no incremental path yet.
-  if (opts.seqCap === undefined) {
-    const engine = resolveEngine(opts.engine);
-    if (engine === 'native' || engine === 'auto') {
-      const native = nativeIngest(dir, engine);
-      if (native) return native;
-    }
-  }
+export function ingest(dir: string, opts: { seqCap?: number } = {}): Ingested {
   // Extract every entity's rows first; the helper's frame drops the Snapshot before we build the
   // store below, so the two memory peaks never coexist (perf 1b).
   const ex = extractForFullIngest(dir, opts);

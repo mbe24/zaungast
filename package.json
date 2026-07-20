@@ -25,7 +25,7 @@
     "check:deps": "node scripts/check-deps.mjs",
     "format": "prettier --write \"packages/*/src/**/*.ts\" \"packages/*/test/**/*.ts\"",
     "format:check": "prettier --check \"packages/*/src/**/*.ts\" \"packages/*/test/**/*.ts\"",
-    "test": "node --conditions=development --experimental-sqlite --import tsx packages/libzaungast/test/unit.ts && node --conditions=development --experimental-sqlite --import tsx packages/zaungast/test/unit.ts",
+    "test": "node --conditions=development --experimental-sqlite --import tsx packages/libzaungast/test/unit.ts && node --conditions=development --experimental-sqlite --import tsx packages/libzaungast/test/export-surface.ts && node --conditions=development --experimental-sqlite --import tsx packages/zaungast/test/unit.ts",
     "test:fixture": "node --conditions=development --experimental-sqlite --import tsx packages/libzaungast/test/fixture-verify.ts && node --conditions=development --experimental-sqlite --import tsx packages/libzaungast/test/facade.ts && node --conditions=development --experimental-sqlite --import tsx packages/zaungast/test/fixture-verify.ts",
     "test:integration:ci": "node --conditions=development --experimental-sqlite --import tsx packages/libzaungast/test/run-integration.ts",
     "test:integration": "node --conditions=development --experimental-sqlite --import tsx packages/libzaungast/test/_inctest.ts && node --conditions=development --experimental-sqlite --import tsx packages/libzaungast/test/_reusetest.ts && node --conditions=development --experimental-sqlite --import tsx packages/zaungast/test/_fbtest.ts",

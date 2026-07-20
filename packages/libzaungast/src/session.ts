@@ -87,6 +87,9 @@ export interface SessionOptions {
   // 'reparse' (opt-out): full snapshot + parse every refresh, decode only new records. Simpler,
   // stateless; the equivalence tests prove the two produce identical stores.
   incrementalMode?: 'reparse' | 'copy-reuse';
+  // Ingest engine to drive full/incremental (advanced): inject a custom IngestEngine (e.g. the native
+  // accelerator). Omit for the built-in JS engine. See the 'libzaungast/engine-spi' subpath.
+  engine?: IngestEngine;
 }
 
 export class Session {
@@ -97,7 +100,7 @@ export class Session {
   private lastRebuildMs = 0;
   private lastFullAt = 0;
   private incrementalsSinceFull = 0;
-  private readonly engine: IngestEngine = createJsEngine(); // JS engine; owns its copy-reuse cache
+  private readonly engine: IngestEngine; // the ingest engine (default JS); owns its copy-reuse cache
   private pendingFull = false; // copy-reuse latched a "must full-rebuild" (H-D)
   private readonly minDebounceMs: number;
   private readonly maxIncrementals: number;
@@ -113,6 +116,7 @@ export class Session {
     this.fullIntervalMs = opts.fullIntervalMs ?? FULL_INTERVAL_MS;
     this.staticDir = opts.dir;
     this.overrideDir = opts.overrideDir;
+    this.engine = opts.engine ?? createJsEngine();
   }
 
   private resolveLiveDir(): string {

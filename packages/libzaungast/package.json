@@ -21,6 +21,11 @@
       "types": "./dist/format/engine.d.ts",
       "default": "./dist/format/engine.js"
     },
+    "./engine-spi": {
+      "development": "./src/engine-spi.ts",
+      "types": "./dist/engine-spi.d.ts",
+      "default": "./dist/engine-spi.js"
+    },
     "./schema/versions/*.json": {
       "development": "./src/schema/versions/*.json",
       "default": "./dist/schema/versions/*.json"
