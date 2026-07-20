@@ -1,7 +1,7 @@
 import './_stdout-guard.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { openLiveStore } from 'libzaungast';
-import { buildServer } from './server.js';
+import { buildServer, VERSION } from './server.js';
 
 // ZAUNGAST_DB_DIR = a static leveldb dir (tests / a manual copy) — skips snapshot+discovery.
 // Otherwise discover the live Teams store (TEAMS_LEVELDB_DIR overrides discovery).
@@ -19,7 +19,7 @@ const live = openLiveStore(
 
 const server = buildServer(live);
 await server.connect(new StdioServerTransport());
-process.stderr.write('zaungast MCP server ready (stdio)\n');
+process.stderr.write(`zaungast v${VERSION} — offline Teams reader — ready (stdio)\n`);
 
 // Warm the index AFTER the handshake so `initialize` returns instantly and the first tool
 // call is fast. Deferred a tick so connect() fully settles first — the cold store builds on

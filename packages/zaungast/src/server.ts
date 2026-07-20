@@ -1,10 +1,18 @@
+import { readFileSync } from 'node:fs';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { LiveTeamsStore, StoreReading } from 'libzaungast';
 import type { Snapshot } from 'libzaungast/format/engine';
 import { TOOLS } from './tools.js';
 
+// The real package version — package.json sits one level up from both src/ (dev) and dist/ (published).
+// Reported in the MCP initialize handshake and the startup banner: a passive, zero-network disclosure
+// of what the user is running (the server never checks a registry — offline by design).
+export const VERSION: string = JSON.parse(
+  readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+).version;
+
 export function buildServer(live: LiveTeamsStore): McpServer {
-  const server = new McpServer({ name: 'zaungast', version: '0.1.0' });
+  const server = new McpServer({ name: 'zaungast', version: VERSION });
 
   const runQuery = (fn: (view: StoreReading, a: any) => string, args: any) => {
     try {
