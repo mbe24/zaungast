@@ -49,3 +49,10 @@ jobs:
         # Generates a synthetic .ldb+.log cache and runs the mutation/equivalence harnesses
         # (incremental refresh == full rebuild, compaction, tombstones) against it — the same
         # suites that otherwise need a real local cache (npm run test:integration).
+
+      - name: Golden tests (synthetic fixture)
+        run: npm run test:golden
+        # Freezes decode/extract output + MCP tool output over the synthetic fixture. The extract
+        # golden pins the fixture's schema fingerprint, so a change to the fingerprint algorithm
+        # flips the hash and fails here — the drift signal that silently rotted a stale
+        # knownFingerprint before. PII-free (synthetic); test:golden:real stays local (real cache).
