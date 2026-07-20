@@ -1,5 +1,5 @@
 import { openStore } from 'libzaungast';
-import { listConversations, readConversation, search, topTopics } from 'zaungast/tools.js';
+import { listConversations, readConversation, search, rankTopics } from 'zaungast/tools.js';
 
 const DIR = process.argv[2] ?? process.env.ZAUNGAST_TEST_DIR;
 if (!DIR) {
@@ -29,6 +29,6 @@ show('search {query:"weekend", limit:4}', search(store, { query: 'weekend', limi
 show('search {mentions_me:true, limit:4}', search(store, { mentions_me: true, limit: 4 }));
 show('search {from:"Grace", limit:4}', search(store, { from: 'Grace', limit: 4 }));
 
-show('top_topics {window:"7d", n:6}', topTopics(store, { window: '7d', n: 6 }));
+show('rank_topics {window:"7d", n:6}', rankTopics(store, { window: '7d', n: 6 }));
 
 store.close();

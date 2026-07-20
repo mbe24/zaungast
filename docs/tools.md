@@ -188,7 +188,7 @@ Group calls link to their chat thread. A recorded call links to the message that
 Recordings and transcripts themselves live in the cloud behind auth — zaungast surfaces only the
 metadata (that a recording exists) and the pointer, never the media.
 
-## `top_topics`
+## `rank_topics`
 
 Distinctive/trending topics over a window, scored against your own baseline (not raw
 frequency), each with an example message. Bot/app senders are excluded by default.

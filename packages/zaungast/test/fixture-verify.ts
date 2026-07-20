@@ -1,6 +1,6 @@
 // MCP tool-surface regression test. Generates the synthetic fixture into a temp dir, opens it via
 // the PUBLIC libzaungast facade (`openStore`), and smoke-tests the whole zaungast MCP tool surface
-// (search / list_conversations / top_topics / find_person / read_conversation / read_thread /
+// (search / list_conversations / rank_topics / find_person / read_conversation / read_thread /
 // get_message / list_events /
 // list_calls) against it — reaction rendering, the (you) identity label, channel reply-chain
 // rendering, and the list_events / list_calls render contracts. Runs in CI with no real Teams cache
@@ -19,7 +19,7 @@ import { openStore } from 'libzaungast';
 import {
   search,
   listConversations,
-  topTopics,
+  rankTopics,
   findPerson,
   readConversation,
   readThread,
@@ -56,15 +56,15 @@ const results = search(store, { query: 'memoization', limit: 5 });
 ok('search finds seeded content', /memoization/i.test(results), results.slice(0, 200));
 
 // ---- 6. tool-surface smoke: every tool answers sanely off the fixture ----
-console.log('\n=== tool surface (list / top_topics / find_person) ===');
+console.log('\n=== tool surface (list / rank_topics / find_person) ===');
 const list = listConversations(store, {});
 ok(
   'list_conversations shows a seeded conversation',
   /CS101|study-group|Algorithms/i.test(list),
   list.slice(0, 200),
 );
-const topics = topTopics(store, {});
-ok('top_topics returns non-empty output', topics.trim().length > 0);
+const topics = rankTopics(store, {});
+ok('rank_topics returns non-empty output', topics.trim().length > 0);
 const person = findPerson(store, { query: 'Ada Lovelace' });
 ok('find_person resolves a seeded student', /Ada Lovelace/i.test(person), person.slice(0, 200));
 

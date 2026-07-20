@@ -76,7 +76,7 @@ export const searchShape = {
   limit: z.number().int().min(1).max(60).optional().describe('default 20'),
 };
 
-export const topTopicsShape = {
+export const rankTopicsShape = {
   window: z
     .enum(['1d', '7d', '30d'])
     .optional()
@@ -137,7 +137,7 @@ export type ReadConversationArgs = z.infer<z.ZodObject<typeof readConversationSh
 export type ReadThreadArgs = z.infer<z.ZodObject<typeof readThreadShape>>;
 export type GetMessageArgs = z.infer<z.ZodObject<typeof getMessageShape>>;
 export type SearchArgs = z.infer<z.ZodObject<typeof searchShape>>;
-export type TopTopicsArgs = z.infer<z.ZodObject<typeof topTopicsShape>>;
+export type RankTopicsArgs = z.infer<z.ZodObject<typeof rankTopicsShape>>;
 export type FindPersonArgs = z.infer<z.ZodObject<typeof findPersonShape>>;
 export type ListEventsArgs = z.infer<z.ZodObject<typeof listEventsShape>>;
 export type ListCallsArgs = z.infer<z.ZodObject<typeof listCallsShape>>;

@@ -15,7 +15,7 @@ export function likeEscape(s: string): string {
 }
 
 // ---------- resolvers (name/handle → ids) ----------
-// Shared by the message-oriented tools (read_conversation/search/top_topics). Pure resolution over the
+// Shared by the message-oriented tools (read_conversation/search/rank_topics). Pure resolution over the
 // store; the MCP layer wraps these with agent-facing disambiguation/coverage text.
 
 // A conversation selector (c:handle or title/participant substring) → matching conversation ids.

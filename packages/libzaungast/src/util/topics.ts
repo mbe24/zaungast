@@ -1,4 +1,4 @@
-// Keyword/phrase extraction for top_topics (RAKE-style, stopword + name + code-id filtered).
+// Keyword/phrase extraction for rank_topics (RAKE-style, stopword + name + code-id filtered).
 import { getStopwords, DEFAULT_LANGUAGES } from '../lang/index.js';
 
 const looksHex = (w: string) => /^[0-9a-f]{5,}$/i.test(w) && !/[gh-z]/i.test(w);

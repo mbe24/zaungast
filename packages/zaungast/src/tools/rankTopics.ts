@@ -1,6 +1,6 @@
 import type { Topic } from 'libzaungast';
-import type { TopTopicsArgs } from '../schemas.js';
-import { topTopicsShape } from '../schemas.js';
+import type { RankTopicsArgs } from '../schemas.js';
+import { rankTopicsShape } from '../schemas.js';
 import type { QueryTool } from './types.js';
 import type { View } from './shared.js';
 import {
@@ -21,7 +21,7 @@ function renderTopicRows(rows: Topic[]): string[] {
   );
 }
 
-export function topTopics(view: View, args: TopTopicsArgs = {}): string {
+export function rankTopics(view: View, args: RankTopicsArgs = {}): string {
   const bt = badTime(args, ['since', 'until']);
   if (bt) return bt;
 
@@ -60,11 +60,11 @@ export function topTopics(view: View, args: TopTopicsArgs = {}): string {
   return `${head}\n${lines.join('\n') || '(no distinctive topics)'}`;
 }
 
-export const topTopicsTool: QueryTool = {
+export const rankTopicsTool: QueryTool = {
   kind: 'query',
-  name: 'top_topics',
-  title: 'Trending topics',
-  description: `Distinctive/trending topics over a window (vs your baseline), overall or scoped to a person/conversation. Returns each topic with an exemplar message. ${HISTORY_NOTE}`,
-  inputSchema: topTopicsShape,
-  run: topTopics,
+  name: 'rank_topics',
+  title: 'Rank trending topics',
+  description: `Rank the distinctive/trending topics over a window (vs your baseline), overall or scoped to a person/conversation. Returns each topic with an exemplar message. ${HISTORY_NOTE}`,
+  inputSchema: rankTopicsShape,
+  run: rankTopics,
 };

@@ -34,7 +34,7 @@ export class ChatStore {
   private readonly handleByFull = new Map<string, string>();
   private readonly usedHandles = new Set<string>();
 
-  // Phrase-extraction cache for top_topics: content string → extracted phrases. Persists across
+  // Phrase-extraction cache for rank_topics: content string → extracted phrases. Persists across
   // tool calls and (for unchanged content) across incremental refreshes. Invalidated when the
   // name-token set changes (names are phrase-breaks, so they alter extraction). Owned here so it
   // shares the store's lifetime and is dropped with a full rebuild's fresh store.

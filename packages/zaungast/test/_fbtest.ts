@@ -2,7 +2,7 @@
 // MCP renderers. Real-data smoke test (ZAUNGAST_TEST_DIR).
 import { openStore } from 'libzaungast';
 import { loadSnapshot } from 'libzaungast/format';
-import { search, topTopics, findPerson, readConversation } from 'zaungast/tools.js';
+import { search, rankTopics, findPerson, readConversation } from 'zaungast/tools.js';
 import { describeSchema } from 'zaungast/tools/describeSchema.js';
 
 const DIR = process.argv[2] ?? process.env.ZAUNGAST_TEST_DIR;
@@ -30,8 +30,8 @@ const botP = store.people.find({ n: 25 }).rows.find((p) => p.isBot);
 
 console.log('=== bot classification ===');
 {
-  const def = topTopics(store, { window: '30d', n: 6 });
-  const inc = topTopics(store, { window: '30d', n: 6, include_bots: true });
+  const def = rankTopics(store, { window: '30d', n: 6 });
+  const inc = rankTopics(store, { window: '30d', n: 6, include_bots: true });
   ok('default excludes bots + discloses', /excluded \d+ bot\/app msgs/.test(def));
   ok('include_bots omits the exclusion note', !/excluded \d+ bot/.test(inc));
   const roster = findPerson(store, { n: 8 });
@@ -64,7 +64,7 @@ console.log('=== in: ambiguity note ===');
 
 console.log('=== exclude (words + handles) ===');
 {
-  const excl = topTopics(store, { window: '30d', n: 8, exclude: ['token', 'jwt'] });
+  const excl = rankTopics(store, { window: '30d', n: 8, exclude: ['token', 'jwt'] });
   ok('excluded words absent from topics', !/"token"|"jwt"/.test(excl));
   if (botP) {
     const s2 = search(store, { query: 'the', exclude: [botP.handle], limit: 10 });
@@ -76,14 +76,14 @@ console.log('=== exclude (words + handles) ===');
   );
 }
 
-console.log('=== top_topics since/until + P4 ===');
+console.log('=== rank_topics since/until + P4 ===');
 {
-  const r = topTopics(store, { since: '-14d', until: '-7d', n: 4 });
+  const r = rankTopics(store, { since: '-14d', until: '-7d', n: 4 });
   ok('explicit range shows in envelope', /range .+\.\..+/.test(r));
-  ok('bad since errors', /cannot parse since/.test(topTopics(store, { since: 'last week' })));
+  ok('bad since errors', /cannot parse since/.test(rankTopics(store, { since: 'last week' })));
   ok(
     'P4: nonexistent conversation scope errors',
-    /no conversation matches/.test(topTopics(store, { scope: 'conversation:zzzznope' })),
+    /no conversation matches/.test(rankTopics(store, { scope: 'conversation:zzzznope' })),
   );
 }
 

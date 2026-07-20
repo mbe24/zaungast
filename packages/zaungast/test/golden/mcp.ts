@@ -7,7 +7,7 @@
 //   (1) force TZ=UTC by re-exec'ing ourselves under that env if not already set, and
 //   (2) freeze the clock (Date.now()/no-arg `new Date()`) to a fixed instant after all fixture data,
 //   (3) pass absolute ISO since/until (never relative windows) wherever a tool has a now-relative
-//       default (top_topics, list_events, list_calls).
+//       default (rank_topics, list_events, list_calls).
 // A startup guard asserts the timezone really is UTC, so a misconfigured run fails loudly rather
 // than writing a machine-specific golden.
 //
@@ -51,7 +51,7 @@ const {
   readThread,
   getMessage,
   search,
-  topTopics,
+  rankTopics,
   findPerson,
   listEvents,
   listCalls,
@@ -144,8 +144,8 @@ function render(dir: string): string {
   add('search {query:"the", limit:10}', search(store, { query: 'the', limit: 10 }));
   add('search {mentions_me:true, limit:6}', search(store, { mentions_me: true, limit: 6 }));
   add(
-    'top_topics {since,until (all), n:6}',
-    topTopics(store, { since: SINCE, until: UNTIL, n: 6 }),
+    'rank_topics {since,until (all), n:6}',
+    rankTopics(store, { since: SINCE, until: UNTIL, n: 6 }),
   );
   add('find_person {} (roster)', findPerson(store, {}));
   add(

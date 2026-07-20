@@ -8,7 +8,7 @@ import { readConversation, readConversationTool } from './tools/readConversation
 import { readThread, readThreadTool } from './tools/readConversation.js';
 import { getMessage, getMessageTool } from './tools/getMessage.js';
 import { search, searchTool } from './tools/search.js';
-import { topTopics, topTopicsTool } from './tools/topTopics.js';
+import { rankTopics, rankTopicsTool } from './tools/rankTopics.js';
 import { findPerson, findPersonTool } from './tools/findPerson.js';
 import { listEvents, listEventsTool } from './tools/listEvents.js';
 import { listCalls, listCallsTool } from './tools/listCalls.js';
@@ -21,7 +21,7 @@ export {
   readThread,
   getMessage,
   search,
-  topTopics,
+  rankTopics,
   findPerson,
   listEvents,
   listCalls,
@@ -33,7 +33,7 @@ export const TOOLS: Tool[] = [
   readThreadTool,
   getMessageTool,
   searchTool,
-  topTopicsTool,
+  rankTopicsTool,
   findPersonTool,
   listEventsTool,
   listCallsTool,

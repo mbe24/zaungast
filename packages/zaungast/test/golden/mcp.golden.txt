@@ -89,7 +89,7 @@ as_of 06-01 12:00 (tz+0) · order:time · 1 hits
 c:c3199c="study-group-cs101"
 c:c3199c 03-02 09:35 m:1772444100000 Radia Perlman> Thanks bot! @Ada Lovelace can you share your notes?
 
-########## top_topics {since,until (all), n:6} ##########
+########## rank_topics {since,until (all), n:6} ##########
 as_of 06-01 12:00 (tz+0) · range 2020-01-01 00:00..2030-01-01 00:00 · 20 msgs
 excluded 1 bot/app msgs · include_bots:true to include
 baseline sparse (0 msgs) — ×baseline is approximate

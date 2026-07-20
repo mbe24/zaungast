@@ -31,7 +31,7 @@ async function call(name: string, args: any) {
 
 await call('list_conversations', { n: 4 });
 await call('search', { query: 'weekend', limit: 3 });
-await call('top_topics', { window: '7d', n: 4 });
+await call('rank_topics', { window: '7d', n: 4 });
 
 await client.close();
 process.exit(0);
