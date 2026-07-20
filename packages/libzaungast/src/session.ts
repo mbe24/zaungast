@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { type Ingested } from './ingest/ingest.js';
-import { createJsEngine, type JsEngine } from './ingest/js-engine.js';
-import { nativeRefresh } from './ingest/native.js';
+import { createJsEngine } from './ingest/js-engine.js';
+import type { IngestEngine } from './ingest/engine.js';
 import { discoverTeamsDbs } from './format/index.js';
 
 // Self-heal backstop: force a full rebuild at least this often, so any incremental drift is
@@ -97,7 +97,7 @@ export class Session {
   private lastRebuildMs = 0;
   private lastFullAt = 0;
   private incrementalsSinceFull = 0;
-  private readonly engine: JsEngine = createJsEngine(); // owns the JS copy-reuse parse cache
+  private readonly engine: IngestEngine = createJsEngine(); // JS engine; owns its copy-reuse cache
   private pendingFull = false; // copy-reuse latched a "must full-rebuild" (H-D)
   private readonly minDebounceMs: number;
   private readonly maxIncrementals: number;
@@ -188,6 +188,9 @@ export class Session {
     )
       return false;
 
+    const reuseRefresh = this.engine.reuseRefresh?.bind(this.engine); // bound: safe if an impl uses `this`
+    if (!reuseRefresh) return false; // this engine offers no copy-reuse fast path (e.g. native)
+
     let liveDir: string;
     try {
       liveDir = this.resolveLiveDir();
@@ -209,7 +212,7 @@ export class Session {
       // Compaction (a cached .ldb gone) surfaces as reuseRefresh → 'defer' (loadSnapshotReuse detects
       // it + prunes the dead entries so reuse resumes next time): we defer to the shared
       // reparse-incremental refresh, whose fresh full read reconciles the compaction-elided deletions.
-      const res = this.engine.reuseRefresh(this.cur, this.snapshotDir);
+      const res = reuseRefresh(this.cur, this.snapshotDir);
       if (res === 'defer') return false;
       if (res.kind === 'skipped') {
         this.lastIngestAt = Date.now();
@@ -293,9 +296,9 @@ export class Session {
       forceFull ||
       this.pendingFull ||
       !this.cur ||
-      // JS needs `state` to apply incrementally; native refreshes via its file handle (`native`)
-      // instead, so a native store is incremental-capable even though its JS `state` is null.
-      (!this.cur.state && !this.cur.native) ||
+      // A store with no engine state (an unknown-schema build) can't refresh incrementally → full.
+      // A native store carries its handle IN `state` (non-null), so it stays incremental-capable.
+      !this.cur.state ||
       this.incrementalsSinceFull >= this.maxIncrementals ||
       now - this.lastFullAt > this.fullIntervalMs;
     this.pendingFull = false;
@@ -305,46 +308,16 @@ export class Session {
         doFull();
       } else if (snapLossy) {
         // lossy snapshot → do NOT run incremental (deletion reconcile can't be trusted); keep current
-      } else if (this.cur!.native) {
-        // Native incremental: Rust reads the (static) snapshot `dir`, writes a fresh .db as a delta
-        // of the previous file, and we swap to it. needFullRebuild → full; skipped (lossy) → keep.
-        let handled = false;
-        try {
-          const res = nativeRefresh(dir, this.cur!.native);
-          if (res.kind === 'skipped') {
-            handled = true; // lossy → keep current, retry
-          } else if (res.kind === 'needFullRebuild') {
-            doFull();
-            handled = true;
-          } else {
-            const prevStore = this.cur!.store;
-            this.cur = {
-              store: res.store,
-              meta: { ...res.meta, lastFullAt: this.lastFullAt },
-              state: null,
-              lossy: false,
-              native: res.native,
-            };
-            prevStore.close(); // closing the old store deletes its temp .db dir
-            this.incrementalsSinceFull++;
-            this.lastRebuildMs = Date.now() - t0;
-            caughtUp = true;
-            handled = true;
-          }
-        } catch {
-          /* any throw → full rebuild; never leave a torn native store */
-        }
-        if (!handled) doFull();
       } else {
+        // Engine-agnostic incremental: the engine either mutates the store in place ('inplace') or
+        // produces a fresh store to swap in ('swapped', e.g. native's new-file-swap); the Session owns
+        // the policy re-stamp. 'skipped' keeps the current store; 'needFull' (or any throw) → full.
         let handled = false;
         try {
-          // JS incremental via jsEngine (mutates the store + advances state in place); the Session
-          // owns the policy re-stamp (meta + counters) on a successful 'inplace' apply.
           const res = this.engine.refresh(this.cur!, dir);
           if (res.kind === 'skipped') {
-            handled = true;
-          } // lossy read → keep current, retry
-          else if (res.kind === 'needFull') {
+            handled = true; // lossy read → keep current, retry
+          } else if (res.kind === 'needFull') {
             doFull();
             handled = true;
           } else if (res.kind === 'inplace') {
@@ -361,9 +334,17 @@ export class Session {
             };
             caughtUp = true;
             handled = true;
+          } else if (res.kind === 'swapped') {
+            const prevStore = this.cur!.store;
+            this.cur = { ...res.next, meta: { ...res.next.meta, lastFullAt: this.lastFullAt } };
+            prevStore.close(); // closing the old store deletes its temp .db dir
+            this.incrementalsSinceFull++;
+            this.lastRebuildMs = Date.now() - t0;
+            caughtUp = true;
+            handled = true;
           }
         } catch {
-          /* R2: any throw → full rebuild; never leave a half-mutated store */
+          /* any throw → full rebuild; never leave a half-mutated / torn store */
         }
         if (!handled) doFull();
       }

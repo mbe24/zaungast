@@ -115,9 +115,9 @@ export function nativeIngest(dir: string, engine: 'auto' | 'native'): Ingested |
     lossy: r.lossy,
     selfMri: r.selfMri,
   };
-  // state stays null (JS-side IngestState is unused for native); `native` carries the file handle so
-  // the Session refreshes via nativeRefresh (new-file-swap) instead of JS applyIncremental.
-  return { store, meta, lossy: r.lossy, state: null, native: { dbPath, tempDir: tmp } };
+  // The native store's engine-private state IS its file handle (`{ native }`), round-tripped opaquely
+  // by the Session; the JS engine's refresh dispatches on it to run nativeRefresh (new-file-swap).
+  return { store, meta, lossy: r.lossy, state: { native: { dbPath, tempDir: tmp } } };
 }
 
 // One native incremental refresh. `dir` is the (already-snapshotted, static) leveldb dir the Session

@@ -9,7 +9,7 @@ import {
 import type { SnapshotRecord, Snapshot } from '../format/types.js';
 import { ChatStore, type StoreMeta } from './store.js';
 import { resolveEngine, type Engine } from './engine.js';
-import { nativeIngest, type NativeHandle } from './native.js';
+import { nativeIngest } from './native.js';
 import { htmlToText, isSystemMessage, mentionedMris, hasAttachment } from '../util/text.js';
 
 export function convKind(id = ''): string {
@@ -34,12 +34,11 @@ const setEq = (a: Set<string>, b: Set<string>) =>
 export interface Ingested {
   store: ChatStore;
   meta: StoreMeta;
-  state: IngestState | null;
+  // Engine-PRIVATE opaque state, round-tripped by the Session (which only ever checks EXISTENCE, never
+  // inspects the shape). JS engine → an `IngestState`; native engine → a `{ native: NativeHandle }`
+  // handle; unknown-schema (no mapping) → null. The owning engine discriminates it.
+  state: unknown;
   lossy: boolean;
-  // Set only when the native engine built this store: the current .db file + its temp dir. Its
-  // presence tells the Session to refresh via native (new-file-swap) rather than JS applyIncremental
-  // (which needs `state`, always null for native). Undefined for the JS engine → JS path unchanged.
-  native?: NativeHandle;
 }
 
 // Compact `properties.emotions` to the minimum the renderer needs and a stable JSON string:

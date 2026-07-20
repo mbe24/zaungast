@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ingest, applyIncremental } from '../src/ingest/ingest.js';
+import { ingest, applyIncremental, type IngestState } from '../src/ingest/ingest.js';
 import {
   loadSnapshot,
   entityTargets,
@@ -87,7 +87,7 @@ console.log('\n=== C. spine: partial + applyIncremental(cached load) == full reb
   const partial = ingest(DIR, { seqCap: cap });
   const cache = new Map();
   const loaded = loadSnapshotReuse(DIR, cache);
-  const r = applyIncremental(partial.store, partial.state!, loaded);
+  const r = applyIncremental(partial.store, partial.state as IngestState, loaded);
   const full = ingest(DIR);
   const dump = (s: any) =>
     JSON.stringify({

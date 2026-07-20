@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ingest, applyIncremental } from '../src/ingest/ingest.js';
+import { ingest, applyIncremental, type IngestState } from '../src/ingest/ingest.js';
 import { ChatStore } from '../src/ingest/store.js';
 import {
   loadSnapshot,
@@ -146,7 +146,7 @@ console.log('\n=== A. spine: partial(seqCap) + incremental == full rebuild ===')
   const cap = midSeq(DIR);
   const partial = ingest(DIR, { seqCap: cap });
   const nBefore = (partial.store.db.prepare('select count(*) n from messages').get() as any).n;
-  const r = applyIncremental(partial.store, partial.state!, DIR);
+  const r = applyIncremental(partial.store, partial.state as IngestState, DIR);
   const full = ingest(DIR);
   const nAfter = (partial.store.db.prepare('select count(*) n from messages').get() as any).n;
   console.log(
@@ -166,7 +166,7 @@ console.log('\n=== B. no-op incremental on unchanged dir ===');
 {
   const s = ingest(DIR);
   const before = dump(s.store);
-  applyIncremental(s.store, s.state!, DIR);
+  applyIncremental(s.store, s.state as IngestState, DIR);
   ok('no-op incremental leaves store identical', dump(s.store) === before);
   s.store.close();
 }
@@ -175,10 +175,10 @@ console.log('\n=== C. idempotency: incremental twice ===');
 {
   const cap = midSeq(DIR);
   const p = ingest(DIR, { seqCap: cap });
-  applyIncremental(p.store, p.state!, DIR);
-  p.state!.maxSeq = loadEntries(DIR).maxSeq;
+  applyIncremental(p.store, p.state as IngestState, DIR);
+  (p.state as IngestState).maxSeq = loadEntries(DIR).maxSeq;
   const after1 = dump(p.store);
-  applyIncremental(p.store, p.state!, DIR);
+  applyIncremental(p.store, p.state as IngestState, DIR);
   ok('second incremental is a no-op', dump(p.store) === after1);
   p.store.close();
 }
@@ -223,7 +223,7 @@ console.log(
     fs.writeFileSync(path.join(modified, 'zzz999.log'), craftDeletionLog(v.key, maxSeq + 1000));
     const partial = ingest(DIR);
     const before = (partial.store.db.prepare('select count(*) n from messages').get() as any).n;
-    applyIncremental(partial.store, partial.state!, modified);
+    applyIncremental(partial.store, partial.state as IngestState, modified);
     const after = (partial.store.db.prepare('select count(*) n from messages').get() as any).n;
     const full = ingest(modified);
     ok(
@@ -300,16 +300,16 @@ console.log(
   const copy = copyDir(DIR);
   const cap = midSeq(copy);
   const s = ingest(copy, { seqCap: cap });
-  applyIncremental(s.store, s.state!, copy);
-  s.state!.maxSeq = loadEntries(copy).maxSeq; // step 1: catch up
+  applyIncremental(s.store, s.state as IngestState, copy);
+  (s.state as IngestState).maxSeq = loadEntries(copy).maxSeq; // step 1: catch up
   const n1 = (s.store.db.prepare('select count(*) n from messages').get() as any).n;
   const snap = loadSnapshot(copy);
   fs.writeFileSync(
     path.join(copy, 'zzz1.log'),
     craftDeletionLog(msgStoreKey(snap)!, snap.maxSeq + 1000),
   ); // step 2: delete
-  applyIncremental(s.store, s.state!, copy);
-  s.state!.maxSeq = loadEntries(copy).maxSeq;
+  applyIncremental(s.store, s.state as IngestState, copy);
+  (s.state as IngestState).maxSeq = loadEntries(copy).maxSeq;
   const n2 = (s.store.db.prepare('select count(*) n from messages').get() as any).n;
   const full = ingest(copy);
   ok('step1 caught up, step2 deleted', n1 > 0 && n2 < n1);
@@ -331,7 +331,7 @@ console.log('\n=== H. lossy load MUST NOT mass-delete (Hole 1 regression) ===');
   fs.writeFileSync(p, buf.subarray(0, Math.floor(buf.length / 2))); // truncate → bad footer/index
   const s = ingest(DIR); // full, all messages
   const before = (s.store.db.prepare('select count(*) n from messages').get() as any).n;
-  const r = applyIncremental(s.store, s.state!, corrupt); // lossy target
+  const r = applyIncremental(s.store, s.state as IngestState, corrupt); // lossy target
   const after = (s.store.db.prepare('select count(*) n from messages').get() as any).n;
   ok('lossy load returns skipped', r.skipped === true);
   ok('store NOT mass-deleted on lossy load', after === before);
@@ -405,10 +405,13 @@ console.log(
 );
 {
   const s = ingest(DIR);
-  const rNeg = applyIncremental(s.store, s.state!, DIR);
+  const rNeg = applyIncremental(s.store, s.state as IngestState, DIR);
   ok('irrelevant dynamic-store churn does NOT trip', rNeg.needFullRebuild === false);
-  s.state!.msgTargets = new Set([...s.state!.msgTargets, '99999:1']); // simulate our store having moved
-  const rPos = applyIncremental(s.store, s.state!, DIR);
+  (s.state as IngestState).msgTargets = new Set([
+    ...(s.state as IngestState).msgTargets,
+    '99999:1',
+  ]); // simulate our store having moved
+  const rPos = applyIncremental(s.store, s.state as IngestState, DIR);
   ok('changed mapped targets trip a full rebuild', rPos.needFullRebuild === true);
   s.store.close();
 }
@@ -453,7 +456,7 @@ console.log(
   (s.store as any).recomputeDerived = () => {
     throw new Error('boom (simulated post-commit failure)');
   };
-  const r = applyIncremental(s.store, s.state!, copy);
+  const r = applyIncremental(s.store, s.state as IngestState, copy);
   ok('post-commit throw returns needFullRebuild', r.needFullRebuild === true);
   (s.store as any).recomputeDerived = orig;
   // store is not left mid-transaction: a normal write still works

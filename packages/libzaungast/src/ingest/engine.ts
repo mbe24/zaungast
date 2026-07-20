@@ -20,6 +20,10 @@ export type RefreshResult =
 export interface IngestEngine {
   full(dir: string, opts?: { seqCap?: number }): Ingested;
   refresh(prev: Ingested, dir: string): RefreshResult;
+  // OPTIONAL copy-reuse fast path (JS-only): reuse cached .ldb parses over a Session-mirrored
+  // snapshot dir. Engines that don't offer it (e.g. native) simply omit it — the Session then skips
+  // copy-reuse and uses `refresh`. Returns 'defer' when the caller must fall back to `refresh`.
+  reuseRefresh?(prev: Ingested, snapshotDir: string): RefreshResult | 'defer';
 }
 
 export type Engine = 'auto' | 'js' | 'native';
