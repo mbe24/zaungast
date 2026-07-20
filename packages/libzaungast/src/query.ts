@@ -103,7 +103,7 @@ export function ftsMatch(raw: string): string | null {
 // One emoji reaction and who reacted. `key` is the raw Teams reaction shortcode (`like`, `heart`,
 // `1f389_partypopper`, `yes-tone2`, …) — deliberately NOT resolved to a glyph here (glyph rendering
 // is a presentation concern; keeping the raw key preserves skin-tone/gender variants for a future
-// exact-variant renderer, see plan/vision.md #6). `time` is the reaction time (epoch ms).
+// exact-variant renderer). `time` is the reaction time (epoch ms).
 export interface ReactionGroup {
   key: string;
   users: { mri: string; time: number }[];

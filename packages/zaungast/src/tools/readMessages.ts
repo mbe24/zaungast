@@ -41,8 +41,8 @@ function resolveConversationArg(
   return { id: cands[0].id };
 }
 
-// Reaction summary for one message. Two-level cap, tuned against real data (see plan/vision.md
-// #6): emoji groups sorted by reactor-count desc; groups 1–3 are NAMED (≤3 names, you-first then
+// Reaction summary for one message. Two-level cap, tuned against real data: emoji groups sorted
+// by reactor-count desc; groups 1–3 are NAMED (≤3 names, you-first then
 // most-recent, per-group `+K` overflow), groups 4–5 show glyph+count only, group 6+ collapses to
 // `+N more` (N = remaining reactor count, so the histogram total stays honest). `full` drops all
 // caps and names everyone — for "did person X react?". Returns '' when there are no reactions.

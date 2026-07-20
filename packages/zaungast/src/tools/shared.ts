@@ -3,7 +3,7 @@ import type { StoreView, StoreMeta, ConvMessagesMiss } from 'libzaungast';
 // Cross-cutting helpers shared by ≥2 tool modules (a helper used by exactly one tool lives in that
 // tool's module). Tool descriptions reference HISTORY_NOTE / YOU_NOTE, so those live here too.
 
-// The pinned reading a tool renders (plan/b3-facade-review.md §3.2/Override 2): the six query
+// The pinned reading a tool renders: the six query
 // namespaces + the build's `meta`, plus `mayBeStale`. It's optional here so a STATIC store
 // (`openStore`, used by the G2 golden) can be passed directly, while the live MCP dispatch passes a
 // full `StoreReading` (`live.current()`); a static store's absent flag reads as not-stale.

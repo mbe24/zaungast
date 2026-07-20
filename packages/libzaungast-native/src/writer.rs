@@ -1387,7 +1387,7 @@ mod tests {
 
     // Parity golden: parse_iso8601_ms MUST equal JS Date.parse for the shapes Teams emits (and a few
     // edge cases). Reference values were produced by `node -e 'Date.parse(s)'`. Guards the two
-    // engines' timestamp parsers against divergence (see plan/rust-core-plan.md date-parity note).
+    // engines' timestamp parsers against divergence.
     // No-timezone strings are intentionally excluded: Date.parse treats a bare date-time as LOCAL,
     // while we treat it as UTC — irrelevant because production call timestamps always carry `Z`.
     #[test]

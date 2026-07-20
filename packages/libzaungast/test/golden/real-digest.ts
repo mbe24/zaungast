@@ -1,6 +1,6 @@
 // G3 — real-data digest golden. High-coverage regression net over the REAL local Teams corpus,
 // for the steps whose correctness only manifests at scale (view aliasing, the real fingerprint
-// hash + wrapper-less-sample quirk, scratch aliasing — see plan/roadmap.md Phase-0 scale rule).
+// hash + wrapper-less-sample quirk, scratch aliasing).
 //
 // PII-SAFE: the committed golden contains ONLY the fingerprint hash, per-entity row COUNTS, and a
 // sha256 of the canonicalized rows — never any message/person content. Hashes+counts are not PII.

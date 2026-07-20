@@ -74,7 +74,7 @@ export interface LoadEntriesReuseResult {
 // the copy-reuse incremental path (loadEntriesReuse).
 export type LdbCache = Map<string, TableReadResult>;
 
-// ---- Snapshot: the engine seam (see plan/b2-decisions.md) ----
+// ---- Snapshot: the engine seam ----
 // A `Snapshot` is what a storage engine produces: live records already grouped by object store,
 // with the db/store-name catalog resolved, so the schema/extract layer never touches engine key
 // coding. (Value bytes stay raw — value-decode remains a documented per-engine dependency.)

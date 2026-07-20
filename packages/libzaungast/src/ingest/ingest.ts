@@ -218,7 +218,7 @@ function compactParticipants(list: unknown): string | null {
 }
 
 // A recording/transcript's pointer to the chat message that announced it — never the media
-// itself (cloud-only, out of scope; see plan/feature.calendar-meeting.md). Prefers the recording
+// itself (cloud-only, out of scope). Prefers the recording
 // link, falls back to the transcript's.
 function recordingLinkOf(r: any): string | null {
   const lm = r.recordings?.[0]?.linkedMessage ?? r.transcript?.linkedMessage;

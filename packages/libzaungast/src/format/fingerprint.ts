@@ -52,7 +52,7 @@ export function fingerprint(
   // same records, in the same order, the old live-scan sampled → byte-identical hash). Decode WITHOUT
   // the value-compression wrapper (deserialize on value.subarray(vpos), NOT decodeValue): a
   // wrapper-compressed value throws and contributes no field keys. This quirk is BAKED INTO the
-  // recorded knownFingerprints hashes — do not "fix" it (see plan/format-api-reshape §1.5).
+  // recorded knownFingerprints hashes — do not "fix" it.
   const sampleKeys = new Map<string, Set<string>>();
   for (const [sk, bucket] of snap.buckets) {
     const set = new Set<string>();

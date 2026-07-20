@@ -1,5 +1,4 @@
-// libzaungast public high-level data facade (B2 of the api-design plan — see plan/api-design.md §8;
-// grown in B3a per plan/b3-facade-review.md). This is the "90% path" for data consumers:
+// libzaungast public high-level data facade. This is the "90% path" for data consumers:
 // `openStore(dir)` does the whole load+resolve+build spine once and returns a lifetime-owning handle
 // whose orthogonal query namespaces (conversations / messages / people / events / calls / topics)
 // each delegate to the structured query layer (query.ts) over the resident ChatStore. It is PURELY

@@ -4,7 +4,7 @@
 // produce a `Snapshot`. `fingerprint`/`selectMapping`/`extractEntity` are all typed against it, so a
 // new engine gets the whole schema+extract layer for free. `Snapshot`'s fields are additive-only
 // across minor versions (never removed/repurposed), which is what makes "add a directory, don't
-// rewrite" a real, versioned guarantee. See plan/api-design.md §6.2.
+// rewrite" a real, versioned guarantee.
 export type { Snapshot, StoreBucket, SnapshotRecord } from './types.js';
 import type { Snapshot } from './types.js';
 

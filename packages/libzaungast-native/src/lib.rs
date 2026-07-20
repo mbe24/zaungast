@@ -1,14 +1,13 @@
 //! libzaungast-native — the optional Rust accelerator for libzaungast.
 //!
-//! Plan: `plan/rust-core-plan.md`. Seam A — this crate reads the Teams leveldb dir and writes the
-//! ChatStore SQLite file; the TS `libzaungast` opens it read-only and serves the API. Developed as a
+//! The seam: this crate reads the Teams leveldb dir and writes the ChatStore SQLite file end-to-end;
+//! the TS `libzaungast` opens it read-only and serves the API. Developed as a
 //! pure-cargo-testable library (each byte-layer verified against a TS differential oracle); the
 //! napi-rs boundary (`bindings`, `--features napi`) wraps `writer::ingest_to_file`. Read-only always
 //! on the source: File::open, never leveldb DB::open (it only ever WRITES the separate ChatStore).
 //!
 //! Layer status: all layers byte-identical to the TS reference on real data (sstable/wal/dedup →
-//! structured-clone → fingerprint/extract → htmlToText → SQLite store, 6/6 tables). See
-//! plan/rust-core-plan.md "Progress".
+//! structured-clone → fingerprint/extract → htmlToText → SQLite store, 6/6 tables).
 
 pub mod fingerprint;
 pub mod html;
