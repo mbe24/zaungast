@@ -1,3 +1,7 @@
+// Build config for the native shim. NOTE: the flat emit (rootDir:src → outDir:dist, so
+// src/native.ts → dist/native.js, NOT dist/src/native.js) is LOAD-BEARING: native.ts loads the CJS
+// addon loader via `createRequire('../index.cjs')`, which only resolves to the package-root index.cjs
+// when the compiled file sits one level under the root. Do not nest the output.
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {

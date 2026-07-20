@@ -13,7 +13,10 @@
 const { existsSync } = require('node:fs');
 const { join } = require('node:path');
 
-// Candidate binary names, most-specific first. Mirrors napi-rs's triple naming.
+// Candidate binary names, most-specific first. Mirrors napi-rs's triple naming — this list MUST stay
+// in sync with `napi.triples` in package.json (a triple added/renamed there won't load until it's
+// mirrored here). The build routes napi's own generated loader to a scratch file, so this hand-written
+// loader is authoritative; if it drifts, non-default prebuilts silently fail to load off-platform.
 function candidates() {
   const { platform, arch } = process;
   const list = [];
