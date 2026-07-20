@@ -1,7 +1,7 @@
 {
   "mappingVersion": "1.0.0",
   "description": "New Teams (MSTeams/EBWebView) https_teams.microsoft.com IndexedDB. First known-good mapping.",
-  "knownFingerprints": ["a2b71d03bf1d8da7"],
+  "knownFingerprints": ["37938b9e38ad7c79"],
   "match": {
     "requireStores": ["replychains", "conversations"]
   },
