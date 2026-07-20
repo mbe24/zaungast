@@ -486,6 +486,25 @@ impl Handles {
     fn new() -> Self {
         Handles { used: HashSet::new(), by_full: HashMap::new() }
     }
+    /// Seed the cache from an already-built store (native refresh opens the previous file). Existing
+    /// conversations/people keep their handle, and a newly-inserted entity then gets a handle that
+    /// AVOIDS `used` — so a 6-hex collision with an existing handle can't mint a duplicate that trips
+    /// the `handle UNIQUE` constraint (which would panic → force a full rebuild). Makes refresh's
+    /// handle assignment equal a full rebuild by construction, not by collision-free luck.
+    fn seed_from(&mut self, conn: &Connection) {
+        for (table, id_col) in [("conversations", "id"), ("people", "mri")] {
+            let mut stmt = conn
+                .prepare(&format!("select {id_col}, handle from {table} where handle is not null"))
+                .unwrap();
+            let rows = stmt
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                .unwrap();
+            for (full_id, handle) in rows.filter_map(Result::ok) {
+                self.used.insert(handle.clone());
+                self.by_full.insert(full_id, handle);
+            }
+        }
+    }
     fn handle_for(&mut self, prefix: char, full_id: &str) -> String {
         if let Some(h) = self.by_full.get(full_id) {
             return h.clone();
@@ -576,11 +595,18 @@ pub fn ingest_to_file(
 
     let (schema_matched, mapping_version, self_mri) = match selected {
         Some(m) => {
-            populate(&conn, &snap, m);
+            let self_mri = populate(&conn, &snap, m);
             // Write the in-file contract (_meta + user_version) so a later refresh reads its floor +
-            // reuses this mapping. compute_state re-derives selfMri/targets/maxSeq from the snapshot.
+            // reuses this mapping. Build the state from populate's OWN outputs — its elected selfMri +
+            // the cheap no-decode target lists — instead of compute_state, which would re-extract
+            // (re-decode) the entire message store a second time.
             let ver = m.get("mappingVersion").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let state = compute_state(&snap, m);
+            let state = RefreshState {
+                self_mri,
+                max_seq: snap.max_seq,
+                msg_targets: crate::resolver::entity_targets_for(&snap, m, "message"),
+                conv_targets: crate::resolver::entity_targets_for(&snap, m, "conversation"),
+            };
             write_meta(&conn, &fp.hash, ver.as_deref(), snap.lossy, &state)?;
             (true, ver, state.self_mri)
         }
@@ -1023,7 +1049,10 @@ pub fn refresh_store(conn: &Connection, snap: &Snapshot, mapping: &Value, state:
         }
     }
 
+    // Seed from the existing (previous-file) rows so new-entity handle assignment can't collide with
+    // an already-issued handle (which would trip `handle UNIQUE`); existing entities keep their handle.
     let mut handles = Handles::new();
+    handles.seed_from(conn);
     let self_mri = state.self_mri.as_deref();
     conn.execute_batch("BEGIN").unwrap();
     let mut fts_ids: HashSet<String> = HashSet::new();
