@@ -6,7 +6,7 @@ source of truth.
 ## Commit messages
 
 For every completed task with repo changes, provide a single-line Conventional Commit message draft
-with a scope: `type(scope): summary`.
+in imperative language with a scope, e.g., `type(scope): fix bug X in component Y`. When asked to commit, use that same style for the commit itself.
 
 ## Docs sync
 
