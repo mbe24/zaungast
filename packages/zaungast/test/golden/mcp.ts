@@ -45,6 +45,10 @@ class FrozenDate extends RealDate {
 (globalThis as unknown as { Date: typeof Date }).Date = FrozenDate as unknown as typeof Date;
 
 const { openStore } = await import('libzaungast');
+// Engine selection honors ZAUNGAST_ENGINE (native.yml runs this golden with ZAUNGAST_ENGINE=native to
+// prove native output == the JS-generated goldens, exercising createNativeEngine → loader → FFI).
+const { selectEngine } = await import('zaungast/engine.js');
+const { engine } = await selectEngine();
 const {
   listConversations,
   readConversation,
@@ -87,7 +91,7 @@ const UNTIL = '2030-01-01';
 function render(dir: string): string {
   // The static facade handle IS a StoreView (namespaces + meta); the tools accept it directly (a
   // static store has no `mayBeStale`, so the envelope reads as not-stale — same as the old d=false).
-  const store = openStore(dir);
+  const store = openStore(dir, { engine });
 
   // The fixture holds exactly one channel and one 1:1 (see the golden), so these picks are unique
   // regardless of ordering. The earliest thread root = the first (ts,id-ascending) root message.

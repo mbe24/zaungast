@@ -27,6 +27,7 @@ import {
   listEvents,
   listCalls,
 } from 'zaungast/tools.js';
+import { selectEngine } from 'zaungast/engine.js';
 import { generateFixture } from '../../libzaungast/test/fixture/generate.js';
 import { CONVERSATIONS } from '../../libzaungast/test/fixture/data.js';
 
@@ -48,7 +49,9 @@ console.log(`generated fixture at ${dir}`);
 
 // A static `openStore` store is a valid tool View: the six query namespaces + the build's `meta`,
 // with `mayBeStale` absent → renders as not-stale (identical to the old deferred=false path).
-const store = openStore(dir);
+// Engine honors ZAUNGAST_ENGINE (native.yml runs this on the native engine, must equal JS output).
+const { engine } = await selectEngine();
+const store = openStore(dir, { engine });
 
 // ---- 5. end-to-end: ingest() + ChatStore + search() (MCP-surface half) ----
 console.log('\n=== end-to-end: ingest() + ChatStore + search ===');

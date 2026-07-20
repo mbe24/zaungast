@@ -33,6 +33,9 @@ jobs:
       - name: Typecheck tests
         run: npm run typecheck:test
 
+      - name: Native triples consistency (native.yml ⊆ napi.triples)
+        run: npm run check:native-triples
+
       - name: Build
         run: npm run build
 

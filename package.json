@@ -23,6 +23,7 @@
     "typecheck": "tsc -p packages/libzaungast/tsconfig.json --noEmit && tsc -p packages/libzaungast-native/tsconfig.json --noEmit && tsc -p packages/zaungast/tsconfig.json --noEmit",
     "typecheck:test": "tsc -p packages/libzaungast/test/tsconfig.json && tsc -p packages/libzaungast-native/test/tsconfig.json && tsc -p packages/zaungast/test/tsconfig.json",
     "check:deps": "node scripts/check-deps.mjs",
+    "check:native-triples": "node scripts/check-native-triples.mjs",
     "format": "prettier --write \"packages/*/src/**/*.ts\" \"packages/*/test/**/*.ts\"",
     "format:check": "prettier --check \"packages/*/src/**/*.ts\" \"packages/*/test/**/*.ts\"",
     "test": "node --conditions=development --experimental-sqlite --import tsx packages/libzaungast/test/unit.ts && node --conditions=development --experimental-sqlite --import tsx packages/libzaungast/test/export-surface.ts && node --conditions=development --experimental-sqlite --import tsx packages/libzaungast-native/test/smoke.ts && node --conditions=development --experimental-sqlite --import tsx packages/zaungast/test/unit.ts",
