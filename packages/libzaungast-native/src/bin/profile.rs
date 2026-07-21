@@ -26,7 +26,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde_json::{json, Value};
 
 use libzaungast_native::fingerprint::fingerprint;
-use libzaungast_native::idb::{load_snapshot, load_snapshot_capped};
+use libzaungast_native::idb::{load_snapshot, load_snapshot_capped, load_snapshot_reuse, LdbCache};
 use libzaungast_native::resolver::{
     entity_targets_for, extract_rows, load_mapping, select_mapping, store_set_from_fp,
 };
@@ -395,13 +395,29 @@ fn main() {
         drop(prev);
     }
     let delta_stat = stat("refresh_store (delta apply)", delta_ms);
+
+    // Axis B copy-reuse load: warm the cache once (cold read populates it), then measure the WARM
+    // reuse-load — the changed-tick READ cost AFTER Axis B (reuse cached immutable `.ldb`, re-read only
+    // the `.log`) against the full `load_snapshot` above (formatPhases[0]). The Axis B changed tick ≈
+    // reuseLoad(warm) + deltaApply + copy; the pre-Axis-B tick ≈ loadSnapshot(full) + deltaApply + copy.
+    let mut reuse_cache = LdbCache::new();
+    let _ = load_snapshot_reuse(dir, &mut reuse_cache).expect("reuse warm-up");
+    let reuse_load = bench("loadSnapshotReuse (warm cache)", n, || {
+        std::hint::black_box(load_snapshot_reuse(dir, &mut reuse_cache).expect("reuse load"));
+    });
+    let axis_b_tick = r3(reuse_load.p50 + delta_stat.p50 + copy_stat.p50);
+    let full_read_tick = r3(format_phases[0].p50 + delta_stat.p50 + copy_stat.p50);
     let changed_refresh = json!({
-        "note": "a CHANGED tick pays copy + full loadSnapshot + deltaApply + write_meta; R3 short-circuits only NO-OP ticks. loadSnapshot p50 is in formatPhases[0].",
+        "note": "a CHANGED tick pays copy + loadSnapshot + deltaApply + write_meta; R3 short-circuits only NO-OP ticks. Axis B replaces the full loadSnapshot (formatPhases[0]) with reuseLoad (warm cache): tick ≈ reuseLoad + deltaApply + copy. deltaApply is then the tall pole (the ★b small-store-trim target).",
         "dbSizeBytes": db_size,
         "changedRecords": changed_records,
         "copy": stat_json(&copy_stat),
         "deltaApply": stat_json(&delta_stat),
-        "loadSnapshotP50": format_phases[0].p50
+        "loadSnapshotP50": format_phases[0].p50,
+        "reuseLoad": stat_json(&reuse_load),
+        "reuseHits": reuse_cache.hits(),
+        "axisBChangedTickP50": axis_b_tick,
+        "fullReadChangedTickP50": full_read_tick
     });
 
     // ---- 5. production peak RSS from a fresh single-ingest child (VmHWM protocol) ----
@@ -523,10 +539,15 @@ fn main() {
         "changed-tick components (a CHANGED refresh pays ALL of these; the no-op above is R3):"
     );
     eprintln!(
-        "  db {:.1}MB · changed records {changed_records} · copy p50 {}ms · loadSnapshot p50 {}ms · deltaApply p50 {}ms",
+        "  db {:.1}MB · changed records {changed_records} · copy p50 {}ms · loadSnapshot p50 {}ms · reuseLoad p50 {}ms · deltaApply p50 {}ms",
         db_size as f64 / 1_048_576.0,
         copy_stat.p50,
         format_phases[0].p50,
+        reuse_load.p50,
+        delta_stat.p50
+    );
+    eprintln!(
+        "  changed tick p50: full re-read {full_read_tick}ms  →  Axis B (copy-reuse) {axis_b_tick}ms  (deltaApply {}ms is now the tall pole → ★b)",
         delta_stat.p50
     );
     eprintln!();
