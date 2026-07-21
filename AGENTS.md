@@ -17,31 +17,22 @@ When a change affects observable behavior, CLI usage, or workflow, ask to update
 
 If a docs page does not exist yet for new behavior, ask to create it under `docs/` and register it in `mkdocs.yml`.
 
-## TypeScript — post-change gate (the primary check; mirrors CI)
+## Validation — post-change
 
-After changes, esp.to the data layer, run the same checks CI runs:
+Run the same gate CI runs, then keep it green. Exact invocations live in `package.json` scripts and
+`.github/workflows/` — this section is *what* to check and *when*, not command lines to copy (they drift).
 
-```bash
-npm run format:check && npm run typecheck && npm run typecheck:test \
-  && npm test && npm run test:fixture && npm run test:integration:ci
-```
+### TypeScript (primary gate; mirrors CI)
 
-## Rust — post-change (`packages/libzaungast-native` only)
+The `format:check` → `typecheck`/`typecheck:test` → `test`/`test:fixture`/`test:integration:ci` chain,
+after any change (especially the data layer).
 
-Only when Rust source changed. Run these from `packages/libzaungast-native/`:
+### Rust (`packages/libzaungast-native`, only when Rust source changed)
 
-```bash
-cargo fmt
-cargo clippy --features harness --all-targets --no-deps -- -W clippy::pedantic   # lib + diff bins
-cargo clippy --features napi    --lib          --no-deps -- -W clippy::pedantic   # the napi addon
-```
-
-> Tip: if your environment blocks executing freshly-built native binaries, run the toolchain inside a Linux container instead — e.g. `rust:1-slim-bookworm`.
-
-For a native **behavior** change, the real gate is the byte-differential — the native engine must stay
-byte-identical to the TS reference:
-
-```bash
-node packages/libzaungast-native/harness/run.mjs <leveldb-dir> --layer store   # also: --layer incr
-# ZAUNGAST_NATIVE_RUNNER=local (native) or =docker (blocked environments)
-```
+- **Style/lint:** `npm run check:native` — wraps `cargo fmt` + pedantic `clippy`, auto-falling back to
+  Docker when the host can't build natively.
+- **Behavior:** the native engine must stay byte-identical to the TS reference. Run the byte-differential
+  harness (`packages/libzaungast-native/harness/run.mjs`, run bare for its layer list); every layer must
+  report `0 differ`. `store` + `incr` are the minimum — for a multi-module change, a refactor/rename, or
+  when unsure which layer is hit, run **every** layer plus the Rust unit tests. Layers map to the
+  same-named module under `format/`/`store/`.
