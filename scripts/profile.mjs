@@ -40,10 +40,10 @@ import {
 } from 'libzaungast/format';
 import { openStore } from 'libzaungast';
 import {
-  readMessages,
+  readConversation,
   search,
   listConversations,
-  topTopics,
+  rankTopics,
   findPerson,
   listEvents,
   listCalls,
@@ -247,10 +247,10 @@ for (const mode of ['copy-reuse', 'reparse']) {
   const flat = busiest('1:1') ?? busiest('group');
   const chan = busiest('channel');
   const T = TOOL_ITERS;
-  if (flat) results.tools.push(bench('read_messages (flat)', () => readMessages(store, { conversation: flat, limit: 40 }), T));
-  if (chan) results.tools.push(bench('read_messages (channel digest)', () => readMessages(store, { conversation: chan, limit: 40 }), T));
+  if (flat) results.tools.push(bench('read_messages (flat)', () => readConversation(store, { conversation: flat, limit: 40 }), T));
+  if (chan) results.tools.push(bench('read_messages (channel digest)', () => readConversation(store, { conversation: chan, limit: 40 }), T));
   results.tools.push(bench('search "the"', () => search(store, { query: 'the', limit: 20 }), T));
-  results.tools.push(bench('top_topics 30d', () => topTopics(store, { window: '30d' }), TOPIC_ITERS));
+  results.tools.push(bench('top_topics 30d', () => rankTopics(store, { window: '30d' }), TOPIC_ITERS));
   results.tools.push(bench('list_conversations', () => listConversations(store, {}), T));
   results.tools.push(bench('find_person (roster)', () => findPerson(store, {}), T));
   results.tools.push(bench('list_events', () => listEvents(store, { since: '2020-01-01', until: '2030-01-01', limit: 30 }), T));
