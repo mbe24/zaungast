@@ -22,6 +22,7 @@ fn main() {
     let cached = cache.len();
     let (warm_snap, warm_compacted) = load_snapshot_reuse(&dir, &mut cache).expect("reuse (warm)");
     let warm = snapshot_report(&warm_snap);
+    let warm_hits = cache.hits(); // cumulative; the warm pass must have SERVED the cached parses
 
     // Intra-Rust invariants (fail loudly → the harness sees no valid stdout and reports failure).
     let mut bad = Vec::new();
@@ -34,6 +35,13 @@ fn main() {
     if cached == 0 {
         bad.push("cold pass cached no .ldb tables (expected ≥1)".to_string());
     }
+    // Perf guard: prove the warm pass REUSED the cache (an always-false `can_reuse` would still make
+    // every report match — silently regressing to a full re-read every tick).
+    if warm_hits < cached {
+        bad.push(format!(
+            "warm pass hit the cache {warm_hits}× but {cached} tables are cached (can_reuse regressed?)"
+        ));
+    }
     if cold != full {
         bad.push("COLD reuse report != FULL report".to_string());
     }
@@ -44,7 +52,9 @@ fn main() {
         eprintln!("diffreuse FAIL:\n  - {}", bad.join("\n  - "));
         std::process::exit(1);
     }
-    eprintln!("diffreuse: COLD == WARM == FULL ok ({cached} .ldb cached, reused on warm)");
+    eprintln!(
+        "diffreuse: COLD == WARM == FULL ok ({cached} .ldb cached, {warm_hits} warm cache hits)"
+    );
 
     // Emit the WARM (cache-reusing) report for the TS oracle (diff-snapshot.mjs) to match vs TS-full.
     print!("{warm}");

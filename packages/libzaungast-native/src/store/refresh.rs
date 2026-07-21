@@ -598,6 +598,20 @@ mod composed_tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(p)
     }
 
+    // Single-source schema + first registered mapping JSON text (mirrors harness/run.mjs), read from
+    // the sibling libzaungast package relative to this crate.
+    fn schema_and_mappings() -> (String, Vec<String>) {
+        let schema = std::fs::read_to_string(crate_rel("../libzaungast/src/schema.sql"))
+            .expect("read schema.sql");
+        let reg = std::fs::read_to_string(crate_rel("../libzaungast/src/schema/mappings.json"))
+            .expect("read mappings.json");
+        let first = serde_json::from_str::<Vec<String>>(&reg).expect("registry")[0].clone();
+        let text =
+            std::fs::read_to_string(crate_rel("../libzaungast/src/schema/versions").join(&first))
+                .expect("read mapping.json");
+        (schema, vec![text])
+    }
+
     #[test]
     fn reuse_refresh_composed_equals_full() {
         let Ok(dir) = std::env::var("ZAUNGAST_TEST_DIR") else {
@@ -606,19 +620,9 @@ mod composed_tests {
             );
             return;
         };
-        // Single-source schema + first registered mapping (mirrors harness/run.mjs), read from the
-        // sibling libzaungast package relative to this crate.
-        let schema = std::fs::read_to_string(crate_rel("../libzaungast/src/schema.sql"))
-            .expect("read schema.sql");
-        let reg = std::fs::read_to_string(crate_rel("../libzaungast/src/schema/mappings.json"))
-            .expect("read mappings.json");
-        let first = serde_json::from_str::<Vec<String>>(&reg).expect("registry")[0].clone();
-        let mapping_text =
-            std::fs::read_to_string(crate_rel("../libzaungast/src/schema/versions").join(&first))
-                .expect("read mapping.json");
-        let mappings_json = vec![mapping_text.clone()];
+        let (schema, mappings_json) = schema_and_mappings();
         let mappings: Vec<Value> =
-            vec![serde_json::from_str(&mapping_text).expect("parse mapping")];
+            vec![serde_json::from_str(&mappings_json[0]).expect("parse mapping")];
 
         // Full snapshot → the mapping → the full-rebuild store report (the oracle).
         let full = load_snapshot(&dir).expect("load_snapshot");
@@ -704,6 +708,124 @@ mod composed_tests {
         );
 
         for p in [prev_path, cold_path, warm_path] {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
+    // A compaction (a cached `.ldb` vanishing) must make `reuse_refresh_to_file` DEFER: no file
+    // written, so the Session falls back to the cacheless reparse (which reconciles the elided
+    // deletion). Exercises the compacted → `defer()` early-out through the whole file wrapper — the
+    // pure-Rust half of Q6's mandatory compaction scenario (the live forced-compaction is a WSL leg).
+    #[test]
+    fn reuse_refresh_defers_on_compaction() {
+        let Ok(src) = std::env::var("ZAUNGAST_TEST_DIR") else {
+            eprintln!("SKIP reuse_refresh_defers_on_compaction — set ZAUNGAST_TEST_DIR");
+            return;
+        };
+        let (schema, mappings_json) = schema_and_mappings();
+        let mappings: Vec<Value> =
+            vec![serde_json::from_str(&mappings_json[0]).expect("parse mapping")];
+
+        // Mutable copy of the source dir (we delete an `.ldb` from it to force a compaction).
+        let m = std::env::temp_dir().join("zaungast-reuse-compact-src");
+        let _ = std::fs::remove_dir_all(&m);
+        std::fs::create_dir_all(&m).expect("mkdir M");
+        for e in std::fs::read_dir(&src).expect("read src") {
+            let e = e.expect("dirent");
+            if e.file_type().is_ok_and(|t| t.is_file()) {
+                std::fs::copy(e.path(), m.join(e.file_name())).expect("copy file");
+            }
+        }
+        let m = m.to_str().unwrap().to_string();
+
+        let full = load_snapshot(&m).expect("load_snapshot M");
+        let full_fp = fingerprint(&full);
+        let mapping = select_mapping(
+            &full_fp.hash,
+            &store_set_from_fp(&full_fp.stores),
+            &mappings,
+        )
+        .expect("no mapping matched M");
+
+        // Prev store as of cap, source_sig="" so R3 never short-circuits (the reuse load must run).
+        let cap = full.max_seq / 2;
+        let capped = load_snapshot_capped(&m, cap).expect("capped");
+        let prev_path = std::env::temp_dir().join("zaungast-reuse-compact-prev.db");
+        let _ = std::fs::remove_file(&prev_path);
+        {
+            let mem = build_store(&capped, mapping, &schema);
+            mem.execute("VACUUM INTO ?1", params![prev_path.to_str().unwrap()])
+                .expect("VACUUM INTO prev");
+        }
+        {
+            let prev = Connection::open(&prev_path).expect("open prev");
+            let state = compute_state(&capped, mapping);
+            let mv = mapping.get("mappingVersion").and_then(Value::as_str);
+            write_meta(
+                &prev,
+                &fingerprint(&capped).hash,
+                mv,
+                capped.lossy,
+                "",
+                &state,
+            )
+            .expect("write prev _meta");
+        }
+
+        let mut cache = LdbCache::new();
+        // Tick 1: a normal reuse refresh WARMS the cache with M's current `.ldb` set.
+        let new1 = std::env::temp_dir().join("zaungast-reuse-compact-new1.db");
+        let o1 = reuse_refresh_to_file(
+            &m,
+            prev_path.to_str().unwrap(),
+            new1.to_str().unwrap(),
+            &mappings_json,
+            &mut cache,
+        )
+        .expect("tick1");
+        assert!(
+            !o1.deferred && !o1.need_full_rebuild,
+            "tick1 applies + warms the cache"
+        );
+        assert!(!cache.is_empty(), "cache warmed by tick1");
+
+        // Compaction: delete an `.ldb` the cache now holds.
+        let victim = {
+            let mut ldbs: Vec<String> = std::fs::read_dir(&m)
+                .unwrap()
+                .filter_map(Result::ok)
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|f| {
+                    std::path::Path::new(f)
+                        .extension()
+                        .is_some_and(|e| e == "ldb")
+                })
+                .collect();
+            ldbs.sort();
+            ldbs.into_iter().next().expect("at least one .ldb")
+        };
+        std::fs::remove_file(std::path::Path::new(&m).join(&victim)).expect("remove .ldb");
+
+        // Tick 2: a cached `.ldb` vanished → MUST defer, writing no file.
+        let new2 = std::env::temp_dir().join("zaungast-reuse-compact-new2.db");
+        let _ = std::fs::remove_file(&new2);
+        let o2 = reuse_refresh_to_file(
+            &m,
+            prev_path.to_str().unwrap(),
+            new2.to_str().unwrap(),
+            &mappings_json,
+            &mut cache,
+        )
+        .expect("tick2");
+        assert!(o2.deferred, "tick2 defers on compaction");
+        assert!(
+            !o2.need_full_rebuild && !o2.skipped,
+            "defer, not rebuild/skip"
+        );
+        assert!(!new2.exists(), "defer writes no new file");
+
+        let _ = std::fs::remove_dir_all(&m);
+        for p in [prev_path, new1, new2] {
             let _ = std::fs::remove_file(p);
         }
     }

@@ -351,6 +351,7 @@ struct CachedTable {
 #[derive(Default)]
 pub struct LdbCache {
     tables: HashMap<String, CachedTable>,
+    hits: usize,
 }
 impl LdbCache {
     pub fn new() -> Self {
@@ -363,6 +364,12 @@ impl LdbCache {
     pub fn is_empty(&self) -> bool {
         self.tables.is_empty()
     }
+    /// Cumulative `.ldb` parses served FROM cache (not re-read) across all reuse calls. A perf guard —
+    /// a warm pass that never hits means `can_reuse` silently regressed to a full re-read every tick —
+    /// plus telemetry (the profiler reports the hit rate).
+    pub fn hits(&self) -> usize {
+        self.hits
+    }
 }
 
 // Reuse-cache decisions, factored out so they can be unit-tested WITHOUT real `.ldb` bytes.
@@ -373,10 +380,11 @@ impl LdbCache {
 fn compaction_detected(cached_names: &[String], current: &HashSet<String>) -> bool {
     cached_names.iter().any(|f| !current.contains(f))
 }
-// `can_reuse`: reuse a cached parse iff the file is cached AND its size is unchanged. Same name +
-// same size ⇒ (write-once, never-recycled numbers) the same bytes; a size change ⇒ re-read.
-fn can_reuse(cached_size: Option<u64>, disk_size: u64) -> bool {
-    cached_size == Some(disk_size)
+// `can_reuse`: reuse a cached parse iff the file is cached AND its on-disk size is known and unchanged.
+// Same name + same size ⇒ (write-once, never-recycled numbers) the same bytes. A size change, an
+// uncached file, OR a stat failure (unknown size) ⇒ re-read (never reuse blind).
+fn can_reuse(cached_size: Option<u64>, disk_size: Option<u64>) -> bool {
+    matches!((cached_size, disk_size), (Some(c), Some(d)) if c == d)
 }
 
 /// Cache-reusing, compaction-aware variant of `build_dedup_map` (Axis B). Reuses cached immutable
@@ -405,9 +413,17 @@ fn build_dedup_map_reuse(
 
     for f in &ldb_now {
         let p = Path::new(dir).join(f);
-        let size = std::fs::metadata(&p).map_or(0, |m| m.len());
+        let size = std::fs::metadata(&p).ok().map(|m| m.len());
         if can_reuse(cache.tables.get(f).map(|c| c.size), size) {
-            fold_table(&cache.tables[f].entries, &mut d); // reuse the immutable parse
+            // Reuse the immutable parse — but STILL propagate the short-entry lossy signal the cold
+            // path raises (`fold_table` returns true on a <8-byte key). A table can parse clean yet
+            // contain such a key, so it IS cached; without re-raising the flag a warm tick would read
+            // lossy=false where a cold read reads lossy=true — a warm≠cold divergence. TS re-runs
+            // foldTable on cache hits for the same reason.
+            if fold_table(&cache.tables[f].entries, &mut d) {
+                d.lossy = true;
+            }
+            cache.hits += 1;
         } else {
             match crate::sstable::read_table(&p.to_string_lossy()) {
                 Ok(t) => {
@@ -417,16 +433,19 @@ fn build_dedup_map_reuse(
                     if fold_table(&t.entries, &mut d) {
                         d.lossy = true;
                     }
-                    // H-B: cache only a CLEAN parse — a partial parse must be retried next tick, never
-                    // frozen (which would pin reuse in a permanent lossy/stale state).
+                    // H-B: cache only a CLEAN parse whose size we actually know — a partial parse must
+                    // be retried next tick (never frozen), and a stat failure ⇒ don't cache (matching
+                    // TS; the entry would be re-read next tick anyway rather than reused blind).
                     if !t.lossy {
-                        cache.tables.insert(
-                            f.clone(),
-                            CachedTable {
-                                entries: t.entries,
-                                size,
-                            },
-                        );
+                        if let Some(sz) = size {
+                            cache.tables.insert(
+                                f.clone(),
+                                CachedTable {
+                                    entries: t.entries,
+                                    size: sz,
+                                },
+                            );
+                        }
                     }
                 }
                 Err(_) => d.lossy = true,
@@ -697,9 +716,10 @@ mod reuse_tests {
     // re-copy (or the rare recreated-DB filename reuse), so the cached bytes are stale and re-read.
     #[test]
     fn reuse_only_on_exact_size_match() {
-        assert!(can_reuse(Some(1234), 1234)); // cached + same size → reuse
-        assert!(!can_reuse(Some(1200), 1234)); // grew (partial→complete) → re-read
-        assert!(!can_reuse(Some(1234), 1200)); // shrank (filename reuse) → re-read
-        assert!(!can_reuse(None, 1234)); // uncached → read
+        assert!(can_reuse(Some(1234), Some(1234))); // cached + same size → reuse
+        assert!(!can_reuse(Some(1200), Some(1234))); // grew (partial→complete) → re-read
+        assert!(!can_reuse(Some(1234), Some(1200))); // shrank (filename reuse) → re-read
+        assert!(!can_reuse(None, Some(1234))); // uncached → read
+        assert!(!can_reuse(Some(1234), None)); // stat failed (unknown size) → re-read, never blind
     }
 }
