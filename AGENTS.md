@@ -36,3 +36,13 @@ after any change (especially the data layer).
   report `0 differ`. `store` + `incr` are the minimum — for a multi-module change, a refactor/rename, or
   when unsure which layer is hit, run **every** layer plus the Rust unit tests. Layers map to the
   same-named module under `format/`/`store/`.
+
+## Profiling
+
+Two dev harnesses (NOT in CI):
+
+- `npm run profile -- <leveldb-dir> [--heavy]` (TS)
+- `npm run profile:native -- <leveldb-dir> [--heavy]` (native Rust; WSL2/Linux only)
+
+Being outside CI they drift silently — when a change reshapes profiled code (tool rename, engine
+restructure), recheck they still run and measure the right thing.
