@@ -9,3 +9,5 @@ experiments/
 plan/
 # local profiling output (harness in scripts/ is committed; its output is not)
 profiling/
+# zaungast's package README is copied from the root README at publish time (release.yml), not committed
+packages/zaungast/README.md

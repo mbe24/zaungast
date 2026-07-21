@@ -1,7 +1,6 @@
 {
   "name": "libzaungast",
-  "version": "0.3.0",
-  "private": true,
+  "version": "0.4.0",
   "description": "Read-only, offline reader for the local Microsoft Teams cache (Chromium IndexedDB-on-LevelDB): decodes it into clean, structured, query-able data — conversations, messages, people, events, calls. No Graph API, no cloud, no credentials. Not affiliated with or endorsed by Microsoft.",
   "type": "module",
   "sideEffects": false,

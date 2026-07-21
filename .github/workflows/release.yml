@@ -23,16 +23,20 @@ jobs:
             exit 1
           fi
 
-      - name: Ensure package.json version matches release tag
+      - name: Ensure published package versions match release tag
         shell: bash
+        # Gate the packages that are ACTUALLY published (libzaungast + zaungast), not the private
+        # monorepo root — a tag vX.Y.Z must mean both are at X.Y.Z.
         run: |
           set -euo pipefail
           tag_version="${GITHUB_REF_NAME#v}"
-          pkg_version="$(node -p "require('./package.json').version")"
-          if [[ "${pkg_version}" != "${tag_version}" ]]; then
-            echo "Version mismatch: tag ${tag_version} vs package.json ${pkg_version}."
-            exit 1
-          fi
+          for pkg in libzaungast zaungast; do
+            v="$(node -p "require('./packages/${pkg}/package.json').version")"
+            if [[ "${v}" != "${tag_version}" ]]; then
+              echo "Version mismatch: tag ${tag_version} vs packages/${pkg} ${v}."
+              exit 1
+            fi
+          done
 
       - name: Resolve tagged commit SHA
         id: commit
@@ -40,6 +44,9 @@ jobs:
         run: echo "sha=$(git rev-parse HEAD^{commit})" >> "$GITHUB_OUTPUT"
 
       - name: Wait for a successful CI run for this commit
+        # The tagged commit was already built + fully tested by ci.yml on push; this GATES on that
+        # green run rather than re-testing. The build job below compiles once only to produce the dist
+        # to publish (not to re-validate).
         uses: actions/github-script@v8
         env:
           COMMIT_SHA: ${{ steps.commit.outputs.sha }}
@@ -66,9 +73,41 @@ jobs:
             if (run.conclusion !== "success") { core.setFailed(`CI concluded '${run.conclusion}', not success. ${run.html_url}`); return; }
             core.info("CI green — publish may proceed.");
 
-  publish:
-    name: Publish to npm
+  build:
+    name: Build once
     needs: verify-ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: "npm"
+      - name: Install dependencies
+        run: npm ci
+      - name: Build once (libzaungast then zaungast)
+        run: npm run build
+      # Tar the dist trees so upload-artifact@v4 doesn't strip the packages/*/dist path prefix; the
+      # publish jobs untar at repo root to restore exact paths. libzaungast's dist carries its copied
+      # schema assets (schema.sql, schema/versions/*.json, mappings.json) + declarations.
+      - name: Package dist artifacts
+        run: tar czf dist-artifacts.tgz packages/libzaungast/dist packages/zaungast/dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-artifacts
+          path: dist-artifacts.tgz
+          retention-days: 7
+          if-no-files-found: error
+
+  # Publish libzaungast FIRST — zaungast depends on it. Publishes from the restored dist (no rebuild,
+  # no npm ci — packing only reads files, and neither package has a prepare/prepack/prepublishOnly
+  # hook). Idempotent: if this exact version is already live, skip instead of failing on "cannot
+  # publish over an existing version", so a re-run converges (npm version publishes are atomic).
+  publish-libzaungast:
+    name: Publish libzaungast
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -78,13 +117,59 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
-          cache: "npm"
           registry-url: "https://registry.npmjs.org"
-      - name: Install dependencies
-        run: npm ci
-      - name: Build
-        run: npm run build
-      - name: Publish (with provenance)
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-artifacts
+      - name: Restore dist
+        run: tar xzf dist-artifacts.tgz
+      - name: Publish libzaungast (idempotent, with provenance)
+        working-directory: packages/libzaungast
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --provenance --access public
+        run: |
+          set -euo pipefail
+          ver="$(node -p "require('./package.json').version")"
+          if npm view "libzaungast@${ver}" version >/dev/null 2>&1; then
+            echo "libzaungast@${ver} already published — skipping."
+          else
+            npm publish --provenance --access public
+          fi
+
+  # Then zaungast — runs only if publish-libzaungast succeeded. No registry poll: by the time this job
+  # checks out + restores dist, libzaungast has long since propagated (npm is read-your-writes within
+  # seconds). Same idempotent skip so a full re-run of a completed release doesn't false-fail.
+  publish-zaungast:
+    name: Publish zaungast
+    needs: publish-libzaungast
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC for npm --provenance
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-artifacts
+      - name: Restore dist
+        run: tar xzf dist-artifacts.tgz
+      - name: Use the repo README as zaungast's package README
+        # The root README IS zaungast's doc; npm only reads a README from the package dir, so copy it
+        # in at publish time (no committed duplicate to keep in sync).
+        run: cp README.md packages/zaungast/README.md
+      - name: Publish zaungast (idempotent, with provenance)
+        working-directory: packages/zaungast
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          ver="$(node -p "require('./package.json').version")"
+          if npm view "zaungast@${ver}" version >/dev/null 2>&1; then
+            echo "zaungast@${ver} already published — skipping."
+          else
+            npm publish --provenance --access public
+          fi
