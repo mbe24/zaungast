@@ -34,7 +34,9 @@
     "test:integration": "node --conditions=development --experimental-sqlite --import tsx packages/libzaungast/test/_inctest.ts && node --conditions=development --experimental-sqlite --import tsx packages/libzaungast/test/_reusetest.ts && node --conditions=development --experimental-sqlite --import tsx packages/zaungast/test/_fbtest.ts",
     "test:golden": "node --conditions=development --experimental-sqlite --import tsx packages/libzaungast/test/golden/extract.ts && node --conditions=development --experimental-sqlite --import tsx packages/zaungast/test/golden/mcp.ts",
     "test:golden:real": "node --conditions=development --experimental-sqlite --import tsx packages/libzaungast/test/golden/real-digest.ts && node --conditions=development --experimental-sqlite --import tsx packages/libzaungast/test/golden/htmltext.ts",
-    "assets": "node scripts/render-assets.mjs"
+    "assets": "node scripts/render-assets.mjs",
+    "profile": "node --experimental-sqlite --expose-gc scripts/profile.mjs",
+    "profile:native": "node scripts/profile-rust.mjs"
   },
   "engines": {
     "node": ">=22.5.0"
