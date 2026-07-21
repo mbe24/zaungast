@@ -8,13 +8,17 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use bytes::Bytes;
+
 use crate::sstable::{crc32c_final, crc32c_init, crc32c_update};
 
 pub struct SnapshotRecord {
     pub seq: u64,
     pub rtype: u8,
-    pub key: Vec<u8>,
-    pub value: Option<Vec<u8>>,
+    // `Bytes` (refcounted views into the parsed `.ldb` blocks / WAL copies) so the dedup fold and the
+    // copy-reuse cache share value/key bytes instead of re-copying them every tick (★c).
+    pub key: Bytes,
+    pub value: Option<Bytes>,
 }
 pub struct StoreBucket {
     pub db_id: u64,
@@ -37,7 +41,7 @@ pub struct Snapshot {
 // ---- dedup: first-seen-ordered map (Vec preserves JS Map insertion order; in-place overwrite) ----
 struct Dedup {
     order: Vec<SnapshotRecord>,
-    index: HashMap<Vec<u8>, usize>,
+    index: HashMap<Bytes, usize>,
     raw: u64,
     lossy: bool,
     // seqCap (tests/incremental differential only): ignore entries above this sequence, so the map
@@ -45,21 +49,24 @@ struct Dedup {
     seq_cap: Option<u64>,
 }
 impl Dedup {
-    fn consider(&mut self, user_key: &[u8], value: Option<&[u8]>, seq: u64, rtype: u8) {
+    // `user_key`/`value` arrive as owned `Bytes` (cheap-clone refcounts, NOT byte copies): a new key
+    // moves straight into the record + a refcount into the index; an overwrite moves the new value in.
+    // Zero value/key memcpy per record — the ★c win vs the old `to_vec()` per record.
+    fn consider(&mut self, user_key: Bytes, value: Option<Bytes>, seq: u64, rtype: u8) {
         if let Some(cap) = self.seq_cap {
             if seq > cap {
                 return;
             }
         }
         self.raw += 1;
-        match self.index.get(user_key) {
+        match self.index.get(&user_key) {
             None => {
-                self.index.insert(user_key.to_vec(), self.order.len());
+                self.index.insert(user_key.clone(), self.order.len());
                 self.order.push(SnapshotRecord {
                     seq,
                     rtype,
-                    key: user_key.to_vec(),
-                    value: value.map(<[u8]>::to_vec),
+                    key: user_key,
+                    value,
                 });
             }
             Some(&i) => {
@@ -67,8 +74,10 @@ impl Dedup {
                     let r = &mut self.order[i];
                     r.seq = seq;
                     r.rtype = rtype;
-                    r.key = user_key.to_vec();
-                    r.value = value.map(<[u8]>::to_vec);
+                    // `r.key` is intentionally NOT reassigned: the index hit means it already holds the
+                    // identical user-key bytes (same as JS re-pointing at an equal Buffer). Dropping the
+                    // rewrite removes a malloc+memcpy+free per duplicate record.
+                    r.value = value;
                 }
             }
         }
@@ -76,8 +85,9 @@ impl Dedup {
 }
 
 // Split each table entry's 8-byte trailer (type + 56-bit LE seq) and feed it. Returns true if any
-// entry was too short to carry a trailer (→ lossy).
-fn fold_table(entries: &[(Vec<u8>, Vec<u8>)], d: &mut Dedup) -> bool {
+// entry was too short to carry a trailer (→ lossy). The user-key + value are refcounted `Bytes`
+// slices/clones (zero copy) — the trailer split is `ikey.slice(0..n-8)`.
+fn fold_table(entries: &[(Bytes, Bytes)], d: &mut Dedup) -> bool {
     let mut short = false;
     for (ikey, value) in entries {
         let n = ikey.len();
@@ -92,7 +102,7 @@ fn fold_table(entries: &[(Vec<u8>, Vec<u8>)], d: &mut Dedup) -> bool {
             low48 |= (ikey[n - 7 + i] as u64) << (8 * i as u32);
         }
         let seq = (seq_hi << 48) | low48;
-        d.consider(&ikey[..n - 8], Some(value), seq, rtype);
+        d.consider(ikey.slice(0..n - 8), Some(value.clone()), seq, rtype);
     }
     short
 }
@@ -100,8 +110,8 @@ fn fold_table(entries: &[(Vec<u8>, Vec<u8>)], d: &mut Dedup) -> bool {
 fn fold_batch(batch: &crate::wal::WalBatch, d: &mut Dedup) {
     for (i, op) in batch.ops.iter().enumerate() {
         d.consider(
-            &op.key,
-            op.value.as_deref(),
+            op.key.clone(),
+            op.value.clone(),
             batch.sequence + i as u64,
             op.op_type,
         );
@@ -231,7 +241,10 @@ fn collect_snapshot(d: Dedup) -> Snapshot {
     let mut db_names: HashMap<u64, String> = HashMap::new();
     let mut store_names: HashMap<String, String> = HashMap::new();
     let mut buckets: Vec<StoreBucket> = Vec::new();
-    let mut bindex: HashMap<String, usize> = HashMap::new();
+    // Bucket index keyed by a (dbId, osId) TUPLE, not a `format!("{db}:{os}")` String — the old
+    // string key allocated once PER DATA RECORD (~116k/tick). The store-name catalog map below stays
+    // String-keyed (built once per store-name row, rare). (★c)
+    let mut bindex: HashMap<(u64, u64), usize> = HashMap::new();
     let mut max_seq = 0u64;
     let raw_count = d.raw;
     let lossy = d.lossy;
@@ -281,7 +294,7 @@ fn collect_snapshot(d: Dedup) -> Snapshot {
                 }
             }
         } else if index_id == 1 {
-            let bk = format!("{database_id}:{object_store_id}");
+            let bk = (database_id, object_store_id);
             let idx = if let Some(&i) = bindex.get(&bk) {
                 i
             } else {
@@ -337,7 +350,7 @@ pub fn load_snapshot_capped(dir: &str, seq_cap: u64) -> std::io::Result<Snapshot
 /// size change (a partial→complete re-copy, or the rare recreated-DB filename reuse) invalidates the
 /// entry so it is re-read. Mirrors the TS `LdbCache` value `{ res, size }`.
 struct CachedTable {
-    entries: Vec<(Vec<u8>, Vec<u8>)>,
+    entries: Vec<(Bytes, Bytes)>,
     size: u64,
 }
 
@@ -520,7 +533,7 @@ fn bucket_crc(b: &StoreBucket) -> u32 {
         for x in (r.key.len() as u32).to_le_bytes() {
             c = up(c, x);
         }
-        for &x in &r.key {
+        for &x in &r.key[..] {
             c = up(c, x);
         }
         for x in r.seq.to_le_bytes() {
@@ -537,7 +550,7 @@ fn bucket_crc(b: &StoreBucket) -> u32 {
                 for x in (v.len() as u32).to_le_bytes() {
                     c = up(c, x);
                 }
-                for &x in v {
+                for &x in &v[..] {
                     c = up(c, x);
                 }
             }

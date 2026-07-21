@@ -5,6 +5,8 @@
 //! as deletion truth downstream.
 //! Format ref: https://github.com/google/leveldb/blob/main/doc/table_format.md
 
+use bytes::Bytes;
+
 use crate::snappy;
 
 const MAGIC: u64 = 0xdb47_7524_8b80_fb57; // full 64-bit table magic
@@ -85,14 +87,14 @@ fn read_block_handle(buf: &[u8], off: usize) -> Option<((usize, usize), usize)> 
 }
 
 struct BlockRead {
-    data: Vec<u8>,
+    data: Bytes,
     crc_ok: Option<bool>,
 }
 
 /// Read a block's bytes: 5-byte trailer = 1 compression byte + 4-byte masked CRC. Type 0 = raw,
 /// type 1 = snappy. `None` on any bounds/decompress failure or unsupported type (→ caller lossy).
-/// (TS returns an uncompressed block as a zero-copy VIEW; we copy for now — byte-identical output,
-/// optimize to Cow later.)
+/// Returns the block as `Bytes` so `parse_block` can hand out zero-copy refcounted VALUE views into
+/// it (★c) — snappy adopts the decompressed Vec for free; a raw block is copied once (rare).
 fn read_block(file: &[u8], offset: usize, size: usize, verify_crc: bool) -> Option<BlockRead> {
     let comp = *file.get(offset + size)?;
     let crc_ok = if verify_crc {
@@ -104,15 +106,19 @@ fn read_block(file: &[u8], offset: usize, size: usize, verify_crc: bool) -> Opti
     };
     let contents = file.get(offset..offset + size)?;
     let data = match comp {
-        0 => contents.to_vec(),
-        1 => snappy::uncompress(contents).ok()?,
+        0 => Bytes::copy_from_slice(contents),
+        1 => Bytes::from(snappy::uncompress(contents).ok()?),
         _ => return None, // unsupported compression → treat as error (lossy), like the TS throw
     };
     Some(BlockRead { data, crc_ok })
 }
 
 /// Parse a data/index block's entries (restart-point prefix compression). `None` on corruption.
-fn parse_block(data: &[u8]) -> Option<Vec<(Vec<u8>, Vec<u8>)>> {
+/// `data` is the (owned) block; each VALUE is a `Bytes::slice` VIEW into it (zero-copy, refcounted),
+/// so the fold never re-copies value bytes (★c). Keys are rebuilt from the prefix-compression, so
+/// they're freshly allocated then adopted by `Bytes::from` — but `prev_key` is kept as a `Bytes`
+/// refcount, not a re-clone, across the loop.
+fn parse_block(data: &Bytes) -> Option<Vec<(Bytes, Bytes)>> {
     let n = data.len();
     if n < 4 {
         return None;
@@ -121,8 +127,8 @@ fn parse_block(data: &[u8]) -> Option<Vec<(Vec<u8>, Vec<u8>)>> {
         u32::from_le_bytes([data[n - 4], data[n - 3], data[n - 2], data[n - 1]]) as usize;
     let restarts_start = n.checked_sub(4 + num_restarts.checked_mul(4)?)?;
     let mut pos = 0usize;
-    let mut prev_key: Vec<u8> = Vec::new();
-    let mut out: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    let mut prev_key: Bytes = Bytes::new();
+    let mut out: Vec<(Bytes, Bytes)> = Vec::new();
     while pos < restarts_start {
         let (shared, p) = read_varint(data, pos)?;
         pos = p;
@@ -134,15 +140,17 @@ fn parse_block(data: &[u8]) -> Option<Vec<(Vec<u8>, Vec<u8>)>> {
             (shared as usize, non_shared as usize, value_len as usize);
         let key_start = pos;
         pos = pos.checked_add(non_shared)?;
-        let value = data.get(pos..pos.checked_add(value_len)?)?.to_vec();
+        let value = data.slice(pos..pos.checked_add(value_len)?); // zero-copy view into the block
         pos += value_len;
         if shared > prev_key.len() {
             return None;
         }
-        // key = shared prefix of prevKey + this entry's non-shared delta (single owned alloc).
+        // key = shared prefix of prevKey + this entry's non-shared delta (single owned alloc, then
+        // adopted by Bytes::from — no extra copy; prev_key rides as a refcounted view).
         let mut key = Vec::with_capacity(shared + non_shared);
         key.extend_from_slice(&prev_key[..shared]);
         key.extend_from_slice(data.get(key_start..key_start + non_shared)?);
+        let key = Bytes::from(key);
         prev_key = key.clone();
         out.push((key, value));
     }
@@ -150,9 +158,10 @@ fn parse_block(data: &[u8]) -> Option<Vec<(Vec<u8>, Vec<u8>)>> {
 }
 
 /// The result of reading a whole table: its (key, value) entries in table order, and whether any
-/// block was skipped (lossy).
+/// block was skipped (lossy). Entries are `Bytes` (refcounted views into the parsed blocks) so the
+/// dedup fold and the copy-reuse cache reuse them without re-copying (★c).
 pub struct TableRead {
-    pub entries: Vec<(Vec<u8>, Vec<u8>)>,
+    pub entries: Vec<(Bytes, Bytes)>,
     pub lossy: bool,
 }
 
@@ -192,7 +201,7 @@ pub fn read_table(path: &str) -> std::io::Result<TableRead> {
     let Some(index_entries) = parse_block(&index_block.data) else {
         return Ok(lossy_empty());
     };
-    let mut entries: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    let mut entries: Vec<(Bytes, Bytes)> = Vec::new();
     let mut lossy = false;
     for (_ikey, ivalue) in &index_entries {
         let Some((handle, _)) = read_block_handle(ivalue, 0) else {
@@ -213,20 +222,20 @@ pub fn read_table(path: &str) -> std::io::Result<TableRead> {
 /// (count, crc32c) digest of a table's entries — the cross-language equality oracle. Feeds, per
 /// entry in order: keyLen (u32 LE), key bytes, valLen (u32 LE), value bytes. The TS harness computes
 /// the identical digest; matching (count, crc) ⇒ byte-identical reads.
-pub fn entries_digest(entries: &[(Vec<u8>, Vec<u8>)]) -> (usize, u32) {
+pub fn entries_digest(entries: &[(Bytes, Bytes)]) -> (usize, u32) {
     let mut c: u32 = 0xffff_ffff;
     let mut feed = |b: u8| c = CRC32C_TABLE[((c ^ b as u32) & 0xff) as usize] ^ (c >> 8);
     for (k, v) in entries {
         for b in (k.len() as u32).to_le_bytes() {
             feed(b);
         }
-        for &b in k {
+        for &b in &k[..] {
             feed(b);
         }
         for b in (v.len() as u32).to_le_bytes() {
             feed(b);
         }
-        for &b in v {
+        for &b in &v[..] {
             feed(b);
         }
     }

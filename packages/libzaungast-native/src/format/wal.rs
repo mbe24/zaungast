@@ -4,6 +4,8 @@
 //! ops (1=put key+value, 0=delete key). A torn tail (bad/short CRC) ends the log (leveldb recovery
 //! semantics) — deliberately NOT lossy: the append-only prefix is a consistent earlier point-in-time.
 
+use bytes::Bytes;
+
 use crate::sstable::{crc32c, unmask_crc};
 
 const BLOCK: usize = 32768;
@@ -11,8 +13,8 @@ const HEADER: usize = 7;
 
 pub struct WalOp {
     pub op_type: u8,
-    pub key: Vec<u8>,
-    pub value: Option<Vec<u8>>,
+    pub key: Bytes,
+    pub value: Option<Bytes>,
 }
 pub struct WalBatch {
     pub sequence: u64,
@@ -58,7 +60,9 @@ fn emit(record: &[u8], batches: &mut Vec<WalBatch>) {
         if p + klen > record.len() {
             break;
         }
-        let key = record[p..p + klen].to_vec();
+        // WAL bytes are copied into Bytes (the `.log` is small — the whole point of copy-reuse — and
+        // its source buffer is transient, so a zero-copy view isn't available here).
+        let key = Bytes::copy_from_slice(&record[p..p + klen]);
         p += klen;
         let value = if op_type == 1 {
             let Some((vlen, np)) = read_varint(record, p) else {
@@ -69,7 +73,7 @@ fn emit(record: &[u8], batches: &mut Vec<WalBatch>) {
             if p + vlen > record.len() {
                 break;
             }
-            let v = record[p..p + vlen].to_vec();
+            let v = Bytes::copy_from_slice(&record[p..p + vlen]);
             p += vlen;
             Some(v)
         } else {
