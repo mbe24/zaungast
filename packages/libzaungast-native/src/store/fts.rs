@@ -19,9 +19,14 @@ pub(crate) fn refresh_fts_delta(conn: &Connection, ids: &HashSet<String>) {
     if ids.is_empty() {
         return;
     }
-    conn.execute_batch("create temp table if not exists _chg(id text primary key); delete from _chg;").unwrap();
+    conn.execute_batch(
+        "create temp table if not exists _chg(id text primary key); delete from _chg;",
+    )
+    .unwrap();
     {
-        let mut ins = conn.prepare("insert or ignore into _chg values(?)").unwrap();
+        let mut ins = conn
+            .prepare("insert or ignore into _chg values(?)")
+            .unwrap();
         for id in ids {
             ins.execute(params![id]).unwrap();
         }

@@ -3,10 +3,13 @@
 //!   cargo run --bin diffssv -- <leveldb-dir>
 
 use libzaungast_native::idb::{load_snapshot, snapshot_ssv_report};
+use libzaungast_native::sha256::hex;
 use libzaungast_native::value::{canonical, decode_value};
 
 fn main() {
-    let dir = std::env::args().nth(1).expect("usage: diffssv <leveldb-dir> [db:os]");
+    let dir = std::env::args()
+        .nth(1)
+        .expect("usage: diffssv <leveldb-dir> [db:os]");
     let snap = load_snapshot(&dir).expect("load_snapshot");
     // debug: `diffssv <dir> <db:os>` → print each record's canonical as hex (one line per record)
     if let Some(target) = std::env::args().nth(2) {
@@ -19,13 +22,9 @@ fn main() {
                     Ok(v) => {
                         let mut c = Vec::new();
                         canonical(&v, &mut c);
-                        let mut s = String::with_capacity(c.len() * 2);
-                        for x in &c {
-                            s.push_str(&format!("{:02x}", x));
-                        }
-                        println!("{}", s);
+                        println!("{}", hex(&c));
                     }
-                    Err(e) => println!("ERR {}", e),
+                    Err(e) => println!("ERR {e}"),
                 }
             }
         }

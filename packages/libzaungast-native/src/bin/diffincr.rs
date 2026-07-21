@@ -11,7 +11,9 @@ use libzaungast_native::resolver::{load_mapping, select_mapping, store_set_from_
 use libzaungast_native::store::{build_store, compute_state, refresh_store, store_report};
 
 fn main() {
-    let dir = std::env::args().nth(1).expect("usage: diffincr <leveldb-dir> <mapping.json> <schema.sql>");
+    let dir = std::env::args()
+        .nth(1)
+        .expect("usage: diffincr <leveldb-dir> <mapping.json> <schema.sql>");
     let mapping_path = std::env::args().nth(2).expect("mapping.json path required");
     let schema_path = std::env::args().nth(3).expect("schema.sql path required");
     let schema = std::fs::read_to_string(&schema_path).expect("read schema.sql");
@@ -20,8 +22,12 @@ fn main() {
     // Full snapshot first — gives the full maxSeq (→ cap) and the full mapping.
     let full = load_snapshot(dir.as_str()).expect("load_snapshot");
     let full_fp = fingerprint(&full);
-    let full_mapping = select_mapping(&full_fp.hash, &store_set_from_fp(&full_fp.stores), &mappings)
-        .expect("no mapping matched (full)");
+    let full_mapping = select_mapping(
+        &full_fp.hash,
+        &store_set_from_fp(&full_fp.stores),
+        &mappings,
+    )
+    .expect("no mapping matched (full)");
     let cap = full.max_seq / 2;
 
     // The "previous" full ingest: a partial store as of `cap`, plus the state it would have recorded.

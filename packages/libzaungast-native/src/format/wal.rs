@@ -50,9 +50,8 @@ fn emit(record: &[u8], batches: &mut Vec<WalBatch>) {
     while i < count && p < record.len() {
         let op_type = record[p];
         p += 1;
-        let (klen, np) = match read_varint(record, p) {
-            Some(x) => x,
-            None => break,
+        let Some((klen, np)) = read_varint(record, p) else {
+            break;
         };
         p = np;
         let klen = klen as usize;
@@ -62,9 +61,8 @@ fn emit(record: &[u8], batches: &mut Vec<WalBatch>) {
         let key = record[p..p + klen].to_vec();
         p += klen;
         let value = if op_type == 1 {
-            let (vlen, np) = match read_varint(record, p) {
-                Some(x) => x,
-                None => break,
+            let Some((vlen, np)) = read_varint(record, p) else {
+                break;
             };
             p = np;
             let vlen = vlen as usize;
@@ -77,7 +75,11 @@ fn emit(record: &[u8], batches: &mut Vec<WalBatch>) {
         } else {
             None
         };
-        ops.push(WalOp { op_type, key, value });
+        ops.push(WalOp {
+            op_type,
+            key,
+            value,
+        });
         i += 1;
     }
     batches.push(WalBatch { sequence, ops });
@@ -113,7 +115,7 @@ pub fn parse_write_ahead_log(path: &str) -> std::io::Result<Vec<WalBatch>> {
         pos = data_start + len;
 
         match rtype {
-            1 => emit(chunk, &mut batches), // FULL
+            1 => emit(chunk, &mut batches),   // FULL
             2 => frag = Some(chunk.to_vec()), // FIRST
             3 => {
                 if let Some(f) = frag.as_mut() {

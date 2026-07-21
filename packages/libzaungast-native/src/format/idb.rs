@@ -59,7 +59,7 @@ impl Dedup {
                     seq,
                     rtype,
                     key: user_key.to_vec(),
-                    value: value.map(|v| v.to_vec()),
+                    value: value.map(<[u8]>::to_vec),
                 });
             }
             Some(&i) => {
@@ -68,7 +68,7 @@ impl Dedup {
                     r.seq = seq;
                     r.rtype = rtype;
                     r.key = user_key.to_vec();
-                    r.value = value.map(|v| v.to_vec());
+                    r.value = value.map(<[u8]>::to_vec);
                 }
             }
         }
@@ -99,13 +99,18 @@ fn fold_table(entries: &[(Vec<u8>, Vec<u8>)], d: &mut Dedup) -> bool {
 
 fn fold_batch(batch: &crate::wal::WalBatch, d: &mut Dedup) {
     for (i, op) in batch.ops.iter().enumerate() {
-        d.consider(&op.key, op.value.as_deref(), batch.sequence + i as u64, op.op_type);
+        d.consider(
+            &op.key,
+            op.value.as_deref(),
+            batch.sequence + i as u64,
+            op.op_type,
+        );
     }
 }
 
 fn sorted_by_ext(dir: &str, ext: &str) -> std::io::Result<Vec<String>> {
     let mut v: Vec<String> = std::fs::read_dir(dir)?
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .filter(|f| f.ends_with(ext))
         .collect();
@@ -114,7 +119,13 @@ fn sorted_by_ext(dir: &str, ext: &str) -> std::io::Result<Vec<String>> {
 }
 
 fn build_dedup_map(dir: &str, seq_cap: Option<u64>) -> std::io::Result<Dedup> {
-    let mut d = Dedup { order: Vec::new(), index: HashMap::new(), raw: 0, lossy: false, seq_cap };
+    let mut d = Dedup {
+        order: Vec::new(),
+        index: HashMap::new(),
+        raw: 0,
+        lossy: false,
+        seq_cap,
+    };
     for f in sorted_by_ext(dir, ".ldb")? {
         let p = Path::new(dir).join(&f);
         match crate::sstable::read_table(&p.to_string_lossy()) {
@@ -160,7 +171,7 @@ fn read_int_le(buf: &[u8], p: &mut usize, n: usize) -> Option<u64> {
     Some(v)
 }
 fn decode_prefix(buf: &[u8]) -> Option<DecodedPrefix> {
-    let b0 = *buf.get(0)?;
+    let b0 = *buf.first()?;
     let db_bytes = ((b0 >> 5) & 0x07) as usize + 1;
     let os_bytes = ((b0 >> 2) & 0x07) as usize + 1;
     let idx_bytes = (b0 & 0x03) as usize + 1;
@@ -168,7 +179,12 @@ fn decode_prefix(buf: &[u8]) -> Option<DecodedPrefix> {
     let database_id = read_int_le(buf, &mut p, db_bytes)?;
     let object_store_id = read_int_le(buf, &mut p, os_bytes)?;
     let index_id = read_int_le(buf, &mut p, idx_bytes)?;
-    Some(DecodedPrefix { database_id, object_store_id, index_id, header_len: p })
+    Some(DecodedPrefix {
+        database_id,
+        object_store_id,
+        index_id,
+        header_len: p,
+    })
 }
 fn read_varint_num(buf: &[u8], off: usize) -> Option<(u64, usize)> {
     let mut v: u64 = 0;
@@ -221,7 +237,7 @@ fn collect_snapshot(d: Dedup) -> Snapshot {
     let lossy = d.lossy;
     let unique_count = d.order.len();
 
-    for e in d.order.into_iter() {
+    for e in d.order {
         if e.seq > max_seq {
             max_seq = e.seq;
         }
@@ -231,13 +247,16 @@ fn collect_snapshot(d: Dedup) -> Snapshot {
         if e.key.is_empty() {
             continue;
         }
-        let p = match decode_prefix(&e.key) {
-            Some(x) => x,
-            None => continue,
+        let Some(p) = decode_prefix(&e.key) else {
+            continue;
         };
         let (database_id, object_store_id, index_id, header_len) =
             (p.database_id, p.object_store_id, p.index_id, p.header_len);
-        if database_id == 0 && object_store_id == 0 && index_id == 0 && e.key.get(header_len) == Some(&0xc9) {
+        if database_id == 0
+            && object_store_id == 0
+            && index_id == 0
+            && e.key.get(header_len) == Some(&0xc9)
+        {
             // db-name catalog row: origin + db name in the key, dbId as a varint value.
             if let Some((_, p2)) = read_string_with_length(&e.key, header_len + 1) {
                 if let Some((name, _)) = read_string_with_length(&e.key, p2) {
@@ -248,32 +267,35 @@ fn collect_snapshot(d: Dedup) -> Snapshot {
                     }
                 }
             }
-        } else if database_id > 0 && object_store_id == 0 && index_id == 0 && e.key.get(header_len) == Some(&0x32) {
+        } else if database_id > 0
+            && object_store_id == 0
+            && index_id == 0
+            && e.key.get(header_len) == Some(&0x32)
+        {
             // store-name catalog row: osId varint in the key, store name (utf16be) in the value.
             if let Some((os_id, pp)) = read_varint_num(&e.key, header_len + 1) {
                 if e.key.get(pp) == Some(&0) {
                     if let Some(val) = e.value.as_deref() {
-                        store_names.insert(format!("{}:{}", database_id, os_id), utf16be(val));
+                        store_names.insert(format!("{database_id}:{os_id}"), utf16be(val));
                     }
                 }
             }
         } else if index_id == 1 {
-            let bk = format!("{}:{}", database_id, object_store_id);
-            let idx = match bindex.get(&bk) {
-                Some(&i) => i,
-                None => {
-                    let i = buckets.len();
-                    bindex.insert(bk, i);
-                    buckets.push(StoreBucket {
-                        db_id: database_id,
-                        os_id: object_store_id,
-                        db_name: None,
-                        store_name: None,
-                        records: Vec::new(),
-                        max_seq: 0,
-                    });
-                    i
-                }
+            let bk = format!("{database_id}:{object_store_id}");
+            let idx = if let Some(&i) = bindex.get(&bk) {
+                i
+            } else {
+                let i = buckets.len();
+                bindex.insert(bk, i);
+                buckets.push(StoreBucket {
+                    db_id: database_id,
+                    os_id: object_store_id,
+                    db_name: None,
+                    store_name: None,
+                    records: Vec::new(),
+                    max_seq: 0,
+                });
+                i
             };
             if e.seq > buckets[idx].max_seq {
                 buckets[idx].max_seq = e.seq;
@@ -282,11 +304,21 @@ fn collect_snapshot(d: Dedup) -> Snapshot {
         }
     }
     // back-fill resolved names onto each bucket
-    for b in buckets.iter_mut() {
-        b.store_name = store_names.get(&format!("{}:{}", b.db_id, b.os_id)).cloned();
+    for b in &mut buckets {
+        b.store_name = store_names
+            .get(&format!("{}:{}", b.db_id, b.os_id))
+            .cloned();
         b.db_name = db_names.get(&b.db_id).cloned();
     }
-    Snapshot { buckets, db_names, store_names, max_seq, raw_count, unique_count, lossy }
+    Snapshot {
+        buckets,
+        db_names,
+        store_names,
+        max_seq,
+        raw_count,
+        unique_count,
+        lossy,
+    }
 }
 
 pub fn load_snapshot(dir: &str) -> std::io::Result<Snapshot> {
@@ -378,7 +410,13 @@ pub fn snapshot_ssv_report(snap: &Snapshot) -> String {
             crc32c_final(c)
         );
     }
-    format!("GLOBAL\t{}\t{}\t{}\n{}", total, total_ok, snap.buckets.len(), body)
+    format!(
+        "GLOBAL\t{}\t{}\t{}\n{}",
+        total,
+        total_ok,
+        snap.buckets.len(),
+        body
+    )
 }
 
 /// Deterministic snapshot summary for cross-language equality: a GLOBAL line + one BUCKET line per
@@ -390,7 +428,11 @@ pub fn snapshot_report(snap: &Snapshot) -> String {
     let _ = writeln!(
         out,
         "GLOBAL\t{}\t{}\t{}\t{}\t{}",
-        snap.raw_count, snap.unique_count, snap.max_seq, lossy, snap.buckets.len()
+        snap.raw_count,
+        snap.unique_count,
+        snap.max_seq,
+        lossy,
+        snap.buckets.len()
     );
     let mut idx: Vec<usize> = (0..snap.buckets.len()).collect();
     idx.sort_by_key(|&i| (snap.buckets[i].db_id, snap.buckets[i].os_id));

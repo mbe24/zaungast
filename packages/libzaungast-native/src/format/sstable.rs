@@ -7,7 +7,7 @@
 
 use crate::snappy;
 
-const MAGIC: u64 = 0xdb4775248b80fb57; // full 64-bit table magic
+const MAGIC: u64 = 0xdb47_7524_8b80_fb57; // full 64-bit table magic
 
 /// CRC32C (Castagnoli) lookup table, built at compile time (mirrors sstable.ts's IIFE).
 const CRC32C_TABLE: [u32; 256] = {
@@ -17,7 +17,11 @@ const CRC32C_TABLE: [u32; 256] = {
         let mut c = n as u32;
         let mut k = 0;
         while k < 8 {
-            c = if c & 1 != 0 { 0x82f63b78 ^ (c >> 1) } else { c >> 1 };
+            c = if c & 1 != 0 {
+                0x82f6_3b78 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
             k += 1;
         }
         t[n] = c;
@@ -27,30 +31,30 @@ const CRC32C_TABLE: [u32; 256] = {
 };
 
 pub(crate) fn crc32c(buf: &[u8], start: usize, end: usize) -> u32 {
-    let mut c: u32 = 0xffffffff;
+    let mut c: u32 = 0xffff_ffff;
     let mut i = start;
     while i < end {
         c = CRC32C_TABLE[((c ^ buf[i] as u32) & 0xff) as usize] ^ (c >> 8);
         i += 1;
     }
-    c ^ 0xffffffff
+    c ^ 0xffff_ffff
 }
 
 // Streaming CRC32C (same table/polynomial) — for the differential-oracle digests over records.
 pub(crate) fn crc32c_init() -> u32 {
-    0xffffffff
+    0xffff_ffff
 }
 pub(crate) fn crc32c_update(c: u32, b: u8) -> u32 {
     CRC32C_TABLE[((c ^ b as u32) & 0xff) as usize] ^ (c >> 8)
 }
 pub(crate) fn crc32c_final(c: u32) -> u32 {
-    c ^ 0xffffffff
+    c ^ 0xffff_ffff
 }
 
 /// leveldb's mask: Mask(crc) = rotate_right(crc,15) + kMaskDelta (0xa282ead8). Unmask reverses it.
 pub(crate) fn unmask_crc(m: u32) -> u32 {
-    let x = m.wrapping_sub(0xa282ead8);
-    (x >> 17) | (x << 15)
+    let x = m.wrapping_sub(0xa282_ead8);
+    x.rotate_left(15)
 }
 
 /// LEB128 varint (u64). `None` on truncation (bounds-safe — mirrors a TS RangeError → caught).
@@ -153,7 +157,10 @@ pub struct TableRead {
 }
 
 fn lossy_empty() -> TableRead {
-    TableRead { entries: Vec::new(), lossy: true }
+    TableRead {
+        entries: Vec::new(),
+        lossy: true,
+    }
 }
 
 /// Read every entry from an .ldb table file. Verifies the index-block CRC (a torn copy loses the
@@ -167,37 +174,30 @@ pub fn read_table(path: &str) -> std::io::Result<TableRead> {
     let footer_off = len - 48;
     let magic = u64::from_le_bytes(file[len - 8..len].try_into().unwrap());
     if magic != MAGIC {
-        eprintln!("WARNING: bad magic {:x} (expected {:x})", magic, MAGIC);
+        eprintln!("WARNING: bad magic {magic:x} (expected {MAGIC:x})");
     }
     // footer: metaindex handle (skipped) then index handle
-    let (_, p) = match read_block_handle(&file, footer_off) {
-        Some(x) => x,
-        None => return Ok(lossy_empty()),
+    let Some((_, p)) = read_block_handle(&file, footer_off) else {
+        return Ok(lossy_empty());
     };
-    let (index_handle, _) = match read_block_handle(&file, p) {
-        Some(x) => x,
-        None => return Ok(lossy_empty()),
+    let Some((index_handle, _)) = read_block_handle(&file, p) else {
+        return Ok(lossy_empty());
     };
-    let index_block = match read_block(&file, index_handle.0, index_handle.1, true) {
-        Some(b) => b,
-        None => return Ok(lossy_empty()),
+    let Some(index_block) = read_block(&file, index_handle.0, index_handle.1, true) else {
+        return Ok(lossy_empty());
     };
     if index_block.crc_ok == Some(false) {
         return Ok(lossy_empty());
     }
-    let index_entries = match parse_block(&index_block.data) {
-        Some(e) => e,
-        None => return Ok(lossy_empty()),
+    let Some(index_entries) = parse_block(&index_block.data) else {
+        return Ok(lossy_empty());
     };
     let mut entries: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     let mut lossy = false;
     for (_ikey, ivalue) in &index_entries {
-        let handle = match read_block_handle(ivalue, 0) {
-            Some((h, _)) => h,
-            None => {
-                lossy = true;
-                continue;
-            }
+        let Some((handle, _)) = read_block_handle(ivalue, 0) else {
+            lossy = true;
+            continue;
         };
         match read_block(&file, handle.0, handle.1, false) {
             Some(b) => match parse_block(&b.data) {
@@ -214,7 +214,7 @@ pub fn read_table(path: &str) -> std::io::Result<TableRead> {
 /// entry in order: keyLen (u32 LE), key bytes, valLen (u32 LE), value bytes. The TS harness computes
 /// the identical digest; matching (count, crc) ⇒ byte-identical reads.
 pub fn entries_digest(entries: &[(Vec<u8>, Vec<u8>)]) -> (usize, u32) {
-    let mut c: u32 = 0xffffffff;
+    let mut c: u32 = 0xffff_ffff;
     let mut feed = |b: u8| c = CRC32C_TABLE[((c ^ b as u32) & 0xff) as usize] ^ (c >> 8);
     for (k, v) in entries {
         for b in (k.len() as u32).to_le_bytes() {
@@ -230,5 +230,5 @@ pub fn entries_digest(entries: &[(Vec<u8>, Vec<u8>)]) -> (usize, u32) {
             feed(b);
         }
     }
-    (entries.len(), c ^ 0xffffffff)
+    (entries.len(), c ^ 0xffff_ffff)
 }

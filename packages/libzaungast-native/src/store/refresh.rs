@@ -58,26 +58,40 @@ fn delete_messages_for_missing_chains(conn: &Connection, live: &HashSet<String>)
     conn.execute_batch("create temp table if not exists _live_chains(k text primary key); delete from _live_chains;")
         .unwrap();
     {
-        let mut ins = conn.prepare("insert or ignore into _live_chains values(?)").unwrap();
+        let mut ins = conn
+            .prepare("insert or ignore into _live_chains values(?)")
+            .unwrap();
         for k in live {
             ins.execute(params![k]).unwrap();
         }
     }
     let ids: Vec<String> = {
-        let mut stmt = conn.prepare("select id from messages where chain_key not in (select k from _live_chains)").unwrap();
-        stmt.query_map([], |r| r.get::<_, String>(0)).unwrap().filter_map(Result::ok).collect()
+        let mut stmt = conn
+            .prepare("select id from messages where chain_key not in (select k from _live_chains)")
+            .unwrap();
+        stmt.query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect()
     };
-    conn.execute_batch("delete from messages where chain_key not in (select k from _live_chains)").unwrap();
+    conn.execute_batch("delete from messages where chain_key not in (select k from _live_chains)")
+        .unwrap();
     ids
 }
 
 // delete messages by chain_key; returns deleted ids. Mirrors ChatStore.deleteMessagesByChain.
 fn delete_messages_by_chain(conn: &Connection, chain_hex: &str) -> Vec<String> {
     let ids: Vec<String> = {
-        let mut stmt = conn.prepare("select id from messages where chain_key=?").unwrap();
-        stmt.query_map(params![chain_hex], |r| r.get::<_, String>(0)).unwrap().filter_map(Result::ok).collect()
+        let mut stmt = conn
+            .prepare("select id from messages where chain_key=?")
+            .unwrap();
+        stmt.query_map(params![chain_hex], |r| r.get::<_, String>(0))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect()
     };
-    conn.execute("delete from messages where chain_key=?", params![chain_hex]).unwrap();
+    conn.execute("delete from messages where chain_key=?", params![chain_hex])
+        .unwrap();
     ids
 }
 
@@ -85,20 +99,37 @@ fn delete_messages_by_chain(conn: &Connection, chain_hex: &str) -> Vec<String> {
 /// applyIncremental: lossy-skip, schema tripwire, no-op fast-exit, then delete-missing-chains +
 /// delete-changed-chains + re-extract-changed + whole-replace profiles/events/calls + conversation
 /// reconcile + recomputeDerived + delta FTS. `mapping` MUST be the mapping the prior full ingest used.
-pub fn refresh_store(conn: &Connection, snap: &Snapshot, mapping: &Value, state: &RefreshState) -> RefreshOutcome {
+pub fn refresh_store(
+    conn: &Connection,
+    snap: &Snapshot,
+    mapping: &Value,
+    state: &RefreshState,
+) -> RefreshOutcome {
     // lossy load → don't apply (spuriously-absent chains would read as deletions); serve current.
     if snap.lossy {
-        return RefreshOutcome { need_full_rebuild: false, skipped: true, new_max_seq: state.max_seq };
+        return RefreshOutcome {
+            need_full_rebuild: false,
+            skipped: true,
+            new_max_seq: state.max_seq,
+        };
     }
     // schema tripwire: our mapped message/conversation stores resolve differently → full rebuild.
     let msg_t = entity_targets_for(snap, mapping, "message");
     let conv_t = entity_targets_for(snap, mapping, "conversation");
     if msg_t != state.msg_targets || conv_t != state.conv_targets {
-        return RefreshOutcome { need_full_rebuild: true, skipped: false, new_max_seq: state.max_seq };
+        return RefreshOutcome {
+            need_full_rebuild: true,
+            skipped: false,
+            new_max_seq: state.max_seq,
+        };
     }
     // no-op fast-exit: maxSeq counts tombstones too, so equal ⇒ nothing landed since the last apply.
     if snap.max_seq == state.max_seq {
-        return RefreshOutcome { need_full_rebuild: false, skipped: false, new_max_seq: snap.max_seq };
+        return RefreshOutcome {
+            need_full_rebuild: false,
+            skipped: false,
+            new_max_seq: snap.max_seq,
+        };
     }
 
     // live + changed (seq > floor) chain keys, straight off the message buckets (hex, matching the
@@ -107,7 +138,11 @@ pub fn refresh_store(conn: &Connection, snap: &Snapshot, mapping: &Value, state:
     let mut changed_chains: HashSet<String> = HashSet::new();
     let mut changed_records: Vec<&crate::idb::SnapshotRecord> = Vec::new();
     for sk in &state.msg_targets {
-        if let Some(b) = snap.buckets.iter().find(|b| format!("{}:{}", b.db_id, b.os_id) == *sk) {
+        if let Some(b) = snap
+            .buckets
+            .iter()
+            .find(|b| format!("{}:{}", b.db_id, b.os_id) == *sk)
+        {
             for rec in &b.records {
                 let hex = crate::sha256::hex(&rec.key);
                 live.insert(hex.clone());
@@ -144,11 +179,19 @@ pub fn refresh_store(conn: &Connection, snap: &Snapshot, mapping: &Value, state:
     replace_calls(conn, &extract_rows(snap, mapping, "call"));
     // conversation reconcile: reset live-meta cols, re-apply, drop orphans (not referenced by messages)
     let conv_rows = extract_rows(snap, mapping, "conversation");
-    conn.execute_batch("update conversations set topic=null, team_id=null, thread_type=null, meta_last_ts=0").unwrap();
+    conn.execute_batch(
+        "update conversations set topic=null, team_id=null, thread_type=null, meta_last_ts=0",
+    )
+    .unwrap();
     apply_conversation_meta(conn, &conv_rows, &mut handles);
-    conn.execute_batch("create temp table if not exists _liveconv(id text primary key); delete from _liveconv;").unwrap();
+    conn.execute_batch(
+        "create temp table if not exists _liveconv(id text primary key); delete from _liveconv;",
+    )
+    .unwrap();
     {
-        let mut ins = conn.prepare("insert or ignore into _liveconv values(?)").unwrap();
+        let mut ins = conn
+            .prepare("insert or ignore into _liveconv values(?)")
+            .unwrap();
         for c in &conv_rows {
             if let Some(id) = as_str(get(c, "id")) {
                 if !id.is_empty() {
@@ -165,7 +208,11 @@ pub fn refresh_store(conn: &Connection, snap: &Snapshot, mapping: &Value, state:
 
     recompute_derived(conn, self_mri, &mut handles);
     refresh_fts_delta(conn, &fts_ids);
-    RefreshOutcome { need_full_rebuild: false, skipped: false, new_max_seq: snap.max_seq }
+    RefreshOutcome {
+        need_full_rebuild: false,
+        skipped: false,
+        new_max_seq: snap.max_seq,
+    }
 }
 
 // ---- writer↔reader contract: PRAGMA user_version + the in-file _meta table ----
@@ -229,12 +276,16 @@ fn read_meta(conn: &Connection) -> Result<FileMeta, String> {
             fingerprint: String::new(),
             mapping_version: None,
             lossy: false,
-            state: RefreshState { self_mri: None, max_seq: 0, msg_targets: vec![], conv_targets: vec![] },
+            state: RefreshState {
+                self_mri: None,
+                max_seq: 0,
+                msg_targets: vec![],
+                conv_targets: vec![],
+            },
         });
     }
-    let parse_targets = |s: String| -> Vec<String> {
-        serde_json::from_str::<Vec<String>>(&s).unwrap_or_default()
-    };
+    let parse_targets =
+        |s: String| -> Vec<String> { serde_json::from_str::<Vec<String>>(&s).unwrap_or_default() };
     conn.query_row(
         "select fingerprint,mapping_version,self_mri,lossy,max_seq,msg_targets,conv_targets from _meta limit 1",
         [],
@@ -280,11 +331,10 @@ pub fn refresh_to_file(
         .map(|s| serde_json::from_str::<Value>(s).map_err(|e| format!("mapping JSON: {e}")))
         .collect::<Result<_, _>>()?;
     // Reuse the SAME mapping the prior full ingest used, by mappingVersion (not re-selected).
-    let mapping = match mappings.iter().find(|m| {
+    let Some(mapping) = mappings.iter().find(|m| {
         m.get("mappingVersion").and_then(|v| v.as_str()) == fm.mapping_version.as_deref()
-    }) {
-        Some(m) => m,
-        None => return Ok(RefreshFileOutcome::rebuild()), // mapping for that mappingVersion is gone
+    }) else {
+        return Ok(RefreshFileOutcome::rebuild()); // mapping for that mappingVersion is gone
     };
 
     let snap = load_snapshot(dir).map_err(|e| format!("load_snapshot: {e}"))?;
@@ -294,13 +344,23 @@ pub fn refresh_to_file(
     }
     if outcome.skipped {
         // lossy: nothing applied. The new_path is a byte-copy of prev; keep serving it unchanged.
-        return Ok(RefreshFileOutcome { need_full_rebuild: false, skipped: true, ..counts_of(&conn, &fm) });
+        return Ok(RefreshFileOutcome {
+            need_full_rebuild: false,
+            skipped: true,
+            ..counts_of(&conn, &fm)
+        });
     }
 
     // Rewrite _meta with the new state (recomputed from the full snapshot) + refresh user_version.
     let new_state = compute_state(&snap, mapping);
     let fp = crate::fingerprint::fingerprint(&snap);
-    write_meta(&conn, &fp.hash, fm.mapping_version.as_deref(), snap.lossy, &new_state)?;
+    write_meta(
+        &conn,
+        &fp.hash,
+        fm.mapping_version.as_deref(),
+        snap.lossy,
+        &new_state,
+    )?;
 
     let out = RefreshFileOutcome {
         need_full_rebuild: false,
@@ -312,9 +372,14 @@ pub fn refresh_to_file(
 }
 
 fn counts_of(conn: &Connection, fm: &FileMeta) -> RefreshFileOutcome {
-    let count = |t: &str| -> i64 { conn.query_row(&format!("select count(*) from {t}"), [], |r| r.get(0)).unwrap_or(0) };
+    let count = |t: &str| -> i64 {
+        conn.query_row(&format!("select count(*) from {t}"), [], |r| r.get(0))
+            .unwrap_or(0)
+    };
     let earliest_ts: i64 = conn
-        .query_row("select min(ts) from messages where ts>0", [], |r| r.get::<_, Option<i64>>(0))
+        .query_row("select min(ts) from messages where ts>0", [], |r| {
+            r.get::<_, Option<i64>>(0)
+        })
         .ok()
         .flatten()
         .unwrap_or(0);

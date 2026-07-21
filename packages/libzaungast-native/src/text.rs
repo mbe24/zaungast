@@ -21,6 +21,8 @@ fn nl_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"\n{3,}").unwrap())
 }
 
+// One row per named entity for grep-ability; several map to the same glyph (curly quotes → " / ').
+#[allow(clippy::match_same_arms)]
 fn entity_exact(m: &str) -> Option<&'static str> {
     Some(match m {
         "&nbsp;" => " ",
@@ -94,8 +96,7 @@ pub fn html_to_text(html: &str) -> String {
             };
             n.and_then(|n| u32::try_from(n).ok())
                 .and_then(char::from_u32)
-                .map(|c| c.to_string())
-                .unwrap_or_else(|| " ".to_string())
+                .map_or_else(|| " ".to_string(), |c| c.to_string())
         } else {
             // named entity: exact, then lowercased, else a space
             entity_exact(m)

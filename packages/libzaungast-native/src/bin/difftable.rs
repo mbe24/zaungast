@@ -5,8 +5,15 @@
 use libzaungast_native::sstable::{entries_digest, read_table};
 
 fn main() {
-    let path = std::env::args().nth(1).expect("usage: difftable <path.ldb>");
+    let path = std::env::args()
+        .nth(1)
+        .expect("usage: difftable <path.ldb>");
     let t = read_table(&path).expect("read");
     let (count, crc) = entries_digest(&t.entries);
-    println!("{}\t{}\t{:08x}", count, if t.lossy { "lossy" } else { "clean" }, crc);
+    println!(
+        "{}\t{}\t{:08x}",
+        count,
+        if t.lossy { "lossy" } else { "clean" },
+        crc
+    );
 }

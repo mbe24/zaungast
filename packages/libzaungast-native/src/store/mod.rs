@@ -11,11 +11,11 @@ mod extract;
 mod fts;
 mod refresh;
 
+pub use refresh::USER_VERSION;
 pub use refresh::{
     compute_state, refresh_store, refresh_to_file, FileMeta, RefreshFileOutcome, RefreshOutcome,
     RefreshState,
 };
-pub use refresh::USER_VERSION;
 
 use rusqlite::Connection;
 use serde_json::Value;
@@ -94,40 +94,50 @@ pub fn ingest_to_file(
     // A fresh full rebuild: never open onto a stale file (would leave rows from a prior schema).
     let _ = std::fs::remove_file(dest_path);
     let conn = Connection::open(dest_path).map_err(|e| format!("open {dest_path}: {e}"))?;
-    conn.execute_batch(schema).map_err(|e| format!("schema exec: {e}"))?;
-    conn.execute_batch(FTS_CREATE).map_err(|e| format!("fts create: {e}"))?;
+    conn.execute_batch(schema)
+        .map_err(|e| format!("schema exec: {e}"))?;
+    conn.execute_batch(FTS_CREATE)
+        .map_err(|e| format!("fts create: {e}"))?;
 
-    let (schema_matched, mapping_version, self_mri) = match selected {
-        Some(m) => {
-            let self_mri = populate(&conn, &snap, m);
-            // Write the in-file contract (_meta + user_version) so a later refresh reads its floor +
-            // reuses this mapping. Build the state from populate's OWN outputs — its elected selfMri +
-            // the cheap no-decode target lists — instead of compute_state, which would re-extract
-            // (re-decode) the entire message store a second time.
-            let ver = m.get("mappingVersion").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let state = RefreshState {
-                self_mri,
-                max_seq: snap.max_seq,
-                msg_targets: entity_targets_for(&snap, m, "message"),
-                conv_targets: entity_targets_for(&snap, m, "conversation"),
-            };
-            write_meta(&conn, &fp.hash, ver.as_deref(), snap.lossy, &state)?;
-            (true, ver, state.self_mri)
-        }
+    let (schema_matched, mapping_version, self_mri) = if let Some(m) = selected {
+        let self_mri = populate(&conn, &snap, m);
+        // Write the in-file contract (_meta + user_version) so a later refresh reads its floor +
+        // reuses this mapping. Build the state from populate's OWN outputs — its elected selfMri +
+        // the cheap no-decode target lists — instead of compute_state, which would re-extract
+        // (re-decode) the entire message store a second time.
+        let ver = m
+            .get("mappingVersion")
+            .and_then(|v| v.as_str())
+            .map(std::string::ToString::to_string);
+        let state = RefreshState {
+            self_mri,
+            max_seq: snap.max_seq,
+            msg_targets: entity_targets_for(&snap, m, "message"),
+            conv_targets: entity_targets_for(&snap, m, "conversation"),
+        };
+        write_meta(&conn, &fp.hash, ver.as_deref(), snap.lossy, &state)?;
+        (true, ver, state.self_mri)
+    } else {
         // Unknown schema: an empty store (schema only), mirroring TS ingest (store loads, no rows).
         // Still stamp user_version + an empty _meta so the file is self-describing.
-        None => {
-            let empty = RefreshState { self_mri: None, max_seq: snap.max_seq, msg_targets: vec![], conv_targets: vec![] };
-            write_meta(&conn, &fp.hash, None, snap.lossy, &empty)?;
-            (false, None, None)
-        }
+        let empty = RefreshState {
+            self_mri: None,
+            max_seq: snap.max_seq,
+            msg_targets: vec![],
+            conv_targets: vec![],
+        };
+        write_meta(&conn, &fp.hash, None, snap.lossy, &empty)?;
+        (false, None, None)
     };
 
     let count = |t: &str| -> i64 {
-        conn.query_row(&format!("select count(*) from {t}"), [], |r| r.get(0)).unwrap_or(0)
+        conn.query_row(&format!("select count(*) from {t}"), [], |r| r.get(0))
+            .unwrap_or(0)
     };
     let earliest_ts: i64 = conn
-        .query_row("select min(ts) from messages where ts>0", [], |r| r.get::<_, Option<i64>>(0))
+        .query_row("select min(ts) from messages where ts>0", [], |r| {
+            r.get::<_, Option<i64>>(0)
+        })
         .ok()
         .flatten()
         .unwrap_or(0);
@@ -163,7 +173,7 @@ pub struct IngestOutcome {
 
 // ---- per-table content differential report ----
 fn feed_value(c: &mut u32, v: rusqlite::types::ValueRef) {
-    use rusqlite::types::ValueRef::*;
+    use rusqlite::types::ValueRef::{Blob, Integer, Null, Real, Text};
     let up = crc32c_update;
     match v {
         Null => *c = up(*c, 0),
@@ -208,7 +218,10 @@ const TABLES: &[(&str, &str, usize)] = &[
 
 /// Debug: dump a table's rows (tab-separated, null→\N) in the differential's column/row order.
 pub fn dump_table(conn: &Connection, table: &str) -> String {
-    let (_, sql, ncols) = TABLES.iter().find(|(n, _, _)| *n == table).expect("unknown table");
+    let (_, sql, ncols) = TABLES
+        .iter()
+        .find(|(n, _, _)| *n == table)
+        .expect("unknown table");
     let mut stmt = conn.prepare(sql).unwrap();
     let mut out = String::new();
     let mut q = stmt.query([]).unwrap();
@@ -219,7 +232,9 @@ pub fn dump_table(conn: &Connection, table: &str) -> String {
                 rusqlite::types::ValueRef::Null => "\\N".to_string(),
                 rusqlite::types::ValueRef::Integer(n) => n.to_string(),
                 rusqlite::types::ValueRef::Real(f) => f.to_string(),
-                rusqlite::types::ValueRef::Text(t) => String::from_utf8_lossy(t).replace(['\t', '\n'], " "),
+                rusqlite::types::ValueRef::Text(t) => {
+                    String::from_utf8_lossy(t).replace(['\t', '\n'], " ")
+                }
                 rusqlite::types::ValueRef::Blob(_) => "<blob>".to_string(),
             });
         }

@@ -129,6 +129,7 @@ fn collect_top_keys(v: &value::Ssv, set: &mut BTreeSet<String>) {
 
 // JS JSON.stringify string escaping (lowercase \uXXXX; \b \t \n \f \r shortforms; " and \ escaped).
 fn json_str(s: &str, out: &mut String) {
+    use std::fmt::Write as _;
     out.push('"');
     for ch in s.chars() {
         match ch {
@@ -139,7 +140,9 @@ fn json_str(s: &str, out: &mut String) {
             '\t' => out.push_str("\\t"),
             '\u{08}' => out.push_str("\\b"),
             '\u{0c}' => out.push_str("\\f"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
             c => out.push(c),
         }
     }
@@ -168,12 +171,18 @@ pub fn fingerprint(snap: &Snapshot) -> Fingerprint {
     // buildStores: one per store-name that has a resolvable db-name; fields sorted; sort by db+store
     let mut stores: Vec<(String, String, Vec<String>)> = Vec::new();
     for (sk, store_name) in &snap.store_names {
-        let db_id: u64 = sk.split(':').next().and_then(|x| x.parse().ok()).unwrap_or(0);
-        let db_name = match snap.db_names.get(&db_id) {
-            Some(n) => n,
-            None => continue,
+        let db_id: u64 = sk
+            .split(':')
+            .next()
+            .and_then(|x| x.parse().ok())
+            .unwrap_or(0);
+        let Some(db_name) = snap.db_names.get(&db_id) else {
+            continue;
         };
-        let fields: Vec<String> = sample_keys.get(sk).map(|s| s.iter().cloned().collect()).unwrap_or_default();
+        let fields: Vec<String> = sample_keys
+            .get(sk)
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default();
         stores.push((normalize_db_name(db_name), store_name.clone(), fields));
     }
     stores.sort_by(|a, b| {
@@ -203,7 +212,12 @@ pub fn fingerprint(snap: &Snapshot) -> Fingerprint {
     canonical.push(']');
 
     let hash = hex(&sha256(canonical.as_bytes()))[..16].to_string();
-    Fingerprint { hash, store_count: stores.len(), db_count: snap.db_names.len(), stores }
+    Fingerprint {
+        hash,
+        store_count: stores.len(),
+        db_count: snap.db_names.len(),
+        stores,
+    }
 }
 
 /// Report for the differential: FP line (hash/counts) + one S line per store (sorted).

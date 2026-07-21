@@ -7,9 +7,9 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
-use crate::text::html_to_text;
 use crate::idb::{Snapshot, SnapshotRecord};
 use crate::sstable::{crc32c_final, crc32c_init, crc32c_update};
+use crate::text::html_to_text;
 use crate::value::{canonical, decode_value, Ssv};
 
 pub fn load_mapping(path: &str) -> Result<Value, String> {
@@ -114,7 +114,10 @@ fn parse_def(def: &Value) -> Def {
                 .map(|(k, spec)| {
                     let paths = match spec {
                         Value::String(s) => vec![s.clone()],
-                        Value::Array(a) => a.iter().filter_map(|x| x.as_str().map(String::from)).collect(),
+                        Value::Array(a) => a
+                            .iter()
+                            .filter_map(|x| x.as_str().map(String::from))
+                            .collect(),
                         _ => vec![],
                     };
                     (k.clone(), paths)
@@ -124,15 +127,29 @@ fn parse_def(def: &Value) -> Def {
         .unwrap_or_default();
     let keep = def.get("keep").map(|k| {
         (
-            k.get("field").and_then(|f| f.as_str()).unwrap_or("").to_string(),
+            k.get("field")
+                .and_then(|f| f.as_str())
+                .unwrap_or("")
+                .to_string(),
             k.get("equals").cloned().unwrap_or(Value::Null),
         )
     });
     Def {
-        db: def.get("db").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        store: def.get("store").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        db: def
+            .get("db")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        store: def
+            .get("store")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
         fields,
-        iterate: def.get("iterate").and_then(|v| v.as_str()).map(String::from),
+        iterate: def
+            .get("iterate")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         keep,
     }
 }
@@ -189,7 +206,11 @@ fn rows_from_record(obj: &Ssv, rec_key: &str, def: &Def, out: &mut Vec<Ssv>) {
 fn entity_targets(snap: &Snapshot, def: &Def) -> Vec<String> {
     let mut targets: Vec<String> = Vec::new();
     for (sk, store_name) in &snap.store_names {
-        let db_id: u64 = sk.split(':').next().and_then(|x| x.parse().ok()).unwrap_or(0);
+        let db_id: u64 = sk
+            .split(':')
+            .next()
+            .and_then(|x| x.parse().ok())
+            .unwrap_or(0);
         if let Some(db_name) = snap.db_names.get(&db_id) {
             if *store_name == def.store && glob(&def.db, db_name) {
                 targets.push(sk.clone());
@@ -206,18 +227,17 @@ fn extract_entity(snap: &Snapshot, def: &Def) -> (Vec<Ssv>, usize, usize) {
     let mut rows: Vec<Ssv> = Vec::new();
     let (mut decoded, mut dropped) = (0usize, 0usize);
     for sk in &targets {
-        let bucket = snap.buckets.iter().find(|b| format!("{}:{}", b.db_id, b.os_id) == *sk);
-        let bucket = match bucket {
-            Some(b) => b,
-            None => continue,
+        let bucket = snap
+            .buckets
+            .iter()
+            .find(|b| format!("{}:{}", b.db_id, b.os_id) == *sk);
+        let Some(bucket) = bucket else {
+            continue;
         };
         for rec in &bucket.records {
-            let obj = match decode_value(rec.value.as_deref().unwrap_or(&[]), false) {
-                Ok(v) => v,
-                Err(_) => {
-                    dropped += 1;
-                    continue;
-                }
+            let Ok(obj) = decode_value(rec.value.as_deref().unwrap_or(&[]), false) else {
+                dropped += 1;
+                continue;
             };
             if is_falsy(&obj) {
                 dropped += 1;
@@ -253,7 +273,15 @@ pub fn extract_report(snap: &Snapshot, mapping: &Value) -> String {
                 c = crc32c_update(c, x);
             }
         }
-        let _ = writeln!(out, "E\t{}\t{}\t{}\t{}\t{:08x}", name, rows.len(), decoded, dropped, crc32c_final(c));
+        let _ = writeln!(
+            out,
+            "E\t{}\t{}\t{}\t{}\t{:08x}",
+            name,
+            rows.len(),
+            decoded,
+            dropped,
+            crc32c_final(c)
+        );
     }
     out
 }
@@ -275,7 +303,13 @@ pub fn htmltext_report(snap: &Snapshot, mapping: &Value) -> String {
             Ssv::Object(props) => props
                 .iter()
                 .find(|(k, _)| k == "content")
-                .and_then(|(_, v)| if let Ssv::Str(s) = v { Some(s.as_str()) } else { None })
+                .and_then(|(_, v)| {
+                    if let Ssv::Str(s) = v {
+                        Some(s.as_str())
+                    } else {
+                        None
+                    }
+                })
                 .unwrap_or(""),
             _ => "",
         };
@@ -307,16 +341,19 @@ pub fn entity_targets_for(snap: &Snapshot, mapping: &Value, name: &str) -> Vec<S
 
 /// Extract rows for one entity from a SPECIFIC set of records (not whole buckets) — the incremental
 /// delta re-extracts only the changed message-store records. Mirrors extractRecords in TS.
-pub fn extract_rows_from_records(records: &[&SnapshotRecord], mapping: &Value, name: &str) -> Vec<Ssv> {
+pub fn extract_rows_from_records(
+    records: &[&SnapshotRecord],
+    mapping: &Value,
+    name: &str,
+) -> Vec<Ssv> {
     let def = match mapping.get("entities").and_then(|e| e.get(name)) {
         Some(d) => parse_def(d),
         None => return Vec::new(),
     };
     let mut rows: Vec<Ssv> = Vec::new();
     for rec in records {
-        let obj = match decode_value(rec.value.as_deref().unwrap_or(&[]), false) {
-            Ok(v) => v,
-            Err(_) => continue,
+        let Ok(obj) = decode_value(rec.value.as_deref().unwrap_or(&[]), false) else {
+            continue;
         };
         if is_falsy(&obj) {
             continue;

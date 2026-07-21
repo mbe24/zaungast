@@ -10,18 +10,35 @@ pub enum Ssv {
     Undefined,
     Null,
     Bool(bool),
-    Num(f64),               // int32 / uint32 / double / NumberObject — all JS numbers are f64
-    Date(f64),              // ms since epoch
-    BigInt { neg: bool, le: Vec<u8> }, // magnitude bytes, little-endian, as read
+    Num(f64),  // int32 / uint32 / double / NumberObject — all JS numbers are f64
+    Date(f64), // ms since epoch
+    BigInt {
+        neg: bool,
+        le: Vec<u8>,
+    }, // magnitude bytes, little-endian, as read
     Str(String),
-    Bytes(Vec<u8>),         // ArrayBuffer
-    ArrayBufferView(u64),   // marker: byteLength
-    Regexp { pattern: Box<Ssv>, flags: u64 },
+    Bytes(Vec<u8>),       // ArrayBuffer
+    ArrayBufferView(u64), // marker: byteLength
+    Regexp {
+        pattern: Box<Ssv>,
+        flags: u64,
+    },
     Object(Vec<(String, Ssv)>),
-    Array { items: Vec<Ssv>, props: Vec<(String, Ssv)> },
-    Blob { blob_type: String, size: u64 },
-    BlobIndex { index: u64, file: bool },
-    ExternalBlob { method: u8 },
+    Array {
+        items: Vec<Ssv>,
+        props: Vec<(String, Ssv)>,
+    },
+    Blob {
+        blob_type: String,
+        size: u64,
+    },
+    BlobIndex {
+        index: u64,
+        file: bool,
+    },
+    ExternalBlob {
+        method: u8,
+    },
     Partial(Box<Ssv>),
 }
 
@@ -35,7 +52,11 @@ struct Reader<'a> {
 
 impl<'a> Reader<'a> {
     fn new(buf: &'a [u8]) -> Self {
-        Reader { buf, pos: 0, objects: Vec::new() }
+        Reader {
+            buf,
+            pos: 0,
+            objects: Vec::new(),
+        }
     }
     fn eof(&self) -> bool {
         self.pos >= self.buf.len()
@@ -71,7 +92,10 @@ impl<'a> Reader<'a> {
         Ok(((v >> 1) as i64) ^ (-((v & 1) as i64)))
     }
     fn double(&mut self) -> Result<f64, String> {
-        let b = self.buf.get(self.pos..self.pos + 8).ok_or("double off end")?;
+        let b = self
+            .buf
+            .get(self.pos..self.pos + 8)
+            .ok_or("double off end")?;
         self.pos += 8;
         Ok(f64::from_le_bytes(b.try_into().unwrap()))
     }
@@ -100,8 +124,7 @@ impl<'a> Reader<'a> {
         while !self.eof() {
             match self.buf[self.pos] {
                 0xff => self.pos += 2,
-                0xfe => self.pos += 1,
-                0x00 => self.pos += 1,
+                0xfe | 0x00 => self.pos += 1,
                 _ => break,
             }
         }
@@ -122,12 +145,15 @@ impl<'a> Reader<'a> {
             Ssv::Num(n) => Some(if n.fract() == 0.0 && n.is_finite() && n.abs() < 1e21 {
                 format!("{}", *n as i64)
             } else {
-                format!("{}", n)
+                format!("{n}")
             }),
             _ => None,
         }
     }
 
+    // Each arm is a distinct structured-clone wire tag documented inline; some decode to the same
+    // Rust value (e.g. 'T'/'y' → true). Keep them one-per-tag rather than merging by body.
+    #[allow(clippy::match_same_arms)]
     fn value(&mut self) -> SsvResult {
         self.skip_padding();
         let tag = *self.buf.get(self.pos).ok_or("value() past end")?;
@@ -137,19 +163,19 @@ impl<'a> Reader<'a> {
             0x30 => Ok(Ssv::Null),
             0x54 => Ok(Ssv::Bool(true)),
             0x46 => Ok(Ssv::Bool(false)),
-            0x49 => Ok(Ssv::Num(self.zigzag()? as f64)),        // 'I' int32
-            0x55 => Ok(Ssv::Num(self.varint()? as f64)),        // 'U' uint32
-            0x4e => Ok(Ssv::Num(self.double()?)),               // 'N' double
-            0x44 => Ok(Ssv::Date(self.double()?)),              // 'D' date
-            0x5a => self.bigint(),                              // 'Z' bigint
-            0x6e => Ok(Ssv::Num(self.double()?)),               // 'n' Number object
-            0x79 => Ok(Ssv::Bool(true)),                        // 'y' true object
-            0x78 => Ok(Ssv::Bool(false)),                       // 'x' false object
-            0x73 => self.value(),                               // 's' String object
-            0x7a => self.bigint(),                              // 'z' BigInt object
-            0x42 => self.array_buffer(false),                   // 'B' ArrayBuffer
-            0x7e => self.array_buffer(true),                    // '~' resizable ArrayBuffer
-            0x56 => self.array_buffer_view(),                   // 'V' ArrayBufferView
+            0x49 => Ok(Ssv::Num(self.zigzag()? as f64)), // 'I' int32
+            0x55 => Ok(Ssv::Num(self.varint()? as f64)), // 'U' uint32
+            0x4e => Ok(Ssv::Num(self.double()?)),        // 'N' double
+            0x44 => Ok(Ssv::Date(self.double()?)),       // 'D' date
+            0x5a => self.bigint(),                       // 'Z' bigint
+            0x6e => Ok(Ssv::Num(self.double()?)),        // 'n' Number object
+            0x79 => Ok(Ssv::Bool(true)),                 // 'y' true object
+            0x78 => Ok(Ssv::Bool(false)),                // 'x' false object
+            0x73 => self.value(),                        // 's' String object
+            0x7a => self.bigint(),                       // 'z' BigInt object
+            0x42 => self.array_buffer(false),            // 'B' ArrayBuffer
+            0x7e => self.array_buffer(true),             // '~' resizable ArrayBuffer
+            0x56 => self.array_buffer_view(),            // 'V' ArrayBufferView
             0x22 => {
                 // '"' one-byte (latin1)
                 let n = self.varint()? as usize;
@@ -162,7 +188,10 @@ impl<'a> Reader<'a> {
                 // 'c' two-byte (utf16le)
                 let n = self.varint()? as usize;
                 let b = self.buf.get(self.pos..self.pos + n).ok_or("str2 off end")?;
-                let units: Vec<u16> = b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+                let units: Vec<u16> = b
+                    .chunks_exact(2)
+                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                    .collect();
                 self.pos += n;
                 Ok(Ssv::Str(String::from_utf16_lossy(&units)))
             }
@@ -174,29 +203,38 @@ impl<'a> Reader<'a> {
                 self.pos += n;
                 Ok(Ssv::Str(s))
             }
-            0x6f => self.object(),        // 'o'
-            0x41 => self.dense_array(),   // 'A'
-            0x61 => self.sparse_array(),  // 'a'
-            0x3b => self.map(),           // ';'
-            0x27 => self.set(),           // '\''
-            0x52 => self.regexp(),        // 'R'
+            0x6f => self.object(),       // 'o'
+            0x41 => self.dense_array(),  // 'A'
+            0x61 => self.sparse_array(), // 'a'
+            0x3b => self.map(),          // ';'
+            0x27 => self.set(),          // '\''
+            0x52 => self.regexp(),       // 'R'
             0x5e => {
                 // '^' object reference
                 let id = self.varint()? as usize;
-                self.objects.get(id).cloned().ok_or_else(|| format!("objref #{} out of range", id))
+                self.objects
+                    .get(id)
+                    .cloned()
+                    .ok_or_else(|| format!("objref #{id} out of range"))
             }
-            0x5c => self.host_object(),   // '\' host object
-            _ => Err(format!("unknown tag 0x{:x}", tag)),
+            0x5c => self.host_object(), // '\' host object
+            _ => Err(format!("unknown tag 0x{tag:x}")),
         }
     }
 
     fn bigint(&mut self) -> SsvResult {
         let bitfield = self.varint()?;
         let byte_len = (bitfield >> 1) as usize;
-        let b = self.buf.get(self.pos..self.pos + byte_len).ok_or("bigint off end")?;
+        let b = self
+            .buf
+            .get(self.pos..self.pos + byte_len)
+            .ok_or("bigint off end")?;
         let le = b.to_vec();
         self.pos += byte_len;
-        Ok(Ssv::BigInt { neg: bitfield & 1 != 0, le })
+        Ok(Ssv::BigInt {
+            neg: bitfield & 1 != 0,
+            le,
+        })
     }
 
     fn array_buffer(&mut self, resizable: bool) -> SsvResult {
@@ -204,7 +242,11 @@ impl<'a> Reader<'a> {
         if resizable {
             self.varint()?; // maxByteLength
         }
-        let b = self.buf.get(self.pos..self.pos + n).ok_or("arrayBuffer off end")?.to_vec();
+        let b = self
+            .buf
+            .get(self.pos..self.pos + n)
+            .ok_or("arrayBuffer off end")?
+            .to_vec();
         self.pos += n;
         let v = Ssv::Bytes(b);
         self.objects.push(v.clone()); // ArrayBuffers get an object id
@@ -324,7 +366,10 @@ impl<'a> Reader<'a> {
         }
         self.pos += 1;
         self.varint()?;
-        let s = Ssv::Array { items, props: Vec::new() };
+        let s = Ssv::Array {
+            items,
+            props: Vec::new(),
+        };
         self.objects[id] = s.clone();
         Ok(s)
     }
@@ -332,12 +377,18 @@ impl<'a> Reader<'a> {
     fn regexp(&mut self) -> SsvResult {
         let pattern = self.value()?;
         let flags = self.varint()?;
-        Ok(Ssv::Regexp { pattern: Box::new(pattern), flags })
+        Ok(Ssv::Regexp {
+            pattern: Box::new(pattern),
+            flags,
+        })
     }
 
     fn utf8_string(&mut self) -> Result<String, String> {
         let n = self.varint()? as usize;
-        let b = self.buf.get(self.pos..self.pos + n).ok_or("utf8String off end")?;
+        let b = self
+            .buf
+            .get(self.pos..self.pos + n)
+            .ok_or("utf8String off end")?;
         let s = String::from_utf8_lossy(b).into_owned();
         self.pos += n;
         Ok(s)
@@ -347,8 +398,14 @@ impl<'a> Reader<'a> {
         let subtag = *self.buf.get(self.pos).ok_or("hostObject off end")?;
         self.pos += 1;
         let marker = match subtag {
-            0x69 => Ssv::BlobIndex { index: self.varint()?, file: false }, // 'i' kBlobIndexTag
-            0x65 => Ssv::BlobIndex { index: self.varint()?, file: true },  // 'e' kFileIndexTag
+            0x69 => Ssv::BlobIndex {
+                index: self.varint()?,
+                file: false,
+            }, // 'i' kBlobIndexTag
+            0x65 => Ssv::BlobIndex {
+                index: self.varint()?,
+                file: true,
+            }, // 'e' kFileIndexTag
             0x62 => {
                 // 'b' kBlobTag: uuid, type, size
                 self.utf8_string()?; // uuid (discarded)
@@ -356,7 +413,7 @@ impl<'a> Reader<'a> {
                 let size = self.varint()?;
                 Ssv::Blob { blob_type, size }
             }
-            _ => return Err(format!("unknown host-object tag 0x{:x}", subtag)),
+            _ => return Err(format!("unknown host-object tag 0x{subtag:x}")),
         };
         self.objects.push(marker.clone());
         Ok(marker)
@@ -375,7 +432,7 @@ fn push_prop(props: &mut Vec<(String, Ssv)>, k: String, v: Ssv) {
 // A property key is a JS array index iff ToString(ToUint32(P)) == P and ToUint32(P) != 2^32-1.
 fn array_index(v: &Ssv) -> Option<usize> {
     match v {
-        Ssv::Num(n) if *n >= 0.0 && n.fract() == 0.0 && *n < 4294967295.0 => Some(*n as usize),
+        Ssv::Num(n) if *n >= 0.0 && n.fract() == 0.0 && *n < 4_294_967_295.0 => Some(*n as usize),
         Ssv::Str(s) => s
             .parse::<u32>()
             .ok()
@@ -443,7 +500,7 @@ pub fn canonical(v: &Ssv, out: &mut Vec<u8>) {
         }
         Ssv::BigInt { neg, le } => {
             out.push(b'G');
-            out.push(if *neg { 1 } else { 0 });
+            out.push(u8::from(*neg));
             let mut end = le.len(); // trim trailing zero bytes (LE) → minimal magnitude
             while end > 0 && le[end - 1] == 0 {
                 end -= 1;
@@ -481,9 +538,10 @@ pub fn canonical(v: &Ssv, out: &mut Vec<u8>) {
             out.push(b']');
         }
         // markers → their TS object-equivalents
-        Ssv::ArrayBufferView(len) => {
-            canonical(&Ssv::Object(vec![("__arrayBufferView".into(), Ssv::Num(*len as f64))]), out)
-        }
+        Ssv::ArrayBufferView(len) => canonical(
+            &Ssv::Object(vec![("__arrayBufferView".into(), Ssv::Num(*len as f64))]),
+            out,
+        ),
         Ssv::Regexp { pattern, flags } => canonical(
             &Ssv::Object(vec![
                 ("__regexp".into(), (**pattern).clone()),
@@ -506,7 +564,7 @@ pub fn canonical(v: &Ssv, out: &mut Vec<u8>) {
             if *file {
                 props.push(("__file".into(), Ssv::Bool(true)));
             }
-            canonical(&Ssv::Object(props), out)
+            canonical(&Ssv::Object(props), out);
         }
         Ssv::ExternalBlob { method } => canonical(
             &Ssv::Object(vec![
@@ -519,7 +577,7 @@ pub fn canonical(v: &Ssv, out: &mut Vec<u8>) {
             Ssv::Object(props) => {
                 let mut p = props.clone();
                 p.push(("__partial".into(), Ssv::Bool(true)));
-                canonical(&Ssv::Object(p), out)
+                canonical(&Ssv::Object(p), out);
             }
             other => canonical(other, out),
         },
@@ -551,7 +609,9 @@ pub fn decode_value(value: &[u8], lenient: bool) -> SsvResult {
     // skip the varint value-version
     let mut pos = 0usize;
     loop {
-        let c = *value.get(pos).ok_or("decode_value: version varint off end")?;
+        let c = *value
+            .get(pos)
+            .ok_or("decode_value: version varint off end")?;
         pos += 1;
         if c & 0x80 == 0 {
             break;
@@ -561,7 +621,8 @@ pub fn decode_value(value: &[u8], lenient: bool) -> SsvResult {
     if blob.first() == Some(&0xff) && blob.get(1) == Some(&0x11) {
         let method = *blob.get(2).ok_or("decode_value: truncated wrapper")?;
         if method == 0x02 {
-            let un = crate::snappy::uncompress(&blob[3..]).map_err(|_| "decode_value: snappy failed".to_string())?;
+            let un = crate::snappy::uncompress(&blob[3..])
+                .map_err(|_| "decode_value: snappy failed".to_string())?;
             return deserialize(&un, lenient);
         }
         return Ok(Ssv::ExternalBlob { method });

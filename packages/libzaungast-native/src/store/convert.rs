@@ -18,7 +18,7 @@ pub(crate) fn get<'a>(v: &'a Ssv, k: &str) -> Option<&'a Ssv> {
         _ => None,
     }
 }
-pub(crate) fn as_str<'a>(v: Option<&'a Ssv>) -> Option<&'a str> {
+pub(crate) fn as_str(v: Option<&Ssv>) -> Option<&str> {
     match v {
         Some(Ssv::Str(s)) => Some(s),
         _ => None,
@@ -29,7 +29,7 @@ pub(crate) fn is_true(v: Option<&Ssv>) -> bool {
 }
 pub(crate) fn is_truthy(v: Option<&Ssv>) -> bool {
     match v {
-        None | Some(Ssv::Null) | Some(Ssv::Undefined) | Some(Ssv::Bool(false)) => false,
+        None | Some(Ssv::Null | Ssv::Undefined | Ssv::Bool(false)) => false,
         Some(Ssv::Num(n)) => *n != 0.0 && !n.is_nan(),
         Some(Ssv::Str(s)) => !s.is_empty(),
         _ => true,
@@ -62,7 +62,7 @@ pub(crate) fn to_num(v: Option<&Ssv>) -> f64 {
 // `X != null` in JS (not null AND not undefined) → String(X)
 pub(crate) fn to_js_string(v: Option<&Ssv>) -> Option<String> {
     match v {
-        None | Some(Ssv::Null) | Some(Ssv::Undefined) => None,
+        None | Some(Ssv::Null | Ssv::Undefined) => None,
         Some(Ssv::Str(s)) => Some(s.clone()),
         Some(Ssv::Num(n)) => Some(num_to_js_string(*n)),
         Some(Ssv::Bool(b)) => Some(if *b { "true".into() } else { "false".into() }),
@@ -73,7 +73,7 @@ pub(crate) fn num_to_js_string(n: f64) -> String {
     if n.fract() == 0.0 && n.is_finite() && n.abs() < 1e21 {
         format!("{}", n as i64)
     } else {
-        format!("{}", n)
+        format!("{n}")
     }
 }
 
@@ -100,12 +100,19 @@ pub(crate) fn is_system_message(m: &Ssv) -> bool {
     }
     let mt = as_str(get(m, "messageType")).unwrap_or("");
     let l = mt.to_ascii_lowercase();
-    l.starts_with("threadactivity/") || l.contains("control") || l.contains("event") || l.contains("systemmessage")
+    l.starts_with("threadactivity/")
+        || l.contains("control")
+        || l.contains("event")
+        || l.contains("systemmessage")
 }
 
 pub(crate) fn has_attachment(m: &Ssv, html: &str) -> bool {
     let hl = html.to_ascii_lowercase();
-    if hl.contains("<img") || hl.contains("itemid=") || hl.contains("hostedcontents") || hl.contains("/v1/objects/") {
+    if hl.contains("<img")
+        || hl.contains("itemid=")
+        || hl.contains("hostedcontents")
+        || hl.contains("/v1/objects/")
+    {
         return true;
     }
     for k in ["files", "cards", "attachments"] {
@@ -115,10 +122,8 @@ pub(crate) fn has_attachment(m: &Ssv, html: &str) -> bool {
                     return true;
                 }
             }
-            Some(Ssv::Array { items, .. }) => {
-                if !items.is_empty() {
-                    return true;
-                }
+            Some(Ssv::Array { items, .. }) if !items.is_empty() => {
+                return true;
             }
             _ => {}
         }
@@ -127,13 +132,14 @@ pub(crate) fn has_attachment(m: &Ssv, html: &str) -> bool {
 }
 
 pub(crate) fn mentioned_mris(m: &Ssv) -> Vec<String> {
-    let mentions = match get(m, "mentions") {
-        Some(v) => v,
-        None => return vec![],
+    let Some(mentions) = get(m, "mentions") else {
+        return vec![];
     };
     // object with .properties.mentions → unwrap
     let raw = match mentions {
-        Ssv::Object(_) => get(mentions, "properties").and_then(|p| get(p, "mentions")).unwrap_or(mentions),
+        Ssv::Object(_) => get(mentions, "properties")
+            .and_then(|p| get(p, "mentions"))
+            .unwrap_or(mentions),
         other => other,
     };
     let pick = |o: &Ssv| -> Option<String> {
@@ -187,6 +193,7 @@ pub(crate) fn vote_self_mri(msgs: &[Ssv]) -> Option<String> {
 
 // ---- JSON building (matches JSON.stringify) ----
 pub(crate) fn json_str(s: &str, out: &mut String) {
+    use std::fmt::Write as _;
     out.push('"');
     for ch in s.chars() {
         match ch {
@@ -197,7 +204,9 @@ pub(crate) fn json_str(s: &str, out: &mut String) {
             '\t' => out.push_str("\\t"),
             '\u{08}' => out.push_str("\\b"),
             '\u{0c}' => out.push_str("\\f"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
             c => out.push(c),
         }
     }
@@ -274,7 +283,9 @@ pub(crate) fn compact_attendees(attendees: Option<&Ssv>) -> Option<String> {
         }
         let n = to_js_string(get(a, "name")).unwrap_or_default();
         let e = to_js_string(get(a, "address")).unwrap_or_default();
-        let r = get(a, "status").and_then(|s| to_js_string(get(s, "response"))).unwrap_or_default();
+        let r = get(a, "status")
+            .and_then(|s| to_js_string(get(s, "response")))
+            .unwrap_or_default();
         if n.is_empty() && e.is_empty() {
             continue;
         }
@@ -283,7 +294,13 @@ pub(crate) fn compact_attendees(attendees: Option<&Ssv>) -> Option<String> {
     if out.is_empty() {
         return None;
     }
-    out.sort_by(|a, b| if a.0 == b.0 { a.1.cmp(&b.1) } else { a.0.cmp(&b.0) });
+    out.sort_by(|a, b| {
+        if a.0 == b.0 {
+            a.1.cmp(&b.1)
+        } else {
+            a.0.cmp(&b.0)
+        }
+    });
     let mut s = String::from("[");
     for (i, (n, e, r)) in out.iter().enumerate() {
         if i > 0 {
@@ -338,7 +355,13 @@ pub(crate) fn compact_participants(list: Option<&Ssv>) -> Option<String> {
 pub(crate) fn recording_link_of(r: &Ssv) -> Option<String> {
     // recordings[0].linkedMessage ?? transcript.linkedMessage
     let lm = get(r, "recordings")
-        .and_then(|rec| if let Ssv::Array { items, .. } = rec { items.first() } else { None })
+        .and_then(|rec| {
+            if let Ssv::Array { items, .. } = rec {
+                items.first()
+            } else {
+                None
+            }
+        })
         .and_then(|r0| get(r0, "linkedMessage"))
         .or_else(|| get(r, "transcript").and_then(|t| get(t, "linkedMessage")))?;
     let conv = as_str(get(lm, "conversationId"))?;
@@ -370,7 +393,7 @@ pub(crate) fn parse_iso8601_ms(s: &str) -> Option<i64> {
     let s = s.trim();
     let b = s.as_bytes();
     let digits = |slice: &[u8]| -> Option<i64> {
-        if slice.is_empty() || !slice.iter().all(|c| c.is_ascii_digit()) {
+        if slice.is_empty() || !slice.iter().all(u8::is_ascii_digit) {
             return None;
         }
         std::str::from_utf8(slice).ok()?.parse::<i64>().ok()
@@ -459,7 +482,7 @@ pub(crate) fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let mp = if m > 2 { m - 3 } else { m + 9 };
     let doy = (153 * mp + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146097 + doe - 719468
+    era * 146_097 + doe - 719_468
 }
 
 pub(crate) fn latin1_hex(s: &str) -> String {
@@ -479,15 +502,15 @@ mod tests {
     #[test]
     fn iso8601_matches_js_date_parse() {
         let cases: &[(&str, i64)] = &[
-            ("2026-05-11T12:50:41.5647378Z", 1778503841564), // 7-digit fraction floored to ms
-            ("2025-10-10T14:28:02.912119Z", 1760106482912),
-            ("2024-01-01T00:00:00Z", 1704067200000), // no fraction
-            ("2024-01-01T00:00:00.5Z", 1704067200500), // 1-digit fraction
-            ("2024-01-01T00:00:00.12Z", 1704067200120), // 2-digit fraction
-            ("2024-03-15T09:30:00+02:00", 1710487800000), // positive offset
-            ("2024-03-15T09:30:00-05:30", 1710514800000), // negative offset w/ minutes
-            ("1970-01-01T00:00:00.000Z", 0),               // epoch
-            ("2000-02-29T23:59:59.999Z", 951868799999),    // leap day
+            ("2026-05-11T12:50:41.5647378Z", 1_778_503_841_564), // 7-digit fraction floored to ms
+            ("2025-10-10T14:28:02.912119Z", 1_760_106_482_912),
+            ("2024-01-01T00:00:00Z", 1_704_067_200_000), // no fraction
+            ("2024-01-01T00:00:00.5Z", 1_704_067_200_500), // 1-digit fraction
+            ("2024-01-01T00:00:00.12Z", 1_704_067_200_120), // 2-digit fraction
+            ("2024-03-15T09:30:00+02:00", 1_710_487_800_000), // positive offset
+            ("2024-03-15T09:30:00-05:30", 1_710_514_800_000), // negative offset w/ minutes
+            ("1970-01-01T00:00:00.000Z", 0),             // epoch
+            ("2000-02-29T23:59:59.999Z", 951_868_799_999), // leap day
         ];
         for (s, want) in cases {
             assert_eq!(parse_iso8601_ms(s), Some(*want), "parse_iso8601_ms({s:?})");

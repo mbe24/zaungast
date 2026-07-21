@@ -11,6 +11,30 @@
 //! status: all byte-identical to the TS reference on real data (sstable/wal/dedup → structured-clone
 //! → fingerprint/extract → htmlToText → SQLite store, 6/6 tables).
 
+// clippy::pedantic is the post-change gate. The lints allowed below are noise in a byte-exact
+// serialization/crypto crate and are opted out deliberately rather than annotated at every site:
+//   * cast_* — deliberate int-width casts on lengths/offsets/tags that are known-bounded by the
+//     on-disk formats we mirror; widening/narrowing here is intentional and byte-significant.
+//   * missing_errors_doc / missing_panics_doc / must_use_candidate — this is an internal accelerator,
+//     not a public API; the Result/panic/#[must_use] contracts add churn without readers who need them.
+//   * many_single_char_names — SHA-1/SHA-256 working variables (a..h) follow the FIPS spec verbatim.
+//   * implicit_hasher — internal helpers keyed on the std hasher; genericizing buys nothing here.
+//   * doc_markdown — the module prose references product/schema names (IndexedDB, ChatStore, leveldb,
+//     StoreMeta, …) that read as prose, not code; backticking every one is noise.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_lossless,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate,
+    clippy::many_single_char_names,
+    clippy::implicit_hasher,
+    clippy::doc_markdown
+)]
+
 pub mod format;
 pub mod sha256;
 pub mod store;

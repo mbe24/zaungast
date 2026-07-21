@@ -3,6 +3,11 @@
 //! returns the meta TS needs. All the real work — and all the tests — live in the pure-Rust modules;
 //! this file only marshals across the Node boundary.
 
+// The #[napi] boundary dictates these signatures: exported fns take owned String/Vec<String>
+// (that's what the macro marshals JS values into — borrowing is not an option). needless_pass_by_value
+// is Rust-idiom advice that doesn't apply here.
+#![allow(clippy::needless_pass_by_value)]
+
 use napi_derive::napi;
 
 /// Conformance version. The TS `auto` engine only trusts the native path when this matches the
