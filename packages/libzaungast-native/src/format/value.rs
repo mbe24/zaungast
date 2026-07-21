@@ -47,7 +47,14 @@ pub type SsvResult = Result<Ssv, String>;
 struct Reader<'a> {
     buf: &'a [u8],
     pos: usize,
-    objects: Vec<Ssv>, // receiver ref table; reserved on ENTRY, filled on EXIT (no cycles in corpus)
+    // R2: the receiver ref table holds each container's BYTE OFFSET (not a cloned value). A '^'
+    // re-decodes from the offset rather than cloning a stored value — killing the per-record
+    // clone-cascade that dominated allocation. The corpus is acyclic (a target is fully decoded before
+    // it's referenced), so a re-decode always yields the equal value.
+    objects: Vec<usize>,
+    // >0 while re-decoding a back-ref target: containers register NO new id then (their id was assigned
+    // on the forward pass), and it bounds recursion so a (corpus-absent) cycle fails instead of hanging.
+    resolve_depth: usize,
 }
 
 impl<'a> Reader<'a> {
@@ -56,6 +63,14 @@ impl<'a> Reader<'a> {
             buf,
             pos: 0,
             objects: Vec::new(),
+            resolve_depth: 0,
+        }
+    }
+    // R2: reserve a container's receiver id on ENTRY, recording its byte offset. Skipped during a
+    // back-ref re-decode (resolve_depth>0) so the id sequence matches the forward pass exactly.
+    fn register(&mut self, tag_pos: usize) {
+        if self.resolve_depth == 0 {
+            self.objects.push(tag_pos);
         }
     }
     fn eof(&self) -> bool {
@@ -156,6 +171,7 @@ impl<'a> Reader<'a> {
     #[allow(clippy::match_same_arms)]
     fn value(&mut self) -> SsvResult {
         self.skip_padding();
+        let tag_pos = self.pos; // R2: the offset to re-decode this value from if it's a back-ref target
         let tag = *self.buf.get(self.pos).ok_or("value() past end")?;
         self.pos += 1;
         match tag {
@@ -173,8 +189,8 @@ impl<'a> Reader<'a> {
             0x78 => Ok(Ssv::Bool(false)),                // 'x' false object
             0x73 => self.value(),                        // 's' String object
             0x7a => self.bigint(),                       // 'z' BigInt object
-            0x42 => self.array_buffer(false),            // 'B' ArrayBuffer
-            0x7e => self.array_buffer(true),             // '~' resizable ArrayBuffer
+            0x42 => self.array_buffer(false, tag_pos),   // 'B' ArrayBuffer
+            0x7e => self.array_buffer(true, tag_pos),    // '~' resizable ArrayBuffer
             0x56 => self.array_buffer_view(),            // 'V' ArrayBufferView
             0x22 => {
                 // '"' one-byte (latin1)
@@ -203,21 +219,35 @@ impl<'a> Reader<'a> {
                 self.pos += n;
                 Ok(Ssv::Str(s))
             }
-            0x6f => self.object(),       // 'o'
-            0x41 => self.dense_array(),  // 'A'
-            0x61 => self.sparse_array(), // 'a'
-            0x3b => self.map(),          // ';'
-            0x27 => self.set(),          // '\''
-            0x52 => self.regexp(),       // 'R'
+            0x6f => self.object(tag_pos),       // 'o'
+            0x41 => self.dense_array(tag_pos),  // 'A'
+            0x61 => self.sparse_array(tag_pos), // 'a'
+            0x3b => self.map(tag_pos),          // ';'
+            0x27 => self.set(tag_pos),          // '\''
+            0x52 => self.regexp(),              // 'R' (no receiver id)
             0x5e => {
-                // '^' object reference
+                // '^' object reference — R2: re-decode the target from its recorded byte offset (the ref
+                // table holds offsets, not cloned values). resolve_depth>0 makes that re-decode register
+                // no new ids (the id was assigned on the forward pass); the acyclic corpus guarantees
+                // the target is fully decoded before it's referenced. The depth cap fails a (absent)
+                // cycle gracefully instead of recursing forever.
                 let id = self.varint()? as usize;
-                self.objects
+                let off = *self
+                    .objects
                     .get(id)
-                    .cloned()
-                    .ok_or_else(|| format!("objref #{id} out of range"))
+                    .ok_or_else(|| format!("objref #{id} out of range"))?;
+                if self.resolve_depth > 1024 {
+                    return Err("back-ref resolve too deep (cycle?)".into());
+                }
+                let save = self.pos;
+                self.pos = off;
+                self.resolve_depth += 1;
+                let v = self.value();
+                self.resolve_depth -= 1;
+                self.pos = save;
+                v
             }
-            0x5c => self.host_object(), // '\' host object
+            0x5c => self.host_object(tag_pos), // '\' host object
             _ => Err(format!("unknown tag 0x{tag:x}")),
         }
     }
@@ -237,7 +267,7 @@ impl<'a> Reader<'a> {
         })
     }
 
-    fn array_buffer(&mut self, resizable: bool) -> SsvResult {
+    fn array_buffer(&mut self, resizable: bool, tag_pos: usize) -> SsvResult {
         let n = self.varint()? as usize;
         if resizable {
             self.varint()?; // maxByteLength
@@ -248,9 +278,8 @@ impl<'a> Reader<'a> {
             .ok_or("arrayBuffer off end")?
             .to_vec();
         self.pos += n;
-        let v = Ssv::Bytes(b);
-        self.objects.push(v.clone()); // ArrayBuffers get an object id
-        Ok(v)
+        self.register(tag_pos); // ArrayBuffers get a receiver id
+        Ok(Ssv::Bytes(b))
     }
 
     fn array_buffer_view(&mut self) -> SsvResult {
@@ -261,9 +290,8 @@ impl<'a> Reader<'a> {
         Ok(Ssv::ArrayBufferView(len))
     }
 
-    fn object(&mut self) -> SsvResult {
-        let id = self.objects.len();
-        self.objects.push(Ssv::Null); // reserve id on ENTRY
+    fn object(&mut self, tag_pos: usize) -> SsvResult {
+        self.register(tag_pos); // reserve this container's receiver id on ENTRY
         let mut props: Vec<(String, Ssv)> = Vec::new();
         while self.peek() != Some(0x7b) {
             // '{'
@@ -278,15 +306,12 @@ impl<'a> Reader<'a> {
         }
         self.pos += 1; // consume '{'
         self.varint()?; // property count
-        let obj = Ssv::Object(props);
-        self.objects[id] = obj.clone();
-        Ok(obj)
+        Ok(Ssv::Object(props))
     }
 
-    fn dense_array(&mut self) -> SsvResult {
+    fn dense_array(&mut self, tag_pos: usize) -> SsvResult {
         let len = self.varint()? as usize;
-        let id = self.objects.len();
-        self.objects.push(Ssv::Null);
+        self.register(tag_pos);
         let mut items = Vec::with_capacity(len);
         for _ in 0..len {
             items.push(self.value()?);
@@ -304,15 +329,12 @@ impl<'a> Reader<'a> {
         self.pos += 1;
         self.varint()?;
         self.varint()?;
-        let arr = Ssv::Array { items, props };
-        self.objects[id] = arr.clone();
-        Ok(arr)
+        Ok(Ssv::Array { items, props })
     }
 
-    fn sparse_array(&mut self) -> SsvResult {
+    fn sparse_array(&mut self, tag_pos: usize) -> SsvResult {
         let len = self.varint()? as usize;
-        let id = self.objects.len();
-        self.objects.push(Ssv::Null);
+        self.register(tag_pos);
         let mut items = vec![Ssv::Undefined; len]; // holes → undefined (JS new Array(len))
         let mut props: Vec<(String, Ssv)> = Vec::new();
         while self.peek() != Some(0x40) {
@@ -327,14 +349,11 @@ impl<'a> Reader<'a> {
         self.pos += 1;
         self.varint()?;
         self.varint()?;
-        let arr = Ssv::Array { items, props };
-        self.objects[id] = arr.clone();
-        Ok(arr)
+        Ok(Ssv::Array { items, props })
     }
 
-    fn map(&mut self) -> SsvResult {
-        let id = self.objects.len();
-        self.objects.push(Ssv::Null);
+    fn map(&mut self, tag_pos: usize) -> SsvResult {
+        self.register(tag_pos);
         let mut props: Vec<(String, Ssv)> = Vec::new();
         while self.peek() != Some(0x3a) {
             // ':'
@@ -348,14 +367,11 @@ impl<'a> Reader<'a> {
         }
         self.pos += 1;
         self.varint()?;
-        let m = Ssv::Object(props);
-        self.objects[id] = m.clone();
-        Ok(m)
+        Ok(Ssv::Object(props))
     }
 
-    fn set(&mut self) -> SsvResult {
-        let id = self.objects.len();
-        self.objects.push(Ssv::Null);
+    fn set(&mut self, tag_pos: usize) -> SsvResult {
+        self.register(tag_pos);
         let mut items = Vec::new();
         while self.peek() != Some(0x2c) {
             // ','
@@ -366,12 +382,10 @@ impl<'a> Reader<'a> {
         }
         self.pos += 1;
         self.varint()?;
-        let s = Ssv::Array {
+        Ok(Ssv::Array {
             items,
             props: Vec::new(),
-        };
-        self.objects[id] = s.clone();
-        Ok(s)
+        })
     }
 
     fn regexp(&mut self) -> SsvResult {
@@ -394,7 +408,7 @@ impl<'a> Reader<'a> {
         Ok(s)
     }
 
-    fn host_object(&mut self) -> SsvResult {
+    fn host_object(&mut self, tag_pos: usize) -> SsvResult {
         let subtag = *self.buf.get(self.pos).ok_or("hostObject off end")?;
         self.pos += 1;
         let marker = match subtag {
@@ -415,7 +429,7 @@ impl<'a> Reader<'a> {
             }
             _ => return Err(format!("unknown host-object tag 0x{subtag:x}")),
         };
-        self.objects.push(marker.clone());
+        self.register(tag_pos);
         Ok(marker)
     }
 }
@@ -591,10 +605,17 @@ pub fn deserialize(buf: &[u8], lenient: bool) -> SsvResult {
     match r.value() {
         Ok(v) => Ok(v),
         Err(e) => {
+            // lenient best-effort: recover the partially-decoded root. R2 stores offsets, not values, so
+            // re-decode the root from its offset (resolve_depth>0 ⇒ register no ids). Matches the old
+            // behaviour (a completed root → Partial; a truncated root → Err). No production caller passes
+            // lenient=true — kept for parity with the TS decoder's `__partial` path.
             if lenient && !r.objects.is_empty() {
-                let root = r.objects[0].clone();
-                if !matches!(root, Ssv::Null) {
-                    return Ok(Ssv::Partial(Box::new(root)));
+                r.pos = r.objects[0];
+                r.resolve_depth = 1;
+                if let Ok(root) = r.value() {
+                    if !matches!(root, Ssv::Null) {
+                        return Ok(Ssv::Partial(Box::new(root)));
+                    }
                 }
             }
             Err(e)
