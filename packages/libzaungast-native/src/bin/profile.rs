@@ -154,23 +154,61 @@ fn run_cold(rest: &[String]) {
     println!("{}", json!({ "coldPeakRssMB": proc_status_mb("VmHWM:") }));
 }
 
-fn cold_peak_rss(schema_path: &str, dir: &str, mapping_paths: &[String]) -> Option<f64> {
+// The --cold-mem child: one IN-MEMORY build_store, so its VmHWM is the peak of holding the store in
+// RAM. Non-production (the shipped path writes to disk) — it exists only to give the apples-to-apples
+// memory number vs the TS engine, which keeps its store in memory. Its own process so VmHWM is this
+// path's peak alone, not folded in with the disk-writing ingest.
+fn run_cold_mem(rest: &[String]) {
+    let dir = &rest[0];
+    let (schema, _) = read_inputs(dir, &rest[1], &rest[2..]);
+    let mappings: Vec<Value> = rest[2..]
+        .iter()
+        .map(|p| load_mapping(p).expect("parse mapping.json"))
+        .collect();
+    let snap = load_snapshot(dir).expect("load_snapshot");
+    let fp = fingerprint(&snap);
+    let mapping = select_mapping(&fp.hash, &store_set_from_fp(&fp.stores), &mappings)
+        .expect("no mapping matched");
+    let (conn, _timings) = build_store_timed(&snap, mapping, &schema);
+    println!(
+        "{}",
+        json!({ "inMemoryBuildPeakRssMB": proc_status_mb("VmHWM:") })
+    );
+    drop(conn); // keep the store alive until the peak is read
+}
+
+// Spawn a fresh single-op child and read its reported peak. VmHWM never resets across a process, so a
+// one-op child's high-water IS that op's peak — the only honest way to attribute peak RSS to a phase.
+fn child_peak(
+    mode: &str,
+    key: &str,
+    schema_path: &str,
+    dir: &str,
+    mapping_paths: &[String],
+) -> Option<f64> {
     let exe = env::current_exe().ok()?;
     let mut cmd = Command::new(exe);
-    cmd.arg("--cold").arg(dir).arg(schema_path);
+    cmd.arg(mode).arg(dir).arg(schema_path);
     for p in mapping_paths {
         cmd.arg(p);
     }
     let out = cmd.output().ok()?;
     let v: Value = serde_json::from_slice(&out.stdout).ok()?;
-    v.get("coldPeakRssMB").and_then(Value::as_f64)
+    v.get(key).and_then(Value::as_f64)
 }
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    if args.get(1).map(String::as_str) == Some("--cold") {
-        run_cold(&args[2..]);
-        return;
+    match args.get(1).map(String::as_str) {
+        Some("--cold") => {
+            run_cold(&args[2..]);
+            return;
+        }
+        Some("--cold-mem") => {
+            run_cold_mem(&args[2..]);
+            return;
+        }
+        _ => {}
     }
 
     // ---- args: <dir> <schema.sql> <mapping.json>... [--heavy | -n N] [--out DIR] ----
@@ -232,7 +270,6 @@ fn main() {
     let tc = Instant::now();
     let cold = ingest_to_file(dir, dest_s, &schema, &mappings_json).expect("cold ingest");
     let cold_ms = r3(ms(tc.elapsed()));
-    let rss_with_store = proc_status_mb("VmRSS:");
     let warm = bench("ingest (warm)", n, || {
         ingest_to_file(dir, dest_s, &schema, &mappings_json).expect("warm ingest");
     });
@@ -269,12 +306,26 @@ fn main() {
         drop(conn);
     }
     let store_total = stat("storeBuild (in-memory)", tot);
+    let store_extract = stat("extract (5 entities)", ex);
+    let store_apply = stat("apply (BEGIN..COMMIT)", ap);
+    let store_recompute = stat("recompute_derived", rc);
+    let store_fts = stat("refresh_fts", ft);
+    // Non-production peak RSS of the in-memory build (own child) — the apples-to-apples memory number
+    // vs the TS engine (both holding the store in RAM). The shipped path writes to disk; see coldPeak.
+    let in_mem_peak = child_peak(
+        "--cold-mem",
+        "inMemoryBuildPeakRssMB",
+        schema_path,
+        dir,
+        mapping_paths,
+    );
     let store_build = json!({
         "total": stat_json(&store_total),
-        "extract": stat_json(&stat("extract (5 entities)", ex)),
-        "apply": stat_json(&stat("apply (BEGIN..COMMIT)", ap)),
-        "recompute": stat_json(&stat("recompute_derived", rc)),
-        "fts": stat_json(&stat("refresh_fts", ft)),
+        "extract": stat_json(&store_extract),
+        "apply": stat_json(&store_apply),
+        "recompute": stat_json(&store_recompute),
+        "fts": stat_json(&store_fts),
+        "inMemoryBuildPeakRssMB": in_mem_peak,
     });
 
     // ---- 4. incremental no-op refresh (copy prev → apply-nothing) ----
@@ -293,8 +344,8 @@ fn main() {
     inc_json["kind"] = json!("no-op");
     inc_json["mode"] = json!("native-refresh");
 
-    // ---- 5. peak RSS from a fresh single-ingest child (VmHWM protocol) ----
-    let cold_peak = cold_peak_rss(schema_path, dir, mapping_paths);
+    // ---- 5. production peak RSS from a fresh single-ingest child (VmHWM protocol) ----
+    let cold_peak = child_peak("--cold", "coldPeakRssMB", schema_path, dir, mapping_paths);
 
     // ---- meta + throughput ----
     let warm_p50 = warm.p50;
@@ -326,8 +377,7 @@ fn main() {
         "fullParse": {
             "coldMs": cold_ms,
             "warm": stat_json(&warm),
-            "coldPeakRssMB": cold_peak,
-            "rssWithStoreMB": rss_with_store
+            "coldPeakRssMB": cold_peak
         },
         "formatPhases": format_phases.iter().map(stat_json).collect::<Vec<_>>(),
         "storeBuild": store_build,
@@ -342,7 +392,22 @@ fn main() {
     )
     .expect("write timings.json");
 
-    // ---- console summary (stderr) ----
+    // ---- console summary (stderr), mirroring scripts/profile.mjs's layout ----
+    // The disk-write split: `ingest_to_file` (shipped) writes+fsyncs the SQLite file; the TS-comparable
+    // number is the in-memory pipeline (load + fingerprint + build). NEVER present the disk number bare
+    // next to TS's in-memory ingest — they're different workloads.
+    let load_p50 = format_phases[0].p50;
+    let fp_p50 = format_phases[1].p50;
+    let compute = load_p50 + fp_p50 + store_total.p50;
+    let write = (warm.p50 - compute).max(0.0);
+    let write_pct = (write / warm.p50 * 100.0).round();
+    let mb = |o: Option<f64>| o.map_or_else(|| "—".to_string(), |v| v.to_string());
+    let row = |s: &Stat| {
+        format!(
+            "  {:<44} p50 {:>8} p90 {:>8} p95 {:>8} p99 {:>8} ±{:>7}ms",
+            s.label, s.p50, s.p90, s.p95, s.p99, s.stddev
+        )
+    };
     eprintln!("\n=== native profile → {} ===", out_path.display());
     eprintln!("data: {dir}");
     eprintln!(
@@ -354,21 +419,44 @@ fn main() {
         cold.people,
         cold.lossy
     );
-    eprintln!("  mode {} (N={n})", if heavy { "HEAVY" } else { "light" });
     eprintln!(
-        "full parse: cold {cold_ms}ms · warm p50 {}ms · cold peak RSS {:?}MB · RSS w/store {:?}MB",
-        warm.p50, cold_peak, rss_with_store
+        "  mode: {} (N={n} · incremental {inc_iters})",
+        if heavy { "HEAVY" } else { "light" }
     );
-    eprintln!("throughput: {entries_per_sec} entries/s · {mb_per_sec} MB/s");
-    eprintln!("format phases:");
-    for s in &format_phases {
-        eprintln!(
-            "  {:<40} p50 {:>8} p90 {:>8} p95 {:>8} ±{:>7}ms",
-            s.label, s.p50, s.p90, s.p95, s.stddev
-        );
-    }
+    eprintln!();
     eprintln!(
-        "store build: p50 {}ms (extract/apply/recompute/fts in storeBuild.*)",
+        "full ingest → disk: cold {cold_ms}ms · warm p50 {}ms = compute ~{compute:.0}ms + file-write ~{write:.0}ms (~{write_pct:.0}%, fsync-per-stmt)",
+        warm.p50
+    );
+    eprintln!(
+        "  TS-comparable (in-memory build): {compute:.0}ms  [load {load_p50} + fp {fp_p50} + build {}]",
         store_total.p50
     );
+    eprintln!("throughput (disk): {entries_per_sec} entries/s · {mb_per_sec} MB/s");
+    eprintln!(
+        "memory: cold peak {}MB (production) · in-mem build peak {}MB (non-production)",
+        mb(cold_peak),
+        mb(in_mem_peak)
+    );
+    eprintln!();
+    eprintln!("format phases:");
+    for s in &format_phases {
+        eprintln!("{}", row(s));
+    }
+    eprintln!();
+    eprintln!("store build (in-memory):");
+    for s in [
+        &store_extract,
+        &store_apply,
+        &store_recompute,
+        &store_fts,
+        &store_total,
+    ] {
+        eprintln!("{}", row(s));
+    }
+    eprintln!();
+    eprintln!("incremental:");
+    eprintln!("{}", row(&inc));
+    eprintln!();
+    eprintln!("artifacts in {out_dir}: timings.json");
 }
