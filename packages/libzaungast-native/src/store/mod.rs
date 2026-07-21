@@ -78,6 +78,10 @@ fn populate(conn: &Connection, snap: &Snapshot, mapping: &Value) -> (Option<Stri
     let self_mri = vote_self_mri(&msgs);
     let mut handles = Handles::new();
 
+    // R1 write-tuning: ONE transaction spans apply + recompute + FTS (was a txn around apply only, then
+    // recompute/FTS auto-committing per statement). On the file path (ingest_to_file) this, plus
+    // journal_mode=OFF/synchronous=OFF, collapses the fsync-per-commit cost. Byte output is unchanged —
+    // recompute/FTS read their own uncommitted writes within the txn, the same rows as before.
     let t = Instant::now();
     conn.execute_batch("BEGIN").unwrap();
     apply_conversation_meta(conn, &convs, &mut handles);
@@ -85,7 +89,6 @@ fn populate(conn: &Connection, snap: &Snapshot, mapping: &Value) -> (Option<Stri
     replace_profiles(conn, &profiles);
     replace_events(conn, &events);
     replace_calls(conn, &calls);
-    conn.execute_batch("COMMIT").unwrap();
     let apply = t.elapsed();
 
     let t = Instant::now();
@@ -94,6 +97,7 @@ fn populate(conn: &Connection, snap: &Snapshot, mapping: &Value) -> (Option<Stri
 
     let t = Instant::now();
     refresh_fts(conn);
+    conn.execute_batch("COMMIT").unwrap();
     let fts = t.elapsed();
 
     (
@@ -129,6 +133,12 @@ pub fn ingest_to_file(
     // A fresh full rebuild: never open onto a stale file (would leave rows from a prior schema).
     let _ = std::fs::remove_file(dest_path);
     let conn = Connection::open(dest_path).map_err(|e| format!("open {dest_path}: {e}"))?;
+    // R1 write-tuning: this file is a throwaway full rebuild (removed + rebuilt from leveldb on any
+    // failure), so durability is irrelevant — skip the rollback journal + per-commit fsync. This is the
+    // bulk of the ~2.3s file-write cost. SAFE ONLY because the file is disposable; NEVER set these on a
+    // live-store refresh path (a crash there would corrupt the store TS is reading).
+    conn.execute_batch("PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF;")
+        .map_err(|e| format!("pragmas: {e}"))?;
     conn.execute_batch(schema)
         .map_err(|e| format!("schema exec: {e}"))?;
     conn.execute_batch(FTS_CREATE)
