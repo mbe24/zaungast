@@ -1,8 +1,8 @@
 // Cross-environment smoke for the native shim (data-free, CI). Exercises the full ESM import graph —
 // including runtime resolution of 'libzaungast/engine-spi' and the CJS addon loader — and asserts
 // createNativeEngine()'s two honest outcomes without ever throwing:
-//   • a usable IngestEngine (full() + refresh()) when a conformant addon is present (the native-build
-//     matrix / a local .node), or
+//   • a usable IngestEngine (full() + refresh() + the copy-reuse reuseRefresh()) when a conformant
+//     addon is present (the native-build matrix / a local .node), or
 //   • a clear { unavailable } reason when it isn't (dev hosts / unit CI with no prebuilt .node).
 // This guards the shim's structure + its dependence on the engine-spi surface (a broken SPI export
 // trips it at runtime even if types slipped), while the byte-differential harness proves the Rust
@@ -40,8 +40,8 @@ if ('unavailable' in engine) {
     `keys=${Object.keys(engine).join(',')}`,
   );
   ok(
-    'native engine offers no copy-reuse fast path (reuseRefresh omitted)',
-    !('reuseRefresh' in engine),
+    'native engine offers the copy-reuse fast path (reuseRefresh present)',
+    'reuseRefresh' in engine && typeof engine.reuseRefresh === 'function',
   );
 }
 
