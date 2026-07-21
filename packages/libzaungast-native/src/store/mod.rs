@@ -28,7 +28,7 @@ use extract::{
     replace_profiles, Handles,
 };
 use fts::refresh_fts;
-use refresh::write_meta;
+use refresh::{store_sigs, write_meta};
 
 use crate::fingerprint::fingerprint;
 use crate::idb::{load_snapshot, Snapshot};
@@ -164,6 +164,7 @@ pub fn ingest_to_file(
             max_seq: snap.max_seq,
             msg_targets: entity_targets_for(&snap, m, "message"),
             conv_targets: entity_targets_for(&snap, m, "conversation"),
+            store_sigs: store_sigs(&snap, m),
         };
         write_meta(
             &conn,
@@ -182,6 +183,7 @@ pub fn ingest_to_file(
             max_seq: snap.max_seq,
             msg_targets: vec![],
             conv_targets: vec![],
+            store_sigs: std::collections::BTreeMap::default(),
         };
         write_meta(&conn, &fp.hash, None, snap.lossy, &source_sig, &empty)?;
         (false, None, None)

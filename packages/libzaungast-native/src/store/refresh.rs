@@ -5,7 +5,7 @@
 //! reconcile + recomputeDerived + delta FTS), and rewrites `_meta`. The previous file is never
 //! mutated — TS swaps to the new file.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use rusqlite::{params, Connection};
 use serde_json::Value;
@@ -23,9 +23,10 @@ use crate::resolver::{entity_targets_for, extract_rows, extract_rows_from_record
 /// validates it on open; a mismatch means the file was written by an incompatible lib version (or the
 /// schema generation was hand-bumped) → refuse to serve / full-rebuild. Schema-independent, readable
 /// without assuming any table exists. Bump whenever the on-disk store layout changes meaningfully.
-/// v2 (R3): `_meta` gained `source_sig` (the leveldb source-file signature for the no-op refresh gate);
-/// a v1 file lacks the column, so the version gate forces a full rebuild rather than reading it.
-pub const USER_VERSION: i32 = 2;
+/// v2: `_meta` gained `source_sig` (the leveldb source-file signature for the no-op refresh gate).
+/// v3: `_meta` gained `store_sigs` (per-store change signatures for the unchanged-store whole-replace
+/// skip); a v2 file lacks the column, so the version gate forces a full rebuild rather than reading it.
+pub const USER_VERSION: i32 = 3;
 
 /// The state carried between refreshes (what a full ingest recorded so a later delta can validate the
 /// schema hasn't shifted + knows the sequence floor). Mirrors TS IngestState, minus the mapping (the
@@ -35,15 +36,21 @@ pub struct RefreshState {
     pub max_seq: u64,
     pub msg_targets: Vec<String>,  // sorted (entity_targets_for sorts)
     pub conv_targets: Vec<String>, // sorted
+    /// Per-store change signatures (entity → `entity_sig`) as of this state, for the unchanged-store
+    /// whole-replace skip: a store whose signature is unchanged next tick is byte-identical and its
+    /// replace is skipped. Keyed by entity (profile/event/call/conversation).
+    pub store_sigs: BTreeMap<String, String>,
 }
 
 pub struct RefreshOutcome {
     pub need_full_rebuild: bool, // schema tripwire / error → caller must full-rebuild
     pub skipped: bool,           // lossy load → nothing applied, retry next refresh
     pub new_max_seq: u64,
+    pub skipped_stores: u8, // unchanged stores whose whole-replace/reconcile was skipped this tick
 }
 
-/// The RefreshState a full ingest of `snap` would record (self_mri + maxSeq + mapped-store targets).
+/// The RefreshState a full ingest of `snap` would record (self_mri + maxSeq + mapped-store targets +
+/// per-store change signatures).
 pub fn compute_state(snap: &Snapshot, mapping: &Value) -> RefreshState {
     let msgs = extract_rows(snap, mapping, "message");
     RefreshState {
@@ -51,7 +58,37 @@ pub fn compute_state(snap: &Snapshot, mapping: &Value) -> RefreshState {
         max_seq: snap.max_seq,
         msg_targets: entity_targets_for(snap, mapping, "message"),
         conv_targets: entity_targets_for(snap, mapping, "conversation"),
+        store_sigs: store_sigs(snap, mapping),
     }
+}
+
+/// Cheap per-store change signature: the sorted `target:max_seq:count` over the entity's mapped buckets
+/// — bucket METADATA only, NO structured-clone decode. Two ticks with the same signature ⇒ the store's
+/// live records are byte-identical: leveldb sequences are global + strictly monotonic, so any add/edit
+/// gives its record the newest seq (lifting the bucket's `max_seq`) and any delete drops the live
+/// `count`; and including the target SET makes a db/store rename (which shifts the targets) change the
+/// signature too. So an unchanged signature ⇒ the store's whole-replace can be skipped (already correct).
+fn entity_sig(snap: &Snapshot, mapping: &Value, entity: &str) -> String {
+    entity_targets_for(snap, mapping, entity)
+        .iter()
+        .map(|t| {
+            let (max_seq, count) = snap
+                .buckets
+                .iter()
+                .find(|b| format!("{}:{}", b.db_id, b.os_id) == *t)
+                .map_or((0u64, 0usize), |b| (b.max_seq, b.records.len()));
+            format!("{t}:{max_seq}:{count}")
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Signatures for the skippable stores (profiles/events/calls/conversations). Cheap (no decode).
+pub(crate) fn store_sigs(snap: &Snapshot, mapping: &Value) -> BTreeMap<String, String> {
+    ["profile", "event", "call", "conversation"]
+        .into_iter()
+        .map(|e| (e.to_string(), entity_sig(snap, mapping, e)))
+        .collect()
 }
 
 // delete messages whose owning chain is no longer live (whole-chain / compaction-elided deletion);
@@ -113,6 +150,7 @@ pub fn refresh_store(
             need_full_rebuild: false,
             skipped: true,
             new_max_seq: state.max_seq,
+            skipped_stores: 0,
         };
     }
     // schema tripwire: our mapped message/conversation stores resolve differently → full rebuild.
@@ -123,6 +161,7 @@ pub fn refresh_store(
             need_full_rebuild: true,
             skipped: false,
             new_max_seq: state.max_seq,
+            skipped_stores: 0,
         };
     }
     // no-op fast-exit: maxSeq counts tombstones too, so equal ⇒ nothing landed since the last apply.
@@ -131,6 +170,7 @@ pub fn refresh_store(
             need_full_rebuild: false,
             skipped: false,
             new_max_seq: snap.max_seq,
+            skipped_stores: 0,
         };
     }
 
@@ -163,7 +203,11 @@ pub fn refresh_store(
     let self_mri = state.self_mri.as_deref();
     conn.execute_batch("BEGIN").unwrap();
     let mut fts_ids: HashSet<String> = HashSet::new();
-    for id in delete_messages_for_missing_chains(conn, &live) {
+    // Whether any WHOLE chain disappeared this tick — the only way (besides a conv-store change) a
+    // conversation can become newly-orphaned, so it gates the conversation-reconcile skip below.
+    let missing = delete_messages_for_missing_chains(conn, &live);
+    let missing_happened = !missing.is_empty();
+    for id in missing {
         fts_ids.insert(id);
     }
     for ck in &changed_chains {
@@ -175,17 +219,66 @@ pub fn refresh_store(
     for id in apply_messages(conn, &new_rows, self_mri) {
         fts_ids.insert(id);
     }
-    // cheap whole-store replaces (keeps the incremental==full invariant trivially true for these)
-    replace_profiles(conn, &extract_rows(snap, mapping, "profile"));
-    replace_events(conn, &extract_rows(snap, mapping, "event"));
-    replace_calls(conn, &extract_rows(snap, mapping, "call"));
-    // conversation reconcile: reset live-meta cols, re-apply, drop orphans (not referenced by messages)
+    // Unchanged-store skip: a mapped small store whose signature matches the prior state's is
+    // byte-identical (see `entity_sig`), so its whole-replace is skipped — the table is already
+    // correct. On the common message-only tick this skips re-decoding + rewriting profiles/events/calls.
+    let unchanged = |entity: &str| {
+        state.store_sigs.get(entity).map(String::as_str)
+            == Some(entity_sig(snap, mapping, entity).as_str())
+    };
+    let mut skipped_stores = 0u8;
+    if unchanged("profile") {
+        skipped_stores += 1;
+    } else {
+        replace_profiles(conn, &extract_rows(snap, mapping, "profile"));
+    }
+    if unchanged("event") {
+        skipped_stores += 1;
+    } else {
+        replace_events(conn, &extract_rows(snap, mapping, "event"));
+    }
+    if unchanged("call") {
+        skipped_stores += 1;
+    } else {
+        replace_calls(conn, &extract_rows(snap, mapping, "call"));
+    }
+    // Conversation reconcile (reset meta cols → re-apply from the conv store → drop orphans not
+    // referenced by messages). Skip it ONLY when the conversation store is unchanged AND no whole chain
+    // was deleted this tick — the two (and only) ways a conversation can newly-orphan or change meta.
+    // When skipped, recompute_derived (below) still refreshes message-driven aggregates + materializes
+    // any message-only conversation, so the store stays == a full rebuild.
+    if unchanged("conversation") && !missing_happened {
+        skipped_stores += 1;
+    } else {
+        reconcile_conversations(conn, snap, mapping, &mut handles);
+    }
+    conn.execute_batch("COMMIT").unwrap();
+
+    recompute_derived(conn, self_mri, &mut handles);
+    refresh_fts_delta(conn, &fts_ids);
+    RefreshOutcome {
+        need_full_rebuild: false,
+        skipped: false,
+        new_max_seq: snap.max_seq,
+        skipped_stores,
+    }
+}
+
+// Reconcile the conversation store: reset the live-meta cols, re-apply meta from the conversation
+// store, and drop orphans (conversations neither in the live conv set nor referenced by any message).
+// Run only when the conversation store changed or a whole chain was deleted (see refresh_store).
+fn reconcile_conversations(
+    conn: &Connection,
+    snap: &Snapshot,
+    mapping: &Value,
+    handles: &mut Handles,
+) {
     let conv_rows = extract_rows(snap, mapping, "conversation");
     conn.execute_batch(
         "update conversations set topic=null, team_id=null, thread_type=null, meta_last_ts=0",
     )
     .unwrap();
-    apply_conversation_meta(conn, &conv_rows, &mut handles);
+    apply_conversation_meta(conn, &conv_rows, handles);
     conn.execute_batch(
         "create temp table if not exists _liveconv(id text primary key); delete from _liveconv;",
     )
@@ -206,15 +299,6 @@ pub fn refresh_store(
         "delete from conversations where id not in (select id from _liveconv) and id not in (select distinct conv_id from messages)",
     )
     .unwrap();
-    conn.execute_batch("COMMIT").unwrap();
-
-    recompute_derived(conn, self_mri, &mut handles);
-    refresh_fts_delta(conn, &fts_ids);
-    RefreshOutcome {
-        need_full_rebuild: false,
-        skipped: false,
-        new_max_seq: snap.max_seq,
-    }
 }
 
 // ---- writer↔reader contract: PRAGMA user_version + the in-file _meta table ----
@@ -236,13 +320,13 @@ pub(crate) fn write_meta(
     conn.execute_batch(
         "create table if not exists _meta(
            fingerprint text, mapping_version text, self_mri text, lossy int,
-           max_seq int, msg_targets text, conv_targets text, source_sig text);
+           max_seq int, msg_targets text, conv_targets text, source_sig text, store_sigs text);
          delete from _meta;",
     )
     .map_err(|e| format!("_meta create: {e}"))?;
     conn.execute(
-        "insert into _meta(fingerprint,mapping_version,self_mri,lossy,max_seq,msg_targets,conv_targets,source_sig)
-         values(?,?,?,?,?,?,?,?)",
+        "insert into _meta(fingerprint,mapping_version,self_mri,lossy,max_seq,msg_targets,conv_targets,source_sig,store_sigs)
+         values(?,?,?,?,?,?,?,?,?)",
         params![
             fingerprint,
             mapping_version,
@@ -252,6 +336,7 @@ pub(crate) fn write_meta(
             targets_json(&state.msg_targets),
             targets_json(&state.conv_targets),
             source_sig,
+            serde_json::to_string(&state.store_sigs).unwrap_or_else(|_| "{}".into()),
         ],
     )
     .map_err(|e| format!("_meta insert: {e}"))?;
@@ -288,6 +373,7 @@ fn read_meta(conn: &Connection) -> Result<FileMeta, String> {
                 max_seq: 0,
                 msg_targets: vec![],
                 conv_targets: vec![],
+                store_sigs: BTreeMap::new(),
             },
             source_sig: None,
         });
@@ -295,7 +381,7 @@ fn read_meta(conn: &Connection) -> Result<FileMeta, String> {
     let parse_targets =
         |s: String| -> Vec<String> { serde_json::from_str::<Vec<String>>(&s).unwrap_or_default() };
     conn.query_row(
-        "select fingerprint,mapping_version,self_mri,lossy,max_seq,msg_targets,conv_targets,source_sig from _meta limit 1",
+        "select fingerprint,mapping_version,self_mri,lossy,max_seq,msg_targets,conv_targets,source_sig,store_sigs from _meta limit 1",
         [],
         |r| {
             Ok(FileMeta {
@@ -308,6 +394,10 @@ fn read_meta(conn: &Connection) -> Result<FileMeta, String> {
                     max_seq: r.get::<_, i64>(4)? as u64,
                     msg_targets: parse_targets(r.get::<_, Option<String>>(5)?.unwrap_or_default()),
                     conv_targets: parse_targets(r.get::<_, Option<String>>(6)?.unwrap_or_default()),
+                    store_sigs: serde_json::from_str(
+                        &r.get::<_, Option<String>>(8)?.unwrap_or_default(),
+                    )
+                    .unwrap_or_default(),
                 },
                 source_sig: r.get::<_, Option<String>>(7)?,
             })
@@ -585,10 +675,10 @@ mod composed_tests {
     //! == full; this closes the last gap — that their COMPOSITION in the FILE wrapper (R3 gate + defer
     //! ordering + copy + delta-apply + `_meta` rewrite) is ALSO byte-identical to a full rebuild, for
     //! a cold AND a warm cache. Self-oracle (== a native full rebuild); no new TS oracle needed.
-    use super::{compute_state, reuse_refresh_to_file, write_meta};
+    use super::{compute_state, refresh_store, reuse_refresh_to_file, write_meta};
     use crate::fingerprint::fingerprint;
     use crate::idb::{load_snapshot, load_snapshot_capped, LdbCache};
-    use crate::resolver::{select_mapping, store_set_from_fp};
+    use crate::resolver::{entity_targets_for, select_mapping, store_set_from_fp};
     use crate::store::{build_store, store_report};
     use rusqlite::{params, Connection};
     use serde_json::Value;
@@ -828,5 +918,65 @@ mod composed_tests {
         for p in [prev_path, new1, new2] {
             let _ = std::fs::remove_file(p);
         }
+    }
+
+    // The unchanged-store skip (★d): with a cap ABOVE every profile/event/call/conversation bucket
+    // seq (so those stores are identical in the capped prev and the full snapshot), a capped→full
+    // refresh must SKIP all four small stores AND still produce a store byte-identical to a full
+    // rebuild. The load-bearing gate on the skip PATH — the differential/composed tests use
+    // cap=maxSeq/2, which exercises the whole-replace path, not the skip.
+    #[test]
+    fn refresh_skips_unchanged_stores() {
+        let Ok(dir) = std::env::var("ZAUNGAST_TEST_DIR") else {
+            eprintln!("SKIP refresh_skips_unchanged_stores — set ZAUNGAST_TEST_DIR");
+            return;
+        };
+        let (schema, mappings_json) = schema_and_mappings();
+        let mappings: Vec<Value> =
+            vec![serde_json::from_str(&mappings_json[0]).expect("parse mapping")];
+        let full = load_snapshot(&dir).expect("load_snapshot");
+        let full_fp = fingerprint(&full);
+        let mapping = select_mapping(
+            &full_fp.hash,
+            &store_set_from_fp(&full_fp.stores),
+            &mappings,
+        )
+        .expect("no mapping matched the dir");
+
+        // cap = the max bucket seq across the four small stores → they're all ≤ cap ⇒ identical in the
+        // capped prev and the full snapshot ⇒ their signatures match ⇒ the refresh skips them.
+        let cap = ["profile", "event", "call", "conversation"]
+            .iter()
+            .flat_map(|e| entity_targets_for(&full, mapping, e))
+            .filter_map(|t| {
+                full.buckets
+                    .iter()
+                    .find(|b| format!("{}:{}", b.db_id, b.os_id) == t)
+                    .map(|b| b.max_seq)
+            })
+            .max()
+            .unwrap_or(0);
+        if full.max_seq <= cap {
+            eprintln!("SKIP — no message records above the small-store max seq to form a delta");
+            return;
+        }
+
+        let capped = load_snapshot_capped(&dir, cap).expect("load_snapshot_capped");
+        let prev = build_store(&capped, mapping, &schema); // in-memory prev as of cap
+        let state = compute_state(&capped, mapping);
+        let outcome = refresh_store(&prev, &full, mapping, &state);
+        assert!(
+            !outcome.need_full_rebuild && !outcome.skipped,
+            "the delta applied (not rebuild/skip)"
+        );
+        assert_eq!(
+            outcome.skipped_stores, 4,
+            "all four small stores unchanged at this cap → skipped"
+        );
+        assert_eq!(
+            store_report(&prev),
+            store_report(&build_store(&full, mapping, &schema)),
+            "skip-path refresh == full rebuild"
+        );
     }
 }
