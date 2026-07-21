@@ -4,8 +4,9 @@
 // end-to-end. We wrap that finished file as an `Ingested` through libzaungast's engine SPI
 // (`openStoreFile`, so `ChatStore` stays internal to libzaungast). The consumer constructs the engine
 // with `createNativeEngine()` and injects it into openStore / openLiveStore; libzaungast itself never
-// depends on this package. Native does FULL ingest + native incremental (new-file-swap); it has no
-// copy-reuse fast path, so the engine omits `reuseRefresh`.
+// depends on this package. Native does FULL ingest + native incremental (new-file-swap), and a
+// COPY-REUSE fast path (`reuseRefresh`, Axis B): Rust reuses cached immutable `.ldb` parses across
+// ticks via an opaque per-store cache handle carried on the engine state.
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -37,6 +38,7 @@ interface NativeIngestResult {
 interface NativeRefreshResult {
   needFullRebuild: boolean;
   skipped: boolean;
+  deferred: boolean; // copy-reuse only: a compaction was detected → fall back to the cacheless refresh
   fingerprint: string;
   mappingVersion: string | null;
   selfMri: string | null;
@@ -46,6 +48,9 @@ interface NativeRefreshResult {
   people: number;
   earliestTs: number;
 }
+// The Rust copy-reuse cache (Axis B), surfaced as an opaque napi External handle. TS never inspects
+// it — nativeNewCache() mints one per full ingest; nativeReuseRefresh receives it back and mutates it.
+type ExternalCache = object;
 interface NativeAddon {
   nativeIngest(
     dir: string,
@@ -59,6 +64,14 @@ interface NativeAddon {
     newPath: string,
     mappings: string[],
   ): NativeRefreshResult;
+  nativeNewCache(): ExternalCache;
+  nativeReuseRefresh(
+    snapshotDir: string,
+    prevPath: string,
+    newPath: string,
+    mappings: string[],
+    cache: ExternalCache,
+  ): NativeRefreshResult;
   conformanceVersion(): number;
 }
 
@@ -68,6 +81,7 @@ interface NativeAddon {
 interface NativeHandle {
   dbPath: string;
   tempDir: string;
+  cache: ExternalCache; // the copy-reuse cache (Axis B); minted on full ingest, carried across ticks
 }
 const handleOf = (state: unknown): NativeHandle => (state as { native: NativeHandle }).native;
 
@@ -107,7 +121,8 @@ function nativeFull(dir: string, addon: NativeAddon): Ingested {
     selfMri: r.selfMri,
   };
   const ing = openStoreFile(dbPath, meta, { ftsEnabled: r.ftsEnabled, tempDir: tmp });
-  return { ...ing, state: { native: { dbPath, tempDir: tmp } } };
+  // Mint a fresh copy-reuse cache for this build (mirrors the JS engine clearing ldbCache on full).
+  return { ...ing, state: { native: { dbPath, tempDir: tmp, cache: addon.nativeNewCache() } } };
 }
 
 // One native incremental refresh: Rust copies prev → a new temp file, applies the delta, rewrites its
@@ -136,7 +151,58 @@ function nativeRefreshInto(dir: string, prev: NativeHandle, addon: NativeAddon):
     selfMri: r.selfMri,
   };
   const ing = openStoreFile(dbPath, meta, { ftsEnabled: true, tempDir: tmp });
-  return { kind: 'swapped', next: { ...ing, state: { native: { dbPath, tempDir: tmp } } } };
+  // Carry the copy-reuse cache forward: its surviving (immutable) .ldb parses stay valid across a
+  // reparse; the cacheless reparse just doesn't add to it. Keeping it lets reuse resume next tick.
+  return {
+    kind: 'swapped',
+    next: { ...ing, state: { native: { dbPath, tempDir: tmp, cache: prev.cache } } },
+  };
+}
+
+// One native COPY-REUSE incremental (Axis B): Rust reuses the cached immutable .ldb parses over the
+// Session's mirrored snapshotDir, re-reads only the .log, copies prev → a new temp file, applies the
+// delta. `deferred` (a compaction consumed a cached .ldb) discards the temp and returns 'defer' so the
+// Session falls back to the cacheless reparse `refresh` (which reconciles the elided deletion).
+// `needFullRebuild`/`skipped` behave as in nativeRefreshInto. On a successful apply the SAME cache
+// handle is carried into the swapped store's state, so reuse persists across ticks.
+function nativeReuseRefreshInto(
+  snapshotDir: string,
+  prev: NativeHandle,
+  addon: NativeAddon,
+): RefreshResult | 'defer' {
+  const tmp = mkdtempSync(join(tmpdir(), 'zaungast-native-'));
+  const dbPath = join(tmp, 'store.db');
+  const r = addon.nativeReuseRefresh(
+    snapshotDir,
+    prev.dbPath,
+    dbPath,
+    loadBundledMappingTexts(),
+    prev.cache,
+  );
+  if (r.deferred || r.needFullRebuild || r.skipped) {
+    rmSync(tmp, { recursive: true, force: true });
+    if (r.deferred) return 'defer';
+    return { kind: r.needFullRebuild ? 'needFull' : 'skipped' };
+  }
+  const now = Date.now();
+  const meta: StoreMeta = {
+    asOf: now,
+    fingerprint: r.fingerprint,
+    mappingVersion: r.mappingVersion,
+    schemaMatched: true,
+    counts: { conversations: r.conversations, messages: r.messages, people: r.people },
+    earliestTs: r.earliestTs,
+    ftsEnabled: true,
+    lastFullAt: now, // the Session overwrites this with the real last-full time
+    refreshMode: 'incremental',
+    lossy: r.lossy,
+    selfMri: r.selfMri,
+  };
+  const ing = openStoreFile(dbPath, meta, { ftsEnabled: true, tempDir: tmp });
+  return {
+    kind: 'swapped',
+    next: { ...ing, state: { native: { dbPath, tempDir: tmp, cache: prev.cache } } },
+  };
 }
 
 // Why a native engine couldn't be constructed (reported as DATA, not thrown): the addon isn't
@@ -161,5 +227,9 @@ export function createNativeEngine(): IngestEngine | NativeUnavailable {
     full: (dir: string): Ingested => nativeFull(dir, addon),
     refresh: (prev: Ingested, dir: string): RefreshResult =>
       nativeRefreshInto(dir, handleOf(prev.state), addon),
+    // Copy-reuse fast path (Axis B): the Session mirrors live → snapshotDir, then calls this; native
+    // reuses cached .ldb parses. 'defer' (a compaction) sends the Session to the cacheless `refresh`.
+    reuseRefresh: (prev: Ingested, snapshotDir: string): RefreshResult | 'defer' =>
+      nativeReuseRefreshInto(snapshotDir, handleOf(prev.state), addon),
   };
 }

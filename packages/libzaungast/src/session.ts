@@ -228,6 +228,18 @@ export class Session {
         this.pendingFull = true;
         return false;
       }
+      // 'swapped': the engine produced a fresh store file (native new-file-swap, since it can't mutate
+      // a file TS may hold open); adopt it + close the old one. JS mutates in place → 'inplace' below.
+      if (res.kind === 'swapped') {
+        const prevStore = this.cur.store;
+        this.cur = { ...res.next, meta: { ...res.next.meta, lastFullAt: this.lastFullAt } };
+        prevStore.close(); // closing the old store deletes its temp .db dir
+        this.incrementalsSinceFull++;
+        this.lastProbe = probeFingerprint(liveDir);
+        this.lastRebuildMs = Date.now() - t0;
+        this.lastIngestAt = Date.now();
+        return true;
+      }
       // 'inplace': the engine mutated the store + advanced its own state; the Session stamps policy.
       this.incrementalsSinceFull++;
       const c = this.cur.store.counts();

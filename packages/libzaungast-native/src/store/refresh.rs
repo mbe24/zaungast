@@ -16,7 +16,7 @@ use super::extract::{
     replace_profiles, Handles,
 };
 use super::fts::refresh_fts_delta;
-use crate::idb::{load_snapshot, Snapshot};
+use crate::idb::{load_snapshot, load_snapshot_reuse, LdbCache, Snapshot};
 use crate::resolver::{entity_targets_for, extract_rows, extract_rows_from_records};
 
 /// PRAGMA user_version stamped into every native-written .db — the freshness/staleness gate. TS
@@ -406,6 +406,97 @@ pub fn refresh_to_file(
     Ok(out)
 }
 
+/// Copy-reuse incremental refresh (Axis B). Twin of `refresh_to_file`, but loads the snapshot via the
+/// cache-reusing loader (reuse immutable `.ldb` parses, re-read only the `.log`) instead of a full
+/// re-read. `cache` persists across calls (owned by the TS handle). On a compaction (a cached `.ldb`
+/// vanished) it returns `deferred` — nothing is written, and the caller falls back to the cacheless
+/// `refresh_to_file`, whose fresh full read reconciles any compaction-elided deletion. Everything else
+/// — R3 no-op short-circuit, schema tripwire, delta-apply, `_meta` rewrite — matches `refresh_to_file`.
+/// The compaction/defer check + the prev meta read happen BEFORE any copy, so a defer/rebuild costs no
+/// file I/O. The previous file is never mutated (opened READ-ONLY) — TS swaps to `new_path` on success.
+pub fn reuse_refresh_to_file(
+    dir: &str,
+    prev_path: &str,
+    new_path: &str,
+    mappings_json: &[String],
+    cache: &mut LdbCache,
+) -> Result<RefreshFileOutcome, String> {
+    // R3 no-op short-circuit: unchanged source ⇒ keep serving prev, no copy/load. Same as refresh_to_file.
+    if let Ok(sig) = crate::idb::source_signature(dir) {
+        if !sig.is_empty() {
+            if let Ok(prev) =
+                Connection::open_with_flags(prev_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            {
+                if let Ok(fm) = read_meta(&prev) {
+                    if !fm.stale && fm.source_sig.as_deref() == Some(sig.as_str()) {
+                        return Ok(RefreshFileOutcome {
+                            skipped: true,
+                            ..counts_of(&prev, &fm)
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // Read prev's meta READ-ONLY, before any copy — a defer/rebuild then costs zero file I/O.
+    let prev = Connection::open_with_flags(prev_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| format!("open prev {prev_path}: {e}"))?;
+    let fm = read_meta(&prev)?;
+    if fm.stale {
+        return Ok(RefreshFileOutcome::rebuild()); // incompatible/older-lib file → full rebuild
+    }
+    let mappings: Vec<Value> = mappings_json
+        .iter()
+        .map(|s| serde_json::from_str::<Value>(s).map_err(|e| format!("mapping JSON: {e}")))
+        .collect::<Result<_, _>>()?;
+    let Some(mapping) = mappings.iter().find(|m| {
+        m.get("mappingVersion").and_then(|v| v.as_str()) == fm.mapping_version.as_deref()
+    }) else {
+        return Ok(RefreshFileOutcome::rebuild()); // mapping for that mappingVersion is gone
+    };
+
+    // Cache-reusing load (updates + prunes the cache). A compaction consumed a cached `.ldb` ⇒ the
+    // reuse snapshot can't be trusted for a delta (an elided deletion would resurrect) ⇒ defer to the
+    // cacheless reparse. Record source_sig AS OF the read (before load) so it never over-counts.
+    let source_sig = crate::idb::source_signature(dir).unwrap_or_default();
+    let (snap, compacted) =
+        load_snapshot_reuse(dir, cache).map_err(|e| format!("load_snapshot_reuse: {e}"))?;
+    if compacted {
+        return Ok(RefreshFileOutcome::defer());
+    }
+
+    // Materialize the new file (copy prev → new) and apply the delta onto it (identical to refresh_to_file).
+    let _ = std::fs::remove_file(new_path);
+    std::fs::copy(prev_path, new_path).map_err(|e| format!("copy prev→new: {e}"))?;
+    let conn = Connection::open(new_path).map_err(|e| format!("open {new_path}: {e}"))?;
+
+    let outcome = refresh_store(&conn, &snap, mapping, &fm.state);
+    if outcome.need_full_rebuild {
+        return Ok(RefreshFileOutcome::rebuild());
+    }
+    if outcome.skipped {
+        return Ok(RefreshFileOutcome {
+            skipped: true,
+            ..counts_of(&conn, &fm)
+        });
+    }
+
+    let new_state = compute_state(&snap, mapping);
+    let fp = crate::fingerprint::fingerprint(&snap);
+    write_meta(
+        &conn,
+        &fp.hash,
+        fm.mapping_version.as_deref(),
+        snap.lossy,
+        &source_sig,
+        &new_state,
+    )?;
+    let out = counts_of(&conn, &fm);
+    conn.close().map_err(|(_, e)| format!("close: {e}"))?;
+    Ok(out)
+}
+
 fn counts_of(conn: &Connection, fm: &FileMeta) -> RefreshFileOutcome {
     let count = |t: &str| -> i64 {
         conn.query_row(&format!("select count(*) from {t}"), [], |r| r.get(0))
@@ -421,6 +512,7 @@ fn counts_of(conn: &Connection, fm: &FileMeta) -> RefreshFileOutcome {
     RefreshFileOutcome {
         need_full_rebuild: false,
         skipped: false,
+        deferred: false,
         fingerprint: fm.fingerprint.clone(),
         mapping_version: fm.mapping_version.clone(),
         self_mri: fm.state.self_mri.clone(),
@@ -433,9 +525,15 @@ fn counts_of(conn: &Connection, fm: &FileMeta) -> RefreshFileOutcome {
 }
 
 /// Result of a native file-refresh — the StoreMeta bits TS folds in after swapping to the new file.
+// The four flags are independent refresh outcomes (rebuild / skip / defer / lossy) marshaled flat to
+// TS via `RefreshResult`; an enum wouldn't map to the `#[napi(object)]` shape the reader expects.
+#[allow(clippy::struct_excessive_bools)]
 pub struct RefreshFileOutcome {
     pub need_full_rebuild: bool,
     pub skipped: bool,
+    /// Copy-reuse only: a compaction consumed a cached `.ldb`, so the reuse path can't be trusted for a
+    /// delta — the caller falls back to the cacheless reparse (`refresh_to_file`). No file was written.
+    pub deferred: bool,
     pub fingerprint: String,
     pub mapping_version: Option<String>,
     pub self_mri: Option<String>,
@@ -450,6 +548,23 @@ impl RefreshFileOutcome {
         RefreshFileOutcome {
             need_full_rebuild: true,
             skipped: false,
+            deferred: false,
+            fingerprint: String::new(),
+            mapping_version: None,
+            self_mri: None,
+            lossy: false,
+            conversations: 0,
+            messages: 0,
+            people: 0,
+            earliest_ts: 0,
+        }
+    }
+    // Copy-reuse compaction: nothing written, caller must reparse. Carries no counts (unused on defer).
+    fn defer() -> Self {
+        RefreshFileOutcome {
+            need_full_rebuild: false,
+            skipped: false,
+            deferred: true,
             fingerprint: String::new(),
             mapping_version: None,
             self_mri: None,

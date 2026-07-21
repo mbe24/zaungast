@@ -8,6 +8,7 @@
 // is Rust-idiom advice that doesn't apply here.
 #![allow(clippy::needless_pass_by_value)]
 
+use napi::bindgen_prelude::External;
 use napi_derive::napi;
 
 /// Conformance version. The TS `auto` engine only trusts the native path when this matches the
@@ -63,10 +64,16 @@ pub fn native_ingest(
 /// The result of a native incremental refresh. `needFullRebuild` → the delta couldn't apply (schema
 /// tripwire / stale file / mapping gone); the caller must full-rebuild via nativeIngest. `skipped` →
 /// a lossy load; nothing applied, `newPath` is a byte-copy of the previous file, keep serving it.
+// Four independent refresh-outcome flags (rebuild / skip / defer / lossy) marshaled flat to JS; the
+// `#[napi(object)]` shape is a flat struct, not a union, so this isn't a state better modeled as enum.
+#[allow(clippy::struct_excessive_bools)]
 #[napi(object)]
 pub struct RefreshResult {
     pub need_full_rebuild: bool,
     pub skipped: bool,
+    /// Copy-reuse only: a compaction consumed a cached `.ldb`, so reuse can't be trusted for a delta —
+    /// the caller falls back to the cacheless `nativeRefresh`. Always false from `nativeRefresh`.
+    pub deferred: bool,
     pub fingerprint: String,
     pub mapping_version: Option<String>,
     pub self_mri: Option<String>,
@@ -93,6 +100,48 @@ pub fn native_refresh(
     Ok(RefreshResult {
         need_full_rebuild: o.need_full_rebuild,
         skipped: o.skipped,
+        deferred: o.deferred,
+        fingerprint: o.fingerprint,
+        mapping_version: o.mapping_version,
+        self_mri: o.self_mri,
+        lossy: o.lossy,
+        conversations: o.conversations as u32,
+        messages: o.messages as u32,
+        people: o.people as u32,
+        earliest_ts: o.earliest_ts as f64,
+    })
+}
+
+/// Create a fresh, empty copy-reuse cache (Axis B). The TS side calls this once per FULL ingest and
+/// carries the returned opaque handle on its `{ native }` state; every later `nativeReuseRefresh`
+/// receives it back, reusing cached immutable `.ldb` parses. Held per-Session (not a process global)
+/// and finalized when the handle is GC'd — so the parsed-`.ldb` RAM is bounded to one live store and
+/// freed on dispose. A new full rebuild mints a new cache (mirrors the JS engine clearing `ldbCache`).
+#[napi]
+pub fn native_new_cache() -> External<crate::idb::LdbCache> {
+    External::new(crate::idb::LdbCache::new())
+}
+
+/// Copy-reuse incremental refresh (Axis B): like `nativeRefresh`, but reuses the cached immutable
+/// `.ldb` parses in `cache` and re-reads only the `.log`. `dir` is the Session's mirrored snapshot dir
+/// (kept in lock-step with live by `snapshotReuse`). `deferred=true` ⇒ a compaction was detected;
+/// nothing was written and the caller must fall back to `nativeRefresh` (the cacheless reparse, which
+/// reconciles compaction-elided deletions). `cache` is mutated in place (new parses cached, dead
+/// entries pruned) and lives across calls via the opaque External handle.
+#[napi]
+pub fn native_reuse_refresh(
+    dir: String,
+    prev_path: String,
+    new_path: String,
+    mappings: Vec<String>,
+    mut cache: External<crate::idb::LdbCache>,
+) -> napi::Result<RefreshResult> {
+    let o = crate::store::reuse_refresh_to_file(&dir, &prev_path, &new_path, &mappings, &mut cache)
+        .map_err(napi::Error::from_reason)?;
+    Ok(RefreshResult {
+        need_full_rebuild: o.need_full_rebuild,
+        skipped: o.skipped,
+        deferred: o.deferred,
         fingerprint: o.fingerprint,
         mapping_version: o.mapping_version,
         self_mri: o.self_mri,

@@ -13,8 +13,8 @@ mod refresh;
 
 pub use refresh::USER_VERSION;
 pub use refresh::{
-    compute_state, refresh_store, refresh_to_file, FileMeta, RefreshFileOutcome, RefreshOutcome,
-    RefreshState,
+    compute_state, refresh_store, refresh_to_file, reuse_refresh_to_file, FileMeta,
+    RefreshFileOutcome, RefreshOutcome, RefreshState,
 };
 
 use std::time::{Duration, Instant};
