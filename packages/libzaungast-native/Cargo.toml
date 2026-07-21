@@ -79,3 +79,8 @@ required-features = ["harness"]
 name = "profile"         # wall-clock + peak-RSS profiler → timings.json (twin of scripts/profile.mjs)
 path = "src/bin/profile.rs"
 required-features = ["harness"]
+
+[[bin]]
+name = "diffnoop"        # R3 no-op gate: full-ingest then refresh unchanged dir → must short-circuit
+path = "src/bin/diffnoop.rs"
+required-features = ["harness"]

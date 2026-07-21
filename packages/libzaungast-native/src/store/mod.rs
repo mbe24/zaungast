@@ -122,6 +122,9 @@ pub fn ingest_to_file(
     schema: &str,
     mappings_json: &[String],
 ) -> Result<IngestOutcome, String> {
+    // R3: source-file signature AS OF the read (before load_snapshot), stored in _meta so a later
+    // refresh can short-circuit a no-op tick without re-reading. Fail-open (empty on error).
+    let source_sig = crate::idb::source_signature(dir).unwrap_or_default();
     let snap = load_snapshot(dir).map_err(|e| format!("load_snapshot: {e}"))?;
     let fp = fingerprint(&snap);
     let mappings: Vec<Value> = mappings_json
@@ -162,7 +165,14 @@ pub fn ingest_to_file(
             msg_targets: entity_targets_for(&snap, m, "message"),
             conv_targets: entity_targets_for(&snap, m, "conversation"),
         };
-        write_meta(&conn, &fp.hash, ver.as_deref(), snap.lossy, &state)?;
+        write_meta(
+            &conn,
+            &fp.hash,
+            ver.as_deref(),
+            snap.lossy,
+            &source_sig,
+            &state,
+        )?;
         (true, ver, state.self_mri)
     } else {
         // Unknown schema: an empty store (schema only), mirroring TS ingest (store loads, no rows).
@@ -173,7 +183,7 @@ pub fn ingest_to_file(
             msg_targets: vec![],
             conv_targets: vec![],
         };
-        write_meta(&conn, &fp.hash, None, snap.lossy, &empty)?;
+        write_meta(&conn, &fp.hash, None, snap.lossy, &source_sig, &empty)?;
         (false, None, None)
     };
 

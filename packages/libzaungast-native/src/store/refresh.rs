@@ -23,7 +23,9 @@ use crate::resolver::{entity_targets_for, extract_rows, extract_rows_from_record
 /// validates it on open; a mismatch means the file was written by an incompatible lib version (or the
 /// schema generation was hand-bumped) → refuse to serve / full-rebuild. Schema-independent, readable
 /// without assuming any table exists. Bump whenever the on-disk store layout changes meaningfully.
-pub const USER_VERSION: i32 = 1;
+/// v2 (R3): `_meta` gained `source_sig` (the leveldb source-file signature for the no-op refresh gate);
+/// a v1 file lacks the column, so the version gate forces a full rebuild rather than reading it.
+pub const USER_VERSION: i32 = 2;
 
 /// The state carried between refreshes (what a full ingest recorded so a later delta can validate the
 /// schema hasn't shifted + knows the sequence floor). Mirrors TS IngestState, minus the mapping (the
@@ -227,19 +229,20 @@ pub(crate) fn write_meta(
     fingerprint: &str,
     mapping_version: Option<&str>,
     lossy: bool,
+    source_sig: &str,
     state: &RefreshState,
 ) -> Result<(), String> {
     let targets_json = |t: &[String]| serde_json::to_string(t).unwrap_or_else(|_| "[]".into());
     conn.execute_batch(
         "create table if not exists _meta(
            fingerprint text, mapping_version text, self_mri text, lossy int,
-           max_seq int, msg_targets text, conv_targets text);
+           max_seq int, msg_targets text, conv_targets text, source_sig text);
          delete from _meta;",
     )
     .map_err(|e| format!("_meta create: {e}"))?;
     conn.execute(
-        "insert into _meta(fingerprint,mapping_version,self_mri,lossy,max_seq,msg_targets,conv_targets)
-         values(?,?,?,?,?,?,?)",
+        "insert into _meta(fingerprint,mapping_version,self_mri,lossy,max_seq,msg_targets,conv_targets,source_sig)
+         values(?,?,?,?,?,?,?,?)",
         params![
             fingerprint,
             mapping_version,
@@ -248,6 +251,7 @@ pub(crate) fn write_meta(
             state.max_seq as i64,
             targets_json(&state.msg_targets),
             targets_json(&state.conv_targets),
+            source_sig,
         ],
     )
     .map_err(|e| format!("_meta insert: {e}"))?;
@@ -264,6 +268,9 @@ pub struct FileMeta {
     pub mapping_version: Option<String>,
     pub lossy: bool,
     pub state: RefreshState,
+    /// The leveldb source-file signature recorded when this file was written (R3 no-op gate). `None`
+    /// for a stale/v1 file (never trusted → full rebuild).
+    pub source_sig: Option<String>,
 }
 
 fn read_meta(conn: &Connection) -> Result<FileMeta, String> {
@@ -282,12 +289,13 @@ fn read_meta(conn: &Connection) -> Result<FileMeta, String> {
                 msg_targets: vec![],
                 conv_targets: vec![],
             },
+            source_sig: None,
         });
     }
     let parse_targets =
         |s: String| -> Vec<String> { serde_json::from_str::<Vec<String>>(&s).unwrap_or_default() };
     conn.query_row(
-        "select fingerprint,mapping_version,self_mri,lossy,max_seq,msg_targets,conv_targets from _meta limit 1",
+        "select fingerprint,mapping_version,self_mri,lossy,max_seq,msg_targets,conv_targets,source_sig from _meta limit 1",
         [],
         |r| {
             Ok(FileMeta {
@@ -301,6 +309,7 @@ fn read_meta(conn: &Connection) -> Result<FileMeta, String> {
                     msg_targets: parse_targets(r.get::<_, Option<String>>(5)?.unwrap_or_default()),
                     conv_targets: parse_targets(r.get::<_, Option<String>>(6)?.unwrap_or_default()),
                 },
+                source_sig: r.get::<_, Option<String>>(7)?,
             })
         },
     )
@@ -318,6 +327,27 @@ pub fn refresh_to_file(
     new_path: &str,
     mappings_json: &[String],
 ) -> Result<RefreshFileOutcome, String> {
+    // R3 no-op short-circuit: if the leveldb source files are byte-identical to when prev was written,
+    // nothing landed → keep serving prev with NO copy and NO load_snapshot (returns `skipped`, which
+    // the Session already treats as "keep current"). Open prev READ-ONLY (never mutate it — TS may hold
+    // a handle). Fail-open: any error / empty sig / non-match falls through to the full refresh path.
+    if let Ok(sig) = crate::idb::source_signature(dir) {
+        if !sig.is_empty() {
+            if let Ok(prev) =
+                Connection::open_with_flags(prev_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            {
+                if let Ok(fm) = read_meta(&prev) {
+                    if !fm.stale && fm.source_sig.as_deref() == Some(sig.as_str()) {
+                        return Ok(RefreshFileOutcome {
+                            skipped: true,
+                            ..counts_of(&prev, &fm)
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     let _ = std::fs::remove_file(new_path);
     std::fs::copy(prev_path, new_path).map_err(|e| format!("copy prev→new: {e}"))?;
     let conn = Connection::open(new_path).map_err(|e| format!("open {new_path}: {e}"))?;
@@ -337,6 +367,10 @@ pub fn refresh_to_file(
         return Ok(RefreshFileOutcome::rebuild()); // mapping for that mappingVersion is gone
     };
 
+    // Record the source signature AS OF the read (before load_snapshot) so it never OVER-counts: a
+    // write landing after this but seen by load_snapshot just costs one extra full refresh next time,
+    // never a missed update. Fail-open (empty on error → next refresh won't short-circuit).
+    let source_sig = crate::idb::source_signature(dir).unwrap_or_default();
     let snap = load_snapshot(dir).map_err(|e| format!("load_snapshot: {e}"))?;
     let outcome = refresh_store(&conn, &snap, mapping, &fm.state);
     if outcome.need_full_rebuild {
@@ -359,6 +393,7 @@ pub fn refresh_to_file(
         &fp.hash,
         fm.mapping_version.as_deref(),
         snap.lossy,
+        &source_sig,
         &new_state,
     )?;
 

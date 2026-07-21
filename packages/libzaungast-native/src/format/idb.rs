@@ -331,6 +331,38 @@ pub fn load_snapshot_capped(dir: &str, seq_cap: u64) -> std::io::Result<Snapshot
     Ok(collect_snapshot(build_dedup_map(dir, Some(seq_cap))?))
 }
 
+/// A cheap fingerprint of the leveldb SOURCE files (no read/decompression) — the R3 no-op gate for
+/// incremental refresh. Sorted `(name, size)` over the `.ldb` + `.log` + `MANIFEST-*` files this reader
+/// consumes, plus `CURRENT`'s content. Unchanged ⇒ nothing landed: `.ldb` are write-once with
+/// never-recycled file numbers (same-name-different-content is impossible) and the `.log` is
+/// append-only (a new write always grows it), so any real change alters a name or a size. `mtime` is
+/// deliberately excluded (a touch-without-change would force needless full refreshes). Callers
+/// fail-open: treat any error, or a non-match, as "changed → full refresh path".
+pub fn source_signature(dir: &str) -> std::io::Result<String> {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    for ext in [".ldb", ".log"] {
+        for name in sorted_by_ext(dir, ext)? {
+            let len = std::fs::metadata(Path::new(dir).join(&name)).map_or(0, |m| m.len());
+            let _ = writeln!(out, "{name}:{len}");
+        }
+    }
+    let mut manifests: Vec<String> = std::fs::read_dir(dir)?
+        .filter_map(std::result::Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|f| f.starts_with("MANIFEST-"))
+        .collect();
+    manifests.sort();
+    for name in &manifests {
+        let len = std::fs::metadata(Path::new(dir).join(name)).map_or(0, |m| m.len());
+        let _ = writeln!(out, "{name}:{len}");
+    }
+    if let Ok(cur) = std::fs::read_to_string(Path::new(dir).join("CURRENT")) {
+        let _ = write!(out, "CURRENT={}", cur.trim());
+    }
+    Ok(out)
+}
+
 // ---- differential oracle report (matches harness/diff-snapshot.mjs) ----
 fn bucket_crc(b: &StoreBucket) -> u32 {
     let up = crc32c_update;
@@ -451,4 +483,53 @@ pub fn snapshot_report(snap: &Snapshot) -> String {
         );
     }
     out
+}
+
+#[cfg(test)]
+mod sig_tests {
+    use super::source_signature;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    // A fresh scratch dir per test (unique name → no parallel-test collision), cleaned first.
+    fn scratch(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("zaungast-sig-{name}"));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+    fn sig(d: &Path) -> String {
+        source_signature(d.to_str().unwrap()).unwrap()
+    }
+
+    // The correctness argument as a test (not LevelDB lore): a real change always alters a name or a
+    // size in the signature — .log append, new/removed .ldb, CURRENT flip — and it's idempotent.
+    #[test]
+    fn signature_detects_source_changes() {
+        let d = scratch("basic");
+        fs::write(d.join("000005.ldb"), b"aaa").unwrap();
+        fs::write(d.join("000007.log"), b"bb").unwrap();
+        fs::write(d.join("MANIFEST-000004"), b"m").unwrap();
+        fs::write(d.join("CURRENT"), b"MANIFEST-000004\n").unwrap();
+        let s1 = sig(&d);
+        assert_eq!(s1, sig(&d), "idempotent");
+
+        fs::write(d.join("000007.log"), b"bbccc").unwrap(); // .log append (grows)
+        let s2 = sig(&d);
+        assert_ne!(s1, s2, ".log append must differ");
+
+        fs::write(d.join("000009.ldb"), b"x").unwrap(); // new .ldb
+        let s3 = sig(&d);
+        assert_ne!(s2, s3, "new .ldb must differ");
+
+        fs::remove_file(d.join("000005.ldb")).unwrap(); // compaction removes an .ldb
+        let s4 = sig(&d);
+        assert_ne!(s3, s4, "removed .ldb must differ");
+
+        fs::write(d.join("CURRENT"), b"MANIFEST-000008\n").unwrap(); // version-state flip
+        let s5 = sig(&d);
+        assert_ne!(s4, s5, "CURRENT flip must differ");
+
+        let _ = fs::remove_dir_all(&d);
+    }
 }
