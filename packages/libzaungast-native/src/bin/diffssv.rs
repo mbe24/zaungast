@@ -3,7 +3,7 @@
 //!   cargo run --bin diffssv -- <leveldb-dir>
 
 use libzaungast_native::idb::{load_snapshot, snapshot_ssv_report};
-use libzaungast_native::ssv::{canonical, decode_value};
+use libzaungast_native::value::{canonical, decode_value};
 
 fn main() {
     let dir = std::env::args().nth(1).expect("usage: diffssv <leveldb-dir> [db:os]");

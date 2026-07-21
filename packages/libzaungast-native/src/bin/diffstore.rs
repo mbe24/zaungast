@@ -7,7 +7,7 @@
 use libzaungast_native::fingerprint::fingerprint;
 use libzaungast_native::idb::load_snapshot;
 use libzaungast_native::resolver::{load_mapping, select_mapping, store_set_from_fp};
-use libzaungast_native::writer::{build_store, store_report};
+use libzaungast_native::store::{build_store, store_report};
 
 fn main() {
     let dir = std::env::args().nth(1).expect("usage: diffstore <leveldb-dir> <mapping.json> <schema.sql> [table]");
@@ -21,7 +21,7 @@ fn main() {
     let conn = build_store(&snap, mapping, &schema);
     // debug: `diffstore <dir> <mapping> <schema.sql> <table>` dumps that table's rows
     if let Some(table) = std::env::args().nth(4) {
-        print!("{}", libzaungast_native::writer::dump_table(&conn, &table));
+        print!("{}", libzaungast_native::store::dump_table(&conn, &table));
     } else {
         print!("{}", store_report(&conn));
     }

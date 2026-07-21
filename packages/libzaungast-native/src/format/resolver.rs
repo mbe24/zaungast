@@ -7,10 +7,10 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
-use crate::html::html_to_text;
+use crate::text::html_to_text;
 use crate::idb::{Snapshot, SnapshotRecord};
 use crate::sstable::{crc32c_final, crc32c_init, crc32c_update};
-use crate::ssv::{canonical, decode_value, Ssv};
+use crate::value::{canonical, decode_value, Ssv};
 
 pub fn load_mapping(path: &str) -> Result<Value, String> {
     let s = std::fs::read_to_string(path).map_err(|e| e.to_string())?;

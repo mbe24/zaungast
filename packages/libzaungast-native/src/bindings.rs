@@ -39,7 +39,7 @@ pub fn native_ingest(
     schema: String,
     mappings: Vec<String>,
 ) -> napi::Result<IngestResult> {
-    let o = crate::writer::ingest_to_file(&dir, &dest_path, &schema, &mappings)
+    let o = crate::store::ingest_to_file(&dir, &dest_path, &schema, &mappings)
         .map_err(napi::Error::from_reason)?;
     Ok(IngestResult {
         fingerprint: o.fingerprint,
@@ -83,7 +83,7 @@ pub fn native_refresh(
     new_path: String,
     mappings: Vec<String>,
 ) -> napi::Result<RefreshResult> {
-    let o = crate::writer::refresh_to_file(&dir, &prev_path, &new_path, &mappings)
+    let o = crate::store::refresh_to_file(&dir, &prev_path, &new_path, &mappings)
         .map_err(napi::Error::from_reason)?;
     Ok(RefreshResult {
         need_full_rebuild: o.need_full_rebuild,

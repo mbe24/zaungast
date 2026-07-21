@@ -350,10 +350,10 @@ pub fn snapshot_ssv_report(snap: &Snapshot) -> String {
         let mut ok = 0usize;
         for r in &b.records {
             let bytes = r.value.as_deref().unwrap_or(&[]);
-            match crate::ssv::decode_value(bytes, false) {
+            match crate::value::decode_value(bytes, false) {
                 Ok(v) => {
                     let mut canon = Vec::new();
-                    crate::ssv::canonical(&v, &mut canon);
+                    crate::value::canonical(&v, &mut canon);
                     c = up(c, 0x01);
                     for x in (canon.len() as u32).to_le_bytes() {
                         c = up(c, x);

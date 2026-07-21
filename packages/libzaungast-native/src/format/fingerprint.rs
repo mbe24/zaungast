@@ -9,7 +9,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use crate::idb::Snapshot;
 use crate::sha256::{hex, sha256};
-use crate::ssv;
+use crate::value;
 
 pub struct Fingerprint {
     pub hash: String,
@@ -108,14 +108,14 @@ fn skip_version_varint(value: &[u8]) -> Option<usize> {
     Some(pos)
 }
 
-fn collect_top_keys(v: &ssv::Ssv, set: &mut BTreeSet<String>) {
+fn collect_top_keys(v: &value::Ssv, set: &mut BTreeSet<String>) {
     match v {
-        ssv::Ssv::Object(props) => {
+        value::Ssv::Object(props) => {
             for (k, _) in props {
                 set.insert(k.clone());
             }
         }
-        ssv::Ssv::Array { items, props } => {
+        value::Ssv::Array { items, props } => {
             for i in 0..items.len() {
                 set.insert(i.to_string());
             }
@@ -156,7 +156,7 @@ pub fn fingerprint(snap: &Snapshot) -> Fingerprint {
         for r in &bucket.records[..lim] {
             if let Some(value) = &r.value {
                 if let Some(vpos) = skip_version_varint(value) {
-                    if let Ok(v) = ssv::deserialize(&value[vpos..], false) {
+                    if let Ok(v) = value::deserialize(&value[vpos..], false) {
                         collect_top_keys(&v, &mut set);
                     }
                 }

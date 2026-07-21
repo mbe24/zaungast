@@ -8,7 +8,7 @@
 use libzaungast_native::fingerprint::fingerprint;
 use libzaungast_native::idb::{load_snapshot, load_snapshot_capped};
 use libzaungast_native::resolver::{load_mapping, select_mapping, store_set_from_fp};
-use libzaungast_native::writer::{build_store, compute_state, refresh_store, store_report};
+use libzaungast_native::store::{build_store, compute_state, refresh_store, store_report};
 
 fn main() {
     let dir = std::env::args().nth(1).expect("usage: diffincr <leveldb-dir> <mapping.json> <schema.sql>");
