@@ -408,16 +408,16 @@ fn main() {
     let axis_b_tick = r3(reuse_load.p50 + delta_stat.p50 + copy_stat.p50);
     let full_read_tick = r3(format_phases[0].p50 + delta_stat.p50 + copy_stat.p50);
     let changed_refresh = json!({
-        "note": "a CHANGED tick pays copy + loadSnapshot + deltaApply + write_meta; R3 short-circuits only NO-OP ticks. Axis B replaces the full loadSnapshot (formatPhases[0]) with reuseLoad (warm cache): tick ≈ reuseLoad + deltaApply + copy. deltaApply is then the tall pole (the ★b small-store-trim target).",
+        "note": "A CHANGED tick ≈ loadSnapshot + deltaApply + copy (+ sub-ms write_meta); R3 short-circuits only NO-OP ticks. Axis B replaces the full loadSnapshot (formatPhases[0]) with reuseLoad (warm cache). reuseLoad is measured on a LOG-ONLY delta (a memtable flush into a NEW .ldb would add one fresh parse) → a lower bound. deltaApply is then the tall pole (the ★b small-store-trim target). The *SumMs fields are the SUM of independent component p50s, NOT an end-to-end measured percentile; their DIFFERENCE (loadSnapshot_full − reuseLoad_warm) is the clean apples-to-apples read-cost saving. Neither tick includes the per-tick source mirror (Axis B's is .log-sized; the full-read path's is a whole-.ldb copy), so Axis B's real advantage is understated.",
         "dbSizeBytes": db_size,
         "changedRecords": changed_records,
         "copy": stat_json(&copy_stat),
         "deltaApply": stat_json(&delta_stat),
         "loadSnapshotP50": format_phases[0].p50,
         "reuseLoad": stat_json(&reuse_load),
-        "reuseHits": reuse_cache.hits(),
-        "axisBChangedTickP50": axis_b_tick,
-        "fullReadChangedTickP50": full_read_tick
+        "reuseHitsCumulative": reuse_cache.hits(),
+        "axisBChangedTickP50SumMs": axis_b_tick,
+        "fullReadChangedTickP50SumMs": full_read_tick
     });
 
     // ---- 5. production peak RSS from a fresh single-ingest child (VmHWM protocol) ----
@@ -547,7 +547,8 @@ fn main() {
         delta_stat.p50
     );
     eprintln!(
-        "  changed tick p50: full re-read {full_read_tick}ms  →  Axis B (copy-reuse) {axis_b_tick}ms  (deltaApply {}ms is now the tall pole → ★b)",
+        "  changed tick (SUM of component p50s, ≈): full re-read {full_read_tick}ms → Axis B {axis_b_tick}ms · read-cost saving {}ms (loadSnapshot−reuseLoad); deltaApply {}ms is now the tall pole → ★b",
+        r3(format_phases[0].p50 - reuse_load.p50),
         delta_stat.p50
     );
     eprintln!();
