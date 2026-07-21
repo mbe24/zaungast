@@ -576,3 +576,135 @@ impl RefreshFileOutcome {
         }
     }
 }
+
+#[cfg(test)]
+mod composed_tests {
+    //! Composed correctness of `reuse_refresh_to_file` on REAL data. Env-gated: runs only when
+    //! `ZAUNGAST_TEST_DIR` points at a leveldb dir, otherwise it skips (so dep-free `cargo test`/CI
+    //! stays green). `diffreuse` proves the reuse LOADER == full and `diffincr` proves `refresh_store`
+    //! == full; this closes the last gap — that their COMPOSITION in the FILE wrapper (R3 gate + defer
+    //! ordering + copy + delta-apply + `_meta` rewrite) is ALSO byte-identical to a full rebuild, for
+    //! a cold AND a warm cache. Self-oracle (== a native full rebuild); no new TS oracle needed.
+    use super::{compute_state, reuse_refresh_to_file, write_meta};
+    use crate::fingerprint::fingerprint;
+    use crate::idb::{load_snapshot, load_snapshot_capped, LdbCache};
+    use crate::resolver::{select_mapping, store_set_from_fp};
+    use crate::store::{build_store, store_report};
+    use rusqlite::{params, Connection};
+    use serde_json::Value;
+    use std::path::PathBuf;
+
+    fn crate_rel(p: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(p)
+    }
+
+    #[test]
+    fn reuse_refresh_composed_equals_full() {
+        let Ok(dir) = std::env::var("ZAUNGAST_TEST_DIR") else {
+            eprintln!(
+                "SKIP reuse_refresh_composed_equals_full — set ZAUNGAST_TEST_DIR to a leveldb dir"
+            );
+            return;
+        };
+        // Single-source schema + first registered mapping (mirrors harness/run.mjs), read from the
+        // sibling libzaungast package relative to this crate.
+        let schema = std::fs::read_to_string(crate_rel("../libzaungast/src/schema.sql"))
+            .expect("read schema.sql");
+        let reg = std::fs::read_to_string(crate_rel("../libzaungast/src/schema/mappings.json"))
+            .expect("read mappings.json");
+        let first = serde_json::from_str::<Vec<String>>(&reg).expect("registry")[0].clone();
+        let mapping_text =
+            std::fs::read_to_string(crate_rel("../libzaungast/src/schema/versions").join(&first))
+                .expect("read mapping.json");
+        let mappings_json = vec![mapping_text.clone()];
+        let mappings: Vec<Value> =
+            vec![serde_json::from_str(&mapping_text).expect("parse mapping")];
+
+        // Full snapshot → the mapping → the full-rebuild store report (the oracle).
+        let full = load_snapshot(&dir).expect("load_snapshot");
+        let full_fp = fingerprint(&full);
+        let mapping = select_mapping(
+            &full_fp.hash,
+            &store_set_from_fp(&full_fp.stores),
+            &mappings,
+        )
+        .expect("no mapping matched the dir");
+        let full_report = store_report(&build_store(&full, mapping, &schema));
+
+        // "Previous" store as of cap = maxSeq/2, written to a FILE. VACUUM INTO copies the in-memory
+        // build (incl. FTS) to a real file; write_meta then stamps the incremental floor + user_version
+        // with source_sig="" so R3's no-op gate never short-circuits (we WANT the delta path exercised).
+        let cap = full.max_seq / 2;
+        let capped = load_snapshot_capped(&dir, cap).expect("load_snapshot_capped");
+        let prev_path = std::env::temp_dir().join("zaungast-reuse-prev.db");
+        let _ = std::fs::remove_file(&prev_path);
+        {
+            let mem = build_store(&capped, mapping, &schema);
+            mem.execute("VACUUM INTO ?1", params![prev_path.to_str().unwrap()])
+                .expect("VACUUM INTO prev");
+        }
+        {
+            let prev = Connection::open(&prev_path).expect("open prev");
+            let state = compute_state(&capped, mapping);
+            let mv = mapping.get("mappingVersion").and_then(Value::as_str);
+            write_meta(
+                &prev,
+                &fingerprint(&capped).hash,
+                mv,
+                capped.lossy,
+                "",
+                &state,
+            )
+            .expect("write prev _meta");
+        }
+
+        let report_of = |p: &PathBuf| store_report(&Connection::open(p).expect("open store"));
+        let mut cache = LdbCache::new();
+
+        // Cold cache: reuse-refresh the capped prev up to the full sequence.
+        let cold_path = std::env::temp_dir().join("zaungast-reuse-cold.db");
+        let o1 = reuse_refresh_to_file(
+            &dir,
+            prev_path.to_str().unwrap(),
+            cold_path.to_str().unwrap(),
+            &mappings_json,
+            &mut cache,
+        )
+        .expect("reuse cold");
+        assert!(
+            !o1.need_full_rebuild && !o1.skipped && !o1.deferred,
+            "cold: delta applied (no rebuild/skip/defer)"
+        );
+        assert!(!cache.is_empty(), "cold populated the cache");
+        let cold_report = report_of(&cold_path);
+
+        // Warm cache: same (never-mutated) prev, reuse the cached parses → identical store.
+        let warm_path = std::env::temp_dir().join("zaungast-reuse-warm.db");
+        let o2 = reuse_refresh_to_file(
+            &dir,
+            prev_path.to_str().unwrap(),
+            warm_path.to_str().unwrap(),
+            &mappings_json,
+            &mut cache,
+        )
+        .expect("reuse warm");
+        assert!(
+            !o2.need_full_rebuild && !o2.skipped && !o2.deferred,
+            "warm: delta applied (no rebuild/skip/defer)"
+        );
+        let warm_report = report_of(&warm_path);
+
+        assert_eq!(
+            cold_report, full_report,
+            "cold reuse-refresh == full rebuild"
+        );
+        assert_eq!(
+            warm_report, full_report,
+            "warm reuse-refresh == full rebuild"
+        );
+
+        for p in [prev_path, cold_path, warm_path] {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
