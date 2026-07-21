@@ -765,7 +765,11 @@ mod sig_tests {
 
 #[cfg(test)]
 mod reuse_tests {
-    use super::{covered_name_vanished, is_positional_prefix};
+    use super::{
+        build_dedup_map_reuse, collect_snapshot, covered_name_vanished, fold_all_ldb,
+        is_positional_prefix, load_snapshot, snapshot_report, sorted_ldb_sizes, FoldedPrefix,
+        LdbCache,
+    };
     use std::collections::HashSet;
 
     fn pairs(v: &[(&str, u64)]) -> Vec<(String, u64)> {
@@ -827,5 +831,52 @@ mod reuse_tests {
             &pairs(&[("000005.ldb", 1), ("000009.ldb", 3)]),
             &names
         ));
+    }
+
+    // The ★c2 fast path — advancing a cached prefix with a NON-EMPTY tail (a new `.ldb` flushed since
+    // the prefix was built) — must produce a snapshot byte-identical to a cold full fold. The
+    // differential / composed tests only ever see an UNCHANGED dir (empty tail), so this is the sole
+    // gate on the actual tail-fold-onto-prefix path. Env-gated on ZAUNGAST_TEST_DIR (needs real `.ldb`);
+    // skipped otherwise, so dep-free CI stays green.
+    #[test]
+    fn nonempty_tail_advance_equals_cold_fold() {
+        let Ok(dir) = std::env::var("ZAUNGAST_TEST_DIR") else {
+            eprintln!("SKIP nonempty_tail_advance_equals_cold_fold — set ZAUNGAST_TEST_DIR");
+            return;
+        };
+        let ldb = sorted_ldb_sizes(&dir).expect("sorted_ldb_sizes");
+        if ldb.len() < 2 {
+            eprintln!("SKIP — need >=2 .ldb to split a prefix from a non-empty tail");
+            return;
+        }
+        let cold = snapshot_report(&load_snapshot(&dir).expect("load_snapshot"));
+
+        // Seed a cache whose folded prefix covers only the HEAD ldb[0..k] (k = len-1) — as if the last
+        // `.ldb` had just been flushed AFTER the prefix was built. build_dedup_map_reuse must then take
+        // the fast path, fold the real tail ldb[k..] onto the prefix, and (+ `.log`) reproduce the cold
+        // fold exactly. This is the append-order invariant, byte-proven on real bytes across the split.
+        let k = ldb.len() - 1;
+        let head = fold_all_ldb(&dir, &ldb[..k]);
+        assert!(
+            !head.lossy,
+            "test dir's head .ldb parsed lossy — unusable for this test"
+        );
+        let mut cache = LdbCache::new();
+        cache.folded = Some(FoldedPrefix {
+            dedup: head,
+            covered: ldb[..k].to_vec(),
+        });
+
+        let (d, compacted) = build_dedup_map_reuse(&dir, &mut cache).expect("reuse advance");
+        assert!(!compacted, "appending a tail is not a compaction");
+        assert!(
+            cache.prefix_records_reused() > 0,
+            "the tail-advance fast path must have run (not a rebuild)"
+        );
+        assert_eq!(
+            snapshot_report(&collect_snapshot(d)),
+            cold,
+            "non-empty-tail prefix advance == cold full fold"
+        );
     }
 }
