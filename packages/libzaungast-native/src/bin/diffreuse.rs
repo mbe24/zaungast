@@ -16,13 +16,17 @@ fn main() {
     let full = snapshot_report(&load_snapshot(&dir).expect("load_snapshot"));
 
     let mut cache = LdbCache::new();
-    assert!(cache.is_empty(), "cache must start empty");
+    assert!(
+        !cache.has_prefix(),
+        "cache must start with no folded prefix"
+    );
     let (cold_snap, cold_compacted) = load_snapshot_reuse(&dir, &mut cache).expect("reuse (cold)");
     let cold = snapshot_report(&cold_snap);
-    let cached = cache.len();
+    let built = cache.has_prefix(); // cold builds the folded prefix
+    let cold_reused = cache.prefix_records_reused(); // 0 after a cold build (nothing reused yet)
     let (warm_snap, warm_compacted) = load_snapshot_reuse(&dir, &mut cache).expect("reuse (warm)");
     let warm = snapshot_report(&warm_snap);
-    let warm_hits = cache.hits(); // cumulative; the warm pass must have SERVED the cached parses
+    let warm_reused = cache.prefix_records_reused(); // warm must take the fast path → reuse the prefix
 
     // Intra-Rust invariants (fail loudly → the harness sees no valid stdout and reports failure).
     let mut bad = Vec::new();
@@ -32,14 +36,14 @@ fn main() {
     if warm_compacted {
         bad.push("warm pass falsely flagged compacted".to_string());
     }
-    if cached == 0 {
-        bad.push("cold pass cached no .ldb tables (expected ≥1)".to_string());
+    if !built {
+        bad.push("cold pass built no folded prefix (expected one)".to_string());
     }
-    // Perf guard: prove the warm pass REUSED the cache (an always-false `can_reuse` would still make
-    // every report match — silently regressing to a full re-read every tick).
-    if warm_hits < cached {
+    // Perf guard: prove the warm pass took the clone-and-`.log`-only FAST PATH (a regression to a full
+    // re-fold every tick would leave `prefix_records_reused` unchanged, yet every report still matches).
+    if warm_reused <= cold_reused {
         bad.push(format!(
-            "warm pass hit the cache {warm_hits}× but {cached} tables are cached (can_reuse regressed?)"
+            "warm pass reused {warm_reused} prefix records (cold {cold_reused}) — fast path did not run"
         ));
     }
     if cold != full {
@@ -53,7 +57,7 @@ fn main() {
         std::process::exit(1);
     }
     eprintln!(
-        "diffreuse: COLD == WARM == FULL ok ({cached} .ldb cached, {warm_hits} warm cache hits)"
+        "diffreuse: COLD == WARM == FULL ok (prefix built, warm reused {warm_reused} records)"
     );
 
     // Emit the WARM (cache-reusing) report for the TS oracle (diff-snapshot.mjs) to match vs TS-full.

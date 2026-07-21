@@ -679,7 +679,7 @@ mod composed_tests {
             !o1.need_full_rebuild && !o1.skipped && !o1.deferred,
             "cold: delta applied (no rebuild/skip/defer)"
         );
-        assert!(!cache.is_empty(), "cold populated the cache");
+        assert!(cache.has_prefix(), "cold reuse built the folded prefix");
         let cold_report = report_of(&cold_path);
 
         // Warm cache: same (never-mutated) prev, reuse the cached parses → identical store.
@@ -787,7 +787,7 @@ mod composed_tests {
             !o1.deferred && !o1.need_full_rebuild,
             "tick1 applies + warms the cache"
         );
-        assert!(!cache.is_empty(), "cache warmed by tick1");
+        assert!(cache.has_prefix(), "tick1 built the folded prefix");
 
         // Compaction: delete an `.ldb` the cache now holds.
         let victim = {

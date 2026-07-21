@@ -26,7 +26,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde_json::{json, Value};
 
 use libzaungast_native::fingerprint::fingerprint;
-use libzaungast_native::idb::{load_snapshot, load_snapshot_capped, load_snapshot_reuse, LdbCache};
+use libzaungast_native::idb::{
+    load_snapshot, load_snapshot_capped, load_snapshot_reuse_timed, LdbCache,
+};
 use libzaungast_native::resolver::{
     entity_targets_for, extract_rows, load_mapping, select_mapping, store_set_from_fp,
 };
@@ -400,22 +402,38 @@ fn main() {
     // reuse-load — the changed-tick READ cost AFTER Axis B (reuse cached immutable `.ldb`, re-read only
     // the `.log`) against the full `load_snapshot` above (formatPhases[0]). The Axis B changed tick ≈
     // reuseLoad(warm) + deltaApply + copy; the pre-Axis-B tick ≈ loadSnapshot(full) + deltaApply + copy.
+    // Axis B / ★c2 copy-reuse load: warm the cache once (cold read builds the folded prefix), then
+    // measure the WARM reuse-load — the changed-tick READ cost after ★c2 — SPLIT into `reuseFold`
+    // (build_dedup_map_reuse: clone the cached prefix + fold only the `.log` — what ★c2 speeds up) and
+    // `reuseCollect` (collect_snapshot: decode_prefix + route + bucket over ALL records, which runs
+    // fully every tick regardless — ★c2 does NOT touch it; if it dominates, that's ★c3's target).
     let mut reuse_cache = LdbCache::new();
-    let _ = load_snapshot_reuse(dir, &mut reuse_cache).expect("reuse warm-up");
-    let reuse_load = bench("loadSnapshotReuse (warm cache)", n, || {
-        std::hint::black_box(load_snapshot_reuse(dir, &mut reuse_cache).expect("reuse load"));
-    });
+    let _ = load_snapshot_reuse_timed(dir, &mut reuse_cache).expect("reuse warm-up");
+    let (mut rl, mut rf, mut rc) = (Vec::new(), Vec::new(), Vec::new());
+    for _ in 0..n {
+        let t = Instant::now();
+        let (snap, _c, tm) = load_snapshot_reuse_timed(dir, &mut reuse_cache).expect("reuse load");
+        rl.push(ms(t.elapsed()));
+        rf.push(ms(tm.fold));
+        rc.push(ms(tm.collect));
+        drop(snap);
+    }
+    let reuse_load = stat("loadSnapshotReuse (warm cache)", rl);
+    let reuse_fold = stat("reuse fold (clone prefix + WAL)", rf);
+    let reuse_collect = stat("reuse collect_snapshot", rc);
     let axis_b_tick = r3(reuse_load.p50 + delta_stat.p50 + copy_stat.p50);
     let full_read_tick = r3(format_phases[0].p50 + delta_stat.p50 + copy_stat.p50);
     let changed_refresh = json!({
-        "note": "A CHANGED tick ≈ loadSnapshot + deltaApply + copy (+ sub-ms write_meta); R3 short-circuits only NO-OP ticks. Axis B replaces the full loadSnapshot (formatPhases[0]) with reuseLoad (warm cache). reuseLoad is measured on a LOG-ONLY delta (a memtable flush into a NEW .ldb would add one fresh parse) → a lower bound. deltaApply is then the tall pole (the ★b small-store-trim target). The *SumMs fields are the SUM of independent component p50s, NOT an end-to-end measured percentile; their DIFFERENCE (loadSnapshot_full − reuseLoad_warm) is the clean apples-to-apples read-cost saving. Neither tick includes the per-tick source mirror (Axis B's is .log-sized; the full-read path's is a whole-.ldb copy), so Axis B's real advantage is understated.",
+        "note": "A CHANGED tick ≈ loadSnapshot + deltaApply + copy (+ sub-ms write_meta); R3 short-circuits only NO-OP ticks. Axis B replaces the full loadSnapshot (formatPhases[0]) with reuseLoad (warm cache) = reuseFold + reuseCollect. ★c2 makes reuseFold cheap (clone the cached .ldb dedup prefix + fold only the .log); reuseCollect (collect_snapshot over ALL records) runs fully every tick and ★c2 does NOT touch it — if it dominates reuseLoad, that caps ★c2 and is ★c3's target. reuseLoad is a LOWER bound (measured on a LOG-ONLY delta; a flush into a new .ldb adds one fresh parse). The *SumMs fields are the SUM of independent component p50s, NOT a measured percentile; their DIFFERENCE (loadSnapshot_full − reuseLoad_warm) is the clean read-cost saving. Neither tick includes the per-tick source mirror (Axis B's is .log-sized vs the full path's whole-.ldb copy), so Axis B's real advantage is understated.",
         "dbSizeBytes": db_size,
         "changedRecords": changed_records,
         "copy": stat_json(&copy_stat),
         "deltaApply": stat_json(&delta_stat),
         "loadSnapshotP50": format_phases[0].p50,
         "reuseLoad": stat_json(&reuse_load),
-        "reuseHitsCumulative": reuse_cache.hits(),
+        "reuseFold": stat_json(&reuse_fold),
+        "reuseCollect": stat_json(&reuse_collect),
+        "reusePrefixRecords": reuse_cache.prefix_records_reused(),
         "axisBChangedTickP50SumMs": axis_b_tick,
         "fullReadChangedTickP50SumMs": full_read_tick
     });
@@ -539,15 +557,21 @@ fn main() {
         "changed-tick components (a CHANGED refresh pays ALL of these; the no-op above is R3):"
     );
     eprintln!(
-        "  db {:.1}MB · changed records {changed_records} · copy p50 {}ms · loadSnapshot p50 {}ms · reuseLoad p50 {}ms · deltaApply p50 {}ms",
+        "  db {:.1}MB · changed records {changed_records} · copy p50 {}ms · loadSnapshot(full) p50 {}ms · deltaApply p50 {}ms",
         db_size as f64 / 1_048_576.0,
         copy_stat.p50,
         format_phases[0].p50,
-        reuse_load.p50,
         delta_stat.p50
     );
     eprintln!(
-        "  changed tick (SUM of component p50s, ≈): full re-read {full_read_tick}ms → Axis B {axis_b_tick}ms · read-cost saving {}ms (loadSnapshot−reuseLoad); deltaApply {}ms is now the tall pole → ★b",
+        "  reuseLoad p50 {}ms = fold {}ms (★c2: clone+WAL) + collect_snapshot {}ms (unchanged by ★c2 → ★c3 if it dominates) · prefix reused {} records",
+        reuse_load.p50,
+        reuse_fold.p50,
+        reuse_collect.p50,
+        reuse_cache.prefix_records_reused()
+    );
+    eprintln!(
+        "  changed tick (SUM of component p50s, ≈): full re-read {full_read_tick}ms → Axis B {axis_b_tick}ms · read-cost saving {}ms (loadSnapshot−reuseLoad); deltaApply {}ms tall pole → ★b",
         r3(format_phases[0].p50 - reuse_load.p50),
         delta_stat.p50
     );

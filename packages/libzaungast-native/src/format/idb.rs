@@ -7,16 +7,19 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 
 use crate::sstable::{crc32c_final, crc32c_init, crc32c_update};
 
+#[derive(Clone)]
 pub struct SnapshotRecord {
     pub seq: u64,
     pub rtype: u8,
     // `Bytes` (refcounted views into the parsed `.ldb` blocks / WAL copies) so the dedup fold and the
-    // copy-reuse cache share value/key bytes instead of re-copying them every tick (★c).
+    // copy-reuse cache share value/key bytes instead of re-copying them every tick (★c). `Clone` is a
+    // refcount bump (no byte memcpy) — which is what makes caching the folded prefix cheap (★c2).
     pub key: Bytes,
     pub value: Option<Bytes>,
 }
@@ -39,6 +42,9 @@ pub struct Snapshot {
 }
 
 // ---- dedup: first-seen-ordered map (Vec preserves JS Map insertion order; in-place overwrite) ----
+// `Clone` is cheap now (Bytes-backed): a Vec + hashbrown-table memcpy + refcount bumps, no rehash and
+// no byte copies — so the copy-reuse fast path can clone a cached fold and layer only the WAL (★c2).
+#[derive(Clone)]
 struct Dedup {
     order: Vec<SnapshotRecord>,
     index: HashMap<Bytes, usize>,
@@ -344,131 +350,170 @@ pub fn load_snapshot_capped(dir: &str, seq_cap: u64) -> std::io::Result<Snapshot
     Ok(collect_snapshot(build_dedup_map(dir, Some(seq_cap))?))
 }
 
-// ---- Axis B: copy-reuse snapshot loader (cache immutable .ldb parses, re-read only the .log) ----
+// ---- Axis B: copy-reuse snapshot loader (★c2: cache the folded .ldb dedup PREFIX, re-fold only .log) ----
 
-/// One cached immutable `.ldb` parse: the parsed table entries + the on-disk size at parse time. A
-/// size change (a partial→complete re-copy, or the rare recreated-DB filename reuse) invalidates the
-/// entry so it is re-read. Mirrors the TS `LdbCache` value `{ res, size }`.
-struct CachedTable {
-    entries: Vec<(Bytes, Bytes)>,
-    size: u64,
+/// The folded dedup state over a clean, sorted PREFIX of the current `.ldb` list — cached across
+/// refreshes so a tick re-folds only the (small) `.log` on top of a cheap clone, never re-hashing all
+/// ~116k records. `covered` is the sorted `(name, size)` of the `.ldb` folded in, and — by
+/// construction (`.ldb` are write-once with monotonically-increasing numbers, so new files sort last)
+/// — a POSITIONAL prefix of the current `.ldb` list. `dedup` holds NO `.log` records (those are folded
+/// onto a per-tick CLONE), so it stays a valid, reusable `.ldb`-only fold.
+struct FoldedPrefix {
+    dedup: Dedup,
+    covered: Vec<(String, u64)>,
 }
 
-/// Per-Session copy-reuse cache (Axis B): immutable `.ldb` parses keyed by filename, reused across
-/// incremental refreshes so only the small append-only `.log` is re-parsed each tick. Owned by the
-/// native engine handle and carried across FFI calls; a full rebuild starts a fresh (empty) cache.
-/// Mirrors the TS `LdbCache` owned per `createJsEngine`. Correctness rests on `.ldb` being write-once
-/// with never-recycled file numbers (the same invariant R3's signature leans on): a cached
-/// `(name, size)` is a stable identity for the bytes, and a vanished cached name means a compaction
-/// (handled by the caller's defer-to-full-reparse — see `load_snapshot_reuse`).
+/// Per-Session copy-reuse cache (Axis B / ★c2): the folded `.ldb` dedup prefix, carried across FFI
+/// calls on the native engine handle. A full rebuild starts fresh (`None`). Correctness rests on
+/// `.ldb` being write-once with never-recycled, monotonically-increasing file numbers (the invariant
+/// R3's signature also leans on): a covered `(name, size)` is a stable identity for the bytes; a
+/// vanished covered name means a compaction (→ the caller defers to a full reparse).
 #[derive(Default)]
 pub struct LdbCache {
-    tables: HashMap<String, CachedTable>,
-    hits: usize,
+    folded: Option<FoldedPrefix>,
+    // Cumulative count of prefix records SERVED via the clone-and-`.log`-only fast path (added once
+    // per fast-path tick). Zero exactly when the fast path never ran → the silent-regression guard.
+    prefix_records_reused: usize,
 }
 impl LdbCache {
     pub fn new() -> Self {
         Self::default()
     }
-    /// Cached-table count (introspection for the differential bin / telemetry).
-    pub fn len(&self) -> usize {
-        self.tables.len()
+    /// Whether a folded prefix is currently cached (a cold reuse builds it; introspection for the gate).
+    pub fn has_prefix(&self) -> bool {
+        self.folded.is_some()
     }
-    pub fn is_empty(&self) -> bool {
-        self.tables.is_empty()
-    }
-    /// Cumulative `.ldb` parses served FROM cache (not re-read) across all reuse calls. A perf guard —
-    /// a warm pass that never hits means `can_reuse` silently regressed to a full re-read every tick —
-    /// plus telemetry (the profiler reports the hit rate).
-    pub fn hits(&self) -> usize {
-        self.hits
+    /// Cumulative prefix records served via the fast path — the perf guard / profiler telemetry.
+    pub fn prefix_records_reused(&self) -> usize {
+        self.prefix_records_reused
     }
 }
 
-// Reuse-cache decisions, factored out so they can be unit-tested WITHOUT real `.ldb` bytes.
-//
-// `compaction_detected`: any previously-cached `.ldb` filename is no longer on disk — a compaction
-// consumed it, and compaction can elide a deletion (a key's tombstone merged away), so the caller
-// MUST NOT reuse the stale cache; it defers to a full reparse of the current file set instead.
-fn compaction_detected(cached_names: &[String], current: &HashSet<String>) -> bool {
-    cached_names.iter().any(|f| !current.contains(f))
-}
-// `can_reuse`: reuse a cached parse iff the file is cached AND its on-disk size is known and unchanged.
-// Same name + same size ⇒ (write-once, never-recycled numbers) the same bytes. A size change, an
-// uncached file, OR a stat failure (unknown size) ⇒ re-read (never reuse blind).
-fn can_reuse(cached_size: Option<u64>, disk_size: Option<u64>) -> bool {
-    matches!((cached_size, disk_size), (Some(c), Some(d)) if c == d)
+// `covered` is a POSITIONAL prefix of `current` — same names, positions, AND sizes for the first
+// `covered.len()` entries. Factored out for unit-testing without real `.ldb`. When true, `current`'s
+// tail (`current[covered.len()..]`) provably sorts after every covered file (both are sorted), so
+// folding it onto the prefix reproduces a cold fold's order exactly — the append-order invariant
+// becomes CHECKED, not assumed (a size change / reorder / filename-reuse pathology fails it → rebuild).
+fn is_positional_prefix(covered: &[(String, u64)], current: &[(String, u64)]) -> bool {
+    covered.len() <= current.len() && covered.iter().zip(current).all(|(a, b)| a == b)
 }
 
-/// Cache-reusing, compaction-aware variant of `build_dedup_map` (Axis B). Reuses cached immutable
-/// `.ldb` parses (by filename, size-revalidated), reads only new `.ldb` + all `.log` fresh, and folds
-/// the UNION in the SAME sorted `.ldb`-then-`.log` order as `build_dedup_map` — so `d.order` (and thus
-/// the fingerprint, which samples first-seen order) is identical to a cold full read. Returns
-/// `(dedup, compacted)`; `compacted == true` means a cached `.ldb` vanished (the caller must fall back
-/// to a full reparse). Prunes cache entries for absent files. Mirrors TS `buildReuseMap`.
-fn build_dedup_map_reuse(
-    dir: &str,
-    cache: &mut LdbCache,
-    seq_cap: Option<u64>,
-) -> std::io::Result<(Dedup, bool)> {
+// A covered `.ldb` filename no longer on disk ⇒ a compaction consumed it (which can elide a deletion),
+// so the delta can't be trusted → the caller defers to a full reparse. Distinct from is_positional_prefix.
+fn covered_name_vanished(covered: &[(String, u64)], current_names: &HashSet<&str>) -> bool {
+    covered
+        .iter()
+        .any(|(n, _)| !current_names.contains(n.as_str()))
+}
+
+// Sorted `(name, size)` of the dir's `.ldb` files (size 0 on stat failure → treated as a changed size,
+// so a stat-flaky file just forces a rebuild rather than a blind reuse).
+fn sorted_ldb_sizes(dir: &str) -> std::io::Result<Vec<(String, u64)>> {
+    Ok(sorted_by_ext(dir, ".ldb")?
+        .into_iter()
+        .map(|n| {
+            let size = std::fs::metadata(Path::new(dir).join(&n)).map_or(0, |m| m.len());
+            (n, size)
+        })
+        .collect())
+}
+
+/// Fold every `.ldb` in `ldb_now` fresh (sorted), returning the `.ldb`-only Dedup. `d.lossy` is set on
+/// any read error / lossy table / short entry — the caller caches it as a prefix ONLY when `!d.lossy`.
+fn fold_all_ldb(dir: &str, ldb_now: &[(String, u64)]) -> Dedup {
     let mut d = Dedup {
         order: Vec::new(),
         index: HashMap::new(),
         raw: 0,
         lossy: false,
-        seq_cap,
+        seq_cap: None,
     };
-    let ldb_now = sorted_by_ext(dir, ".ldb")?; // sorted — identical fold order to build_dedup_map
-    let current: HashSet<String> = ldb_now.iter().cloned().collect();
-    // Compaction check BEFORE any prune, over the cache as it stands from the previous tick.
-    let cached_names: Vec<String> = cache.tables.keys().cloned().collect();
-    let compacted = compaction_detected(&cached_names, &current);
-
-    for f in &ldb_now {
-        let p = Path::new(dir).join(f);
-        let size = std::fs::metadata(&p).ok().map(|m| m.len());
-        if can_reuse(cache.tables.get(f).map(|c| c.size), size) {
-            // Reuse the immutable parse — but STILL propagate the short-entry lossy signal the cold
-            // path raises (`fold_table` returns true on a <8-byte key). A table can parse clean yet
-            // contain such a key, so it IS cached; without re-raising the flag a warm tick would read
-            // lossy=false where a cold read reads lossy=true — a warm≠cold divergence. TS re-runs
-            // foldTable on cache hits for the same reason.
-            if fold_table(&cache.tables[f].entries, &mut d) {
-                d.lossy = true;
-            }
-            cache.hits += 1;
-        } else {
-            match crate::sstable::read_table(&p.to_string_lossy()) {
-                Ok(t) => {
-                    if t.lossy {
-                        d.lossy = true;
-                    }
-                    if fold_table(&t.entries, &mut d) {
-                        d.lossy = true;
-                    }
-                    // H-B: cache only a CLEAN parse whose size we actually know — a partial parse must
-                    // be retried next tick (never frozen), and a stat failure ⇒ don't cache (matching
-                    // TS; the entry would be re-read next tick anyway rather than reused blind).
-                    if !t.lossy {
-                        if let Some(sz) = size {
-                            cache.tables.insert(
-                                f.clone(),
-                                CachedTable {
-                                    entries: t.entries,
-                                    size: sz,
-                                },
-                            );
-                        }
-                    }
+    for (name, _size) in ldb_now {
+        match crate::sstable::read_table(&Path::new(dir).join(name).to_string_lossy()) {
+            Ok(t) => {
+                if t.lossy {
+                    d.lossy = true;
                 }
-                Err(_) => d.lossy = true,
+                if fold_table(&t.entries, &mut d) {
+                    d.lossy = true;
+                }
             }
+            Err(_) => d.lossy = true,
         }
     }
-    // Prune cache entries for `.ldb` no longer on disk (freed after a compaction full-rebuild).
-    cache.tables.retain(|f, _| current.contains(f));
+    d
+}
 
-    // Always re-read the WAL fresh (small, append-only; also the young/all-in-`.log` case).
+/// The `.ldb`-only fold for this tick (★c2), reusing/advancing the cached folded prefix when possible.
+/// Returns `(dedup, compacted)` — `dedup` holds only `.ldb` records (the caller folds `.log` on top of
+/// it, never on the persisted prefix). Three outcomes, mirroring `build_dedup_map`'s order exactly:
+/// - **compaction** (a covered name vanished): rebuild the prefix from the CURRENT set (cache it if
+///   clean, so reuse resumes next tick) and signal `compacted=true` → the caller DEFERS the delta.
+/// - **fast path** (covered is a positional prefix): fold the clean tail into the persistent prefix,
+///   then CLONE it (cheap, Bytes-backed) for the caller's `.log` fold. If a tail file is lossy, bypass
+///   the prefix entirely (full re-fold, prefix untouched) — a lossy load makes `refresh_store` skip.
+/// - **rebuild** (first tick, or a covered size change / reorder): full sorted fold, cache if clean.
+fn build_dedup_map_reuse(dir: &str, cache: &mut LdbCache) -> std::io::Result<(Dedup, bool)> {
+    let ldb_now = sorted_ldb_sizes(dir)?; // sorted (name, size) — identical fold order to build_dedup_map
+    let current_names: HashSet<&str> = ldb_now.iter().map(|(n, _)| n.as_str()).collect();
+
+    let (mut d, compacted) = match cache.folded.take() {
+        // Compaction: a covered `.ldb` is gone → an elided deletion may lurk. Rebuild the prefix from
+        // the current set (so reuse resumes next tick) but DEFER this tick's delta.
+        Some(fp) if covered_name_vanished(&fp.covered, &current_names) => {
+            let d = fold_all_ldb(dir, &ldb_now);
+            if !d.lossy {
+                cache.folded = Some(FoldedPrefix {
+                    dedup: d.clone(),
+                    covered: ldb_now.clone(),
+                });
+            }
+            (d, true)
+        }
+        // Fast path: the prefix covers a positional head of the current list → fold only the tail.
+        Some(mut fp) if is_positional_prefix(&fp.covered, &ldb_now) => {
+            let mut lossy_tail = false;
+            for (name, size) in &ldb_now[fp.covered.len()..] {
+                match crate::sstable::read_table(&Path::new(dir).join(name).to_string_lossy()) {
+                    Ok(t) if !t.lossy => {
+                        if fold_table(&t.entries, &mut fp.dedup) {
+                            lossy_tail = true; // a <8-byte entry ⇒ lossy
+                            break;
+                        }
+                        fp.covered.push((name.clone(), *size));
+                    }
+                    _ => {
+                        lossy_tail = true;
+                        break;
+                    }
+                }
+            }
+            if lossy_tail {
+                // A tail file is lossy → discard the half-advanced prefix (leave the cache empty; it
+                // rebuilds next clean tick) and produce a fresh full fold (lossy → the caller skips).
+                (fold_all_ldb(dir, &ldb_now), false)
+            } else {
+                cache.prefix_records_reused += fp.dedup.order.len();
+                let out = fp.dedup.clone(); // the caller folds `.log` onto this clone, not `fp`
+                cache.folded = Some(fp); // persist the advanced, `.log`-free prefix
+                (out, false)
+            }
+        }
+        // First tick, or a covered size change / reorder (the positional check failed) → full rebuild.
+        _ => {
+            let d = fold_all_ldb(dir, &ldb_now);
+            if !d.lossy {
+                cache.folded = Some(FoldedPrefix {
+                    dedup: d.clone(),
+                    covered: ldb_now.clone(),
+                });
+            }
+            (d, false)
+        }
+    };
+
+    // Fold the WAL onto `d` (the clone or a fresh fold) — NEVER the persisted prefix, which stays
+    // `.log`-free so it can be cloned again next tick. Small + append-only; also the all-in-`.log` case.
     for f in sorted_by_ext(dir, ".log")? {
         let p = Path::new(dir).join(&f);
         match crate::wal::parse_write_ahead_log(&p.to_string_lossy()) {
@@ -483,14 +528,36 @@ fn build_dedup_map_reuse(
     Ok((d, compacted))
 }
 
-/// Copy-reuse snapshot loader (Axis B): reuse cached immutable `.ldb` parses, re-read only the `.log`,
-/// group into a `Snapshot`. Returns `(snapshot, compacted)`; `compacted == true` means a cached `.ldb`
-/// vanished (a compaction) and the snapshot MUST NOT be trusted for a delta — the caller falls back to
-/// a full reparse (which reads the current post-compaction file set, reconciling any elided deletion).
-/// Mirrors TS `loadSnapshotReuse`.
+/// The `.ldb`-fold vs `collect_snapshot` wall-clock split (measure-and-drop) — the profiler uses it to
+/// separate what ★c2 speeds up (the fold) from `collect_snapshot`, which decodes/routes/buckets all
+/// records every tick regardless. Pure observation; the snapshot is identical either way.
+pub struct ReuseTimings {
+    pub fold: Duration,
+    pub collect: Duration,
+}
+
+/// Timed copy-reuse loader: the fold reuses the cached prefix (★c2), then `collect_snapshot` groups.
+pub fn load_snapshot_reuse_timed(
+    dir: &str,
+    cache: &mut LdbCache,
+) -> std::io::Result<(Snapshot, bool, ReuseTimings)> {
+    let t = Instant::now();
+    let (d, compacted) = build_dedup_map_reuse(dir, cache)?;
+    let fold = t.elapsed();
+    let t = Instant::now();
+    let snap = collect_snapshot(d);
+    let collect = t.elapsed();
+    Ok((snap, compacted, ReuseTimings { fold, collect }))
+}
+
+/// Copy-reuse snapshot loader (Axis B / ★c2): fold reusing the cached `.ldb` dedup prefix, re-folding
+/// only the `.log`, then group into a `Snapshot`. Returns `(snapshot, compacted)`; `compacted == true`
+/// means a covered `.ldb` vanished (a compaction) and the snapshot MUST NOT be trusted for a delta —
+/// the caller falls back to a full reparse (reconciling any elided deletion). Mirrors TS
+/// `loadSnapshotReuse`.
 pub fn load_snapshot_reuse(dir: &str, cache: &mut LdbCache) -> std::io::Result<(Snapshot, bool)> {
-    let (d, compacted) = build_dedup_map_reuse(dir, cache, None)?;
-    Ok((collect_snapshot(d), compacted))
+    let (snap, compacted, _t) = load_snapshot_reuse_timed(dir, cache)?;
+    Ok((snap, compacted))
 }
 
 /// A cheap fingerprint of the leveldb SOURCE files (no read/decompression) — the R3 no-op gate for
@@ -698,41 +765,67 @@ mod sig_tests {
 
 #[cfg(test)]
 mod reuse_tests {
-    use super::{can_reuse, compaction_detected};
+    use super::{covered_name_vanished, is_positional_prefix};
     use std::collections::HashSet;
 
-    fn set(names: &[&str]) -> HashSet<String> {
-        names.iter().map(|s| (*s).to_string()).collect()
+    fn pairs(v: &[(&str, u64)]) -> Vec<(String, u64)> {
+        v.iter().map(|(n, s)| ((*n).to_string(), *s)).collect()
     }
 
-    // Compaction = a cached `.ldb` that is no longer on disk. Pure forward progress (a `.log` append
-    // and/or a memtable flush that only ADDS `.ldb`) keeps every cached name present → no compaction.
+    // The ★c2 fast-path gate: `covered` must be a POSITIONAL prefix (same names, positions, sizes) of
+    // the current sorted `.ldb` list — then the tail is safe to fold on top in order.
     #[test]
-    fn compaction_is_a_vanished_cached_ldb() {
-        let current = set(&["000005.ldb", "000007.ldb"]);
-        // cold start: empty cache never trips it
-        assert!(!compaction_detected(&[], &current));
-        // all cached still present → reuse (subset of current, incl. a new file on disk)
-        assert!(!compaction_detected(&["000005.ldb".into()], &current));
-        assert!(!compaction_detected(
-            &["000005.ldb".into(), "000007.ldb".into()],
+    fn positional_prefix_semantics() {
+        let current = pairs(&[("000005.ldb", 100), ("000007.ldb", 200), ("000009.ldb", 50)]);
+        // empty prefix is a prefix of anything (cold start / first build)
+        assert!(is_positional_prefix(&pairs(&[]), &current));
+        // exact head(s), same sizes → valid (fast-path append of the tail)
+        assert!(is_positional_prefix(
+            &pairs(&[("000005.ldb", 100)]),
             &current
         ));
-        // a cached file gone from disk → a compaction consumed it → defer to full reparse
-        assert!(compaction_detected(
-            &["000005.ldb".into(), "000009.ldb".into()],
+        assert!(is_positional_prefix(
+            &pairs(&[("000005.ldb", 100), ("000007.ldb", 200)]),
+            &current
+        ));
+        assert!(is_positional_prefix(&current, &current)); // full match
+                                                           // a covered size changed (partial→complete recopy) → NOT a prefix (rebuild, no defer)
+        assert!(!is_positional_prefix(
+            &pairs(&[("000005.ldb", 999)]),
+            &current
+        ));
+        // a covered name at the wrong position (reorder / filename-reuse pathology) → NOT a prefix
+        assert!(!is_positional_prefix(
+            &pairs(&[("000007.ldb", 200)]),
+            &current
+        ));
+        // longer than current → NOT a prefix
+        assert!(!is_positional_prefix(
+            &pairs(&[
+                ("000005.ldb", 100),
+                ("000007.ldb", 200),
+                ("000009.ldb", 50),
+                ("000011.ldb", 10)
+            ]),
             &current
         ));
     }
 
-    // Reuse a cached parse only on an exact size match — a size change means a partial→complete
-    // re-copy (or the rare recreated-DB filename reuse), so the cached bytes are stale and re-read.
+    // Compaction = a covered `.ldb` name no longer on disk. Pure forward progress (a `.log` append
+    // and/or a flush that only ADDS `.ldb`) keeps every covered name present → no compaction → defer.
     #[test]
-    fn reuse_only_on_exact_size_match() {
-        assert!(can_reuse(Some(1234), Some(1234))); // cached + same size → reuse
-        assert!(!can_reuse(Some(1200), Some(1234))); // grew (partial→complete) → re-read
-        assert!(!can_reuse(Some(1234), Some(1200))); // shrank (filename reuse) → re-read
-        assert!(!can_reuse(None, Some(1234))); // uncached → read
-        assert!(!can_reuse(Some(1234), None)); // stat failed (unknown size) → re-read, never blind
+    fn compaction_is_a_vanished_covered_ldb() {
+        let names: HashSet<&str> = ["000005.ldb", "000007.ldb"].into_iter().collect();
+        assert!(!covered_name_vanished(&[], &names)); // cold start never trips it
+        assert!(!covered_name_vanished(&pairs(&[("000005.ldb", 1)]), &names)); // still present
+        assert!(!covered_name_vanished(
+            &pairs(&[("000005.ldb", 1), ("000007.ldb", 2)]),
+            &names
+        ));
+        // a covered name gone from disk → compaction → defer to full reparse
+        assert!(covered_name_vanished(
+            &pairs(&[("000005.ldb", 1), ("000009.ldb", 3)]),
+            &names
+        ));
     }
 }
