@@ -26,11 +26,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde_json::{json, Value};
 
 use libzaungast_native::fingerprint::fingerprint;
-use libzaungast_native::idb::load_snapshot;
+use libzaungast_native::idb::{load_snapshot, load_snapshot_capped};
 use libzaungast_native::resolver::{
     entity_targets_for, extract_rows, load_mapping, select_mapping, store_set_from_fp,
 };
-use libzaungast_native::store::{build_store_timed, ingest_to_file, refresh_to_file};
+use libzaungast_native::store::{
+    build_store, build_store_timed, compute_state, ingest_to_file, refresh_store, refresh_to_file,
+};
 
 fn ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
@@ -344,6 +346,64 @@ fn main() {
     inc_json["kind"] = json!("no-op");
     inc_json["mode"] = json!("native-refresh");
 
+    // ---- 4b. CHANGED-tick refresh breakdown ----
+    // A *changed* tick (unlike the R3-short-circuited no-op) pays: fs::copy(.db) + a full load_snapshot
+    // (the `loadSnapshot` phase above, ~unchanged) + refresh_store(delta) + write_meta. Measure the copy
+    // and the delta-apply here so we can choose the incremental path: ping-pong removes the COPY;
+    // re-evaluating Axis B removes the full RE-READ. `refresh_store` is called directly (in-memory, as
+    // diffincr does) — that bypasses refresh_to_file's R3 signature gate, which would short-circuit a
+    // same-dir refresh.
+    let store_db = env::temp_dir().join("zaungast-refresh-store.db");
+    ingest_to_file(
+        dir,
+        store_db.to_str().expect("temp"),
+        &schema,
+        &mappings_json,
+    )
+    .expect("ingest");
+    let db_size = fs::metadata(&store_db).map_or(0, |m| m.len());
+    let copy_dst = env::temp_dir().join("zaungast-refresh-copy.db");
+    let copy_stat = bench("fs::copy(.db)", n, || {
+        let _ = fs::remove_file(&copy_dst);
+        std::fs::copy(&store_db, &copy_dst).expect("copy");
+    });
+    // delta-apply for a small (~top 1% of sequences) changed delta, matching diffincr's mechanism.
+    let mut seqs: Vec<u64> = snap0
+        .buckets
+        .iter()
+        .flat_map(|b| b.records.iter().map(|r| r.seq))
+        .collect();
+    seqs.sort_unstable();
+    let cap = seqs
+        .get(seqs.len() * 99 / 100)
+        .copied()
+        .unwrap_or(snap0.max_seq);
+    let capped = load_snapshot_capped(dir, cap).expect("load_snapshot_capped");
+    let cap_state = compute_state(&capped, mapping);
+    let changed_records = snap0
+        .buckets
+        .iter()
+        .flat_map(|b| &b.records)
+        .filter(|r| r.seq > cap_state.max_seq)
+        .count();
+    let mut delta_ms = Vec::new();
+    for _ in 0..n {
+        let prev = build_store(&capped, mapping, &schema); // fresh prev each iter (refresh mutates it)
+        let t = Instant::now();
+        refresh_store(&prev, &snap0, mapping, &cap_state);
+        delta_ms.push(ms(t.elapsed()));
+        drop(prev);
+    }
+    let delta_stat = stat("refresh_store (delta apply)", delta_ms);
+    let changed_refresh = json!({
+        "note": "a CHANGED tick pays copy + full loadSnapshot + deltaApply + write_meta; R3 short-circuits only NO-OP ticks. loadSnapshot p50 is in formatPhases[0].",
+        "dbSizeBytes": db_size,
+        "changedRecords": changed_records,
+        "copy": stat_json(&copy_stat),
+        "deltaApply": stat_json(&delta_stat),
+        "loadSnapshotP50": format_phases[0].p50
+    });
+
     // ---- 5. production peak RSS from a fresh single-ingest child (VmHWM protocol) ----
     let cold_peak = child_peak("--cold", "coldPeakRssMB", schema_path, dir, mapping_paths);
 
@@ -381,7 +441,8 @@ fn main() {
         },
         "formatPhases": format_phases.iter().map(stat_json).collect::<Vec<_>>(),
         "storeBuild": store_build,
-        "incremental": [inc_json]
+        "incremental": [inc_json],
+        "changedRefresh": changed_refresh
     });
 
     fs::create_dir_all(&out_dir).expect("mkdir --out");
@@ -457,6 +518,17 @@ fn main() {
     eprintln!();
     eprintln!("incremental:");
     eprintln!("{}", row(&inc));
+    eprintln!();
+    eprintln!(
+        "changed-tick components (a CHANGED refresh pays ALL of these; the no-op above is R3):"
+    );
+    eprintln!(
+        "  db {:.1}MB · changed records {changed_records} · copy p50 {}ms · loadSnapshot p50 {}ms · deltaApply p50 {}ms",
+        db_size as f64 / 1_048_576.0,
+        copy_stat.p50,
+        format_phases[0].p50,
+        delta_stat.p50
+    );
     eprintln!();
     eprintln!("artifacts in {out_dir}: timings.json");
 }
