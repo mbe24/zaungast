@@ -348,13 +348,12 @@ fn main() {
     inc_json["kind"] = json!("no-op");
     inc_json["mode"] = json!("native-refresh");
 
-    // ---- 4b. CHANGED-tick refresh breakdown ----
-    // A *changed* tick (unlike the R3-short-circuited no-op) pays: fs::copy(.db) + a full load_snapshot
-    // (the `loadSnapshot` phase above, ~unchanged) + refresh_store(delta) + write_meta. Measure the copy
-    // and the delta-apply here so we can choose the incremental path: ping-pong removes the COPY;
-    // re-evaluating Axis B removes the full RE-READ. `refresh_store` is called directly (in-memory, as
-    // diffincr does) — that bypasses refresh_to_file's R3 signature gate, which would short-circuit a
-    // same-dir refresh.
+    // ---- 4b. changed-tick component breakdown ----
+    // Measure, independently, the parts a changed refresh (source advanced) pays: fs::copy of the .db,
+    // refresh_store (the delta apply), and the snapshot load — either the full load_snapshot
+    // (formatPhases[0]) or the cache-reusing loader below. refresh_store is called directly in-memory
+    // (as the incremental differential does), bypassing the file-refresh path's source-signature
+    // short-circuit that would otherwise skip a same-dir refresh.
     let store_db = env::temp_dir().join("zaungast-refresh-store.db");
     ingest_to_file(
         dir,
@@ -398,15 +397,9 @@ fn main() {
     }
     let delta_stat = stat("refresh_store (delta apply)", delta_ms);
 
-    // Axis B copy-reuse load: warm the cache once (cold read populates it), then measure the WARM
-    // reuse-load — the changed-tick READ cost AFTER Axis B (reuse cached immutable `.ldb`, re-read only
-    // the `.log`) against the full `load_snapshot` above (formatPhases[0]). The Axis B changed tick ≈
-    // reuseLoad(warm) + deltaApply + copy; the pre-Axis-B tick ≈ loadSnapshot(full) + deltaApply + copy.
-    // Axis B / ★c2 copy-reuse load: warm the cache once (cold read builds the folded prefix), then
-    // measure the WARM reuse-load — the changed-tick READ cost after ★c2 — SPLIT into `reuseFold`
-    // (build_dedup_map_reuse: clone the cached prefix + fold only the `.log` — what ★c2 speeds up) and
-    // `reuseCollect` (collect_snapshot: decode_prefix + route + bucket over ALL records, which runs
-    // fully every tick regardless — ★c2 does NOT touch it; if it dominates, that's ★c3's target).
+    // Cache-reusing snapshot load: warm the cache once, then measure the warm reuse-load, split into
+    // the fold (build_dedup_map_reuse: clone the cached prefix + fold the .log) and collect_snapshot
+    // (decode + group). Measured on a log-only delta (no new .ldb this tick).
     let mut reuse_cache = LdbCache::new();
     let _ = load_snapshot_reuse_timed(dir, &mut reuse_cache).expect("reuse warm-up");
     let (mut rl, mut rf, mut rc) = (Vec::new(), Vec::new(), Vec::new());
@@ -419,12 +412,10 @@ fn main() {
         drop(snap);
     }
     let reuse_load = stat("loadSnapshotReuse (warm cache)", rl);
-    let reuse_fold = stat("reuse fold (clone prefix + WAL)", rf);
+    let reuse_fold = stat("reuse fold (clone prefix + .log)", rf);
     let reuse_collect = stat("reuse collect_snapshot", rc);
-    let axis_b_tick = r3(reuse_load.p50 + delta_stat.p50 + copy_stat.p50);
-    let full_read_tick = r3(format_phases[0].p50 + delta_stat.p50 + copy_stat.p50);
     let changed_refresh = json!({
-        "note": "A CHANGED tick ≈ loadSnapshot + deltaApply + copy (+ sub-ms write_meta); R3 short-circuits only NO-OP ticks. Axis B replaces the full loadSnapshot (formatPhases[0]) with reuseLoad (warm cache) = reuseFold + reuseCollect. ★c2 makes reuseFold cheap (clone the cached .ldb dedup prefix + fold only the .log); reuseCollect (collect_snapshot over ALL records) runs fully every tick and ★c2 does NOT touch it — if it dominates reuseLoad, that caps ★c2 and is ★c3's target. reuseLoad is a LOWER bound (measured on a LOG-ONLY delta; a flush into a new .ldb adds one fresh parse). The *SumMs fields are the SUM of independent component p50s, NOT a measured percentile; their DIFFERENCE (loadSnapshot_full − reuseLoad_warm) is the clean read-cost saving. Neither tick includes the per-tick source mirror (Axis B's is .log-sized vs the full path's whole-.ldb copy), so Axis B's real advantage is understated.",
+        "note": "Changed-tick components, each measured independently: copy = fs::copy of the .db; deltaApply = refresh_store; loadSnapshotP50 = full snapshot load (= formatPhases[0]); reuseLoad = cache-reusing load (= reuseFold + reuseCollect), measured on a log-only delta.",
         "dbSizeBytes": db_size,
         "changedRecords": changed_records,
         "copy": stat_json(&copy_stat),
@@ -433,9 +424,7 @@ fn main() {
         "reuseLoad": stat_json(&reuse_load),
         "reuseFold": stat_json(&reuse_fold),
         "reuseCollect": stat_json(&reuse_collect),
-        "reusePrefixRecords": reuse_cache.prefix_records_reused(),
-        "axisBChangedTickP50SumMs": axis_b_tick,
-        "fullReadChangedTickP50SumMs": full_read_tick
+        "reusePrefixRecords": reuse_cache.prefix_records_reused()
     });
 
     // ---- 5. production peak RSS from a fresh single-ingest child (VmHWM protocol) ----
@@ -487,15 +476,7 @@ fn main() {
     )
     .expect("write timings.json");
 
-    // ---- console summary (stderr), mirroring scripts/profile.mjs's layout ----
-    // The disk-write split: `ingest_to_file` (shipped) writes+fsyncs the SQLite file; the TS-comparable
-    // number is the in-memory pipeline (load + fingerprint + build). NEVER present the disk number bare
-    // next to TS's in-memory ingest — they're different workloads.
-    let load_p50 = format_phases[0].p50;
-    let fp_p50 = format_phases[1].p50;
-    let compute = load_p50 + fp_p50 + store_total.p50;
-    let write = (warm.p50 - compute).max(0.0);
-    let write_pct = (write / warm.p50 * 100.0).round();
+    // ---- console summary (stderr): the same measurements as timings.json, human-readable ----
     let mb = |o: Option<f64>| o.map_or_else(|| "—".to_string(), |v| v.to_string());
     let row = |s: &Stat| {
         format!(
@@ -520,16 +501,12 @@ fn main() {
     );
     eprintln!();
     eprintln!(
-        "full ingest → disk: cold {cold_ms}ms · warm p50 {}ms = compute ~{compute:.0}ms + file-write ~{write:.0}ms (~{write_pct:.0}%, fsync-per-stmt)",
+        "full ingest → disk: cold {cold_ms}ms · warm p50 {}ms",
         warm.p50
-    );
-    eprintln!(
-        "  TS-comparable (in-memory build): {compute:.0}ms  [load {load_p50} + fp {fp_p50} + build {}]",
-        store_total.p50
     );
     eprintln!("throughput (disk): {entries_per_sec} entries/s · {mb_per_sec} MB/s");
     eprintln!(
-        "memory: cold peak {}MB (production) · in-mem build peak {}MB (non-production)",
+        "memory: cold peak RSS {}MB · in-memory build peak {}MB",
         mb(cold_peak),
         mb(in_mem_peak)
     );
@@ -553,27 +530,20 @@ fn main() {
     eprintln!("incremental:");
     eprintln!("{}", row(&inc));
     eprintln!();
+    eprintln!("changed-tick components (measured independently):");
     eprintln!(
-        "changed-tick components (a CHANGED refresh pays ALL of these; the no-op above is R3):"
-    );
-    eprintln!(
-        "  db {:.1}MB · changed records {changed_records} · copy p50 {}ms · loadSnapshot(full) p50 {}ms · deltaApply p50 {}ms",
+        "  db {:.1}MB · changed records {changed_records} · copy p50 {}ms · deltaApply p50 {}ms",
         db_size as f64 / 1_048_576.0,
         copy_stat.p50,
-        format_phases[0].p50,
         delta_stat.p50
     );
     eprintln!(
-        "  reuseLoad p50 {}ms = fold {}ms (★c2: clone+WAL) + collect_snapshot {}ms (unchanged by ★c2 → ★c3 if it dominates) · prefix reused {} records",
+        "  loadSnapshot(full) p50 {}ms · reuseLoad p50 {}ms = fold {}ms + collect_snapshot {}ms · prefix records reused {}",
+        format_phases[0].p50,
         reuse_load.p50,
         reuse_fold.p50,
         reuse_collect.p50,
         reuse_cache.prefix_records_reused()
-    );
-    eprintln!(
-        "  changed tick (SUM of component p50s, ≈): full re-read {full_read_tick}ms → Axis B {axis_b_tick}ms · read-cost saving {}ms (loadSnapshot−reuseLoad); deltaApply {}ms tall pole → ★b",
-        r3(format_phases[0].p50 - reuse_load.p50),
-        delta_stat.p50
     );
     eprintln!();
     eprintln!("artifacts in {out_dir}: timings.json");
