@@ -84,3 +84,8 @@ required-features = ["harness"]
 name = "diffnoop"        # R3 no-op gate: full-ingest then refresh unchanged dir → must short-circuit
 path = "src/bin/diffnoop.rs"
 required-features = ["harness"]
+
+[[bin]]
+name = "diffreuse"       # Axis B copy-reuse: cold==warm==full snapshot; emits warm report vs TS-full
+path = "src/bin/diffreuse.rs"
+required-features = ["harness"]

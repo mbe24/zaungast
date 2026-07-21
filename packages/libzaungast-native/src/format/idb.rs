@@ -5,7 +5,7 @@
 //! buckets IN DEDUP-INSERTION ORDER (the fingerprint samples the first records per bucket in this
 //! exact order — order-critical). Never opens leveldb; reads tables/WAL raw.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::sstable::{crc32c_final, crc32c_init, crc32c_update};
@@ -331,6 +331,136 @@ pub fn load_snapshot_capped(dir: &str, seq_cap: u64) -> std::io::Result<Snapshot
     Ok(collect_snapshot(build_dedup_map(dir, Some(seq_cap))?))
 }
 
+// ---- Axis B: copy-reuse snapshot loader (cache immutable .ldb parses, re-read only the .log) ----
+
+/// One cached immutable `.ldb` parse: the parsed table entries + the on-disk size at parse time. A
+/// size change (a partial→complete re-copy, or the rare recreated-DB filename reuse) invalidates the
+/// entry so it is re-read. Mirrors the TS `LdbCache` value `{ res, size }`.
+struct CachedTable {
+    entries: Vec<(Vec<u8>, Vec<u8>)>,
+    size: u64,
+}
+
+/// Per-Session copy-reuse cache (Axis B): immutable `.ldb` parses keyed by filename, reused across
+/// incremental refreshes so only the small append-only `.log` is re-parsed each tick. Owned by the
+/// native engine handle and carried across FFI calls; a full rebuild starts a fresh (empty) cache.
+/// Mirrors the TS `LdbCache` owned per `createJsEngine`. Correctness rests on `.ldb` being write-once
+/// with never-recycled file numbers (the same invariant R3's signature leans on): a cached
+/// `(name, size)` is a stable identity for the bytes, and a vanished cached name means a compaction
+/// (handled by the caller's defer-to-full-reparse — see `load_snapshot_reuse`).
+#[derive(Default)]
+pub struct LdbCache {
+    tables: HashMap<String, CachedTable>,
+}
+impl LdbCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// Cached-table count (introspection for the differential bin / telemetry).
+    pub fn len(&self) -> usize {
+        self.tables.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.tables.is_empty()
+    }
+}
+
+// Reuse-cache decisions, factored out so they can be unit-tested WITHOUT real `.ldb` bytes.
+//
+// `compaction_detected`: any previously-cached `.ldb` filename is no longer on disk — a compaction
+// consumed it, and compaction can elide a deletion (a key's tombstone merged away), so the caller
+// MUST NOT reuse the stale cache; it defers to a full reparse of the current file set instead.
+fn compaction_detected(cached_names: &[String], current: &HashSet<String>) -> bool {
+    cached_names.iter().any(|f| !current.contains(f))
+}
+// `can_reuse`: reuse a cached parse iff the file is cached AND its size is unchanged. Same name +
+// same size ⇒ (write-once, never-recycled numbers) the same bytes; a size change ⇒ re-read.
+fn can_reuse(cached_size: Option<u64>, disk_size: u64) -> bool {
+    cached_size == Some(disk_size)
+}
+
+/// Cache-reusing, compaction-aware variant of `build_dedup_map` (Axis B). Reuses cached immutable
+/// `.ldb` parses (by filename, size-revalidated), reads only new `.ldb` + all `.log` fresh, and folds
+/// the UNION in the SAME sorted `.ldb`-then-`.log` order as `build_dedup_map` — so `d.order` (and thus
+/// the fingerprint, which samples first-seen order) is identical to a cold full read. Returns
+/// `(dedup, compacted)`; `compacted == true` means a cached `.ldb` vanished (the caller must fall back
+/// to a full reparse). Prunes cache entries for absent files. Mirrors TS `buildReuseMap`.
+fn build_dedup_map_reuse(
+    dir: &str,
+    cache: &mut LdbCache,
+    seq_cap: Option<u64>,
+) -> std::io::Result<(Dedup, bool)> {
+    let mut d = Dedup {
+        order: Vec::new(),
+        index: HashMap::new(),
+        raw: 0,
+        lossy: false,
+        seq_cap,
+    };
+    let ldb_now = sorted_by_ext(dir, ".ldb")?; // sorted — identical fold order to build_dedup_map
+    let current: HashSet<String> = ldb_now.iter().cloned().collect();
+    // Compaction check BEFORE any prune, over the cache as it stands from the previous tick.
+    let cached_names: Vec<String> = cache.tables.keys().cloned().collect();
+    let compacted = compaction_detected(&cached_names, &current);
+
+    for f in &ldb_now {
+        let p = Path::new(dir).join(f);
+        let size = std::fs::metadata(&p).map_or(0, |m| m.len());
+        if can_reuse(cache.tables.get(f).map(|c| c.size), size) {
+            fold_table(&cache.tables[f].entries, &mut d); // reuse the immutable parse
+        } else {
+            match crate::sstable::read_table(&p.to_string_lossy()) {
+                Ok(t) => {
+                    if t.lossy {
+                        d.lossy = true;
+                    }
+                    if fold_table(&t.entries, &mut d) {
+                        d.lossy = true;
+                    }
+                    // H-B: cache only a CLEAN parse — a partial parse must be retried next tick, never
+                    // frozen (which would pin reuse in a permanent lossy/stale state).
+                    if !t.lossy {
+                        cache.tables.insert(
+                            f.clone(),
+                            CachedTable {
+                                entries: t.entries,
+                                size,
+                            },
+                        );
+                    }
+                }
+                Err(_) => d.lossy = true,
+            }
+        }
+    }
+    // Prune cache entries for `.ldb` no longer on disk (freed after a compaction full-rebuild).
+    cache.tables.retain(|f, _| current.contains(f));
+
+    // Always re-read the WAL fresh (small, append-only; also the young/all-in-`.log` case).
+    for f in sorted_by_ext(dir, ".log")? {
+        let p = Path::new(dir).join(&f);
+        match crate::wal::parse_write_ahead_log(&p.to_string_lossy()) {
+            Ok(batches) => {
+                for b in &batches {
+                    fold_batch(b, &mut d);
+                }
+            }
+            Err(_) => d.lossy = true,
+        }
+    }
+    Ok((d, compacted))
+}
+
+/// Copy-reuse snapshot loader (Axis B): reuse cached immutable `.ldb` parses, re-read only the `.log`,
+/// group into a `Snapshot`. Returns `(snapshot, compacted)`; `compacted == true` means a cached `.ldb`
+/// vanished (a compaction) and the snapshot MUST NOT be trusted for a delta — the caller falls back to
+/// a full reparse (which reads the current post-compaction file set, reconciling any elided deletion).
+/// Mirrors TS `loadSnapshotReuse`.
+pub fn load_snapshot_reuse(dir: &str, cache: &mut LdbCache) -> std::io::Result<(Snapshot, bool)> {
+    let (d, compacted) = build_dedup_map_reuse(dir, cache, None)?;
+    Ok((collect_snapshot(d), compacted))
+}
+
 /// A cheap fingerprint of the leveldb SOURCE files (no read/decompression) — the R3 no-op gate for
 /// incremental refresh. Sorted `(name, size)` over the `.ldb` + `.log` + `MANIFEST-*` files this reader
 /// consumes, plus `CURRENT`'s content. Unchanged ⇒ nothing landed: `.ldb` are write-once with
@@ -531,5 +661,45 @@ mod sig_tests {
         assert_ne!(s4, s5, "CURRENT flip must differ");
 
         let _ = fs::remove_dir_all(&d);
+    }
+}
+
+#[cfg(test)]
+mod reuse_tests {
+    use super::{can_reuse, compaction_detected};
+    use std::collections::HashSet;
+
+    fn set(names: &[&str]) -> HashSet<String> {
+        names.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    // Compaction = a cached `.ldb` that is no longer on disk. Pure forward progress (a `.log` append
+    // and/or a memtable flush that only ADDS `.ldb`) keeps every cached name present → no compaction.
+    #[test]
+    fn compaction_is_a_vanished_cached_ldb() {
+        let current = set(&["000005.ldb", "000007.ldb"]);
+        // cold start: empty cache never trips it
+        assert!(!compaction_detected(&[], &current));
+        // all cached still present → reuse (subset of current, incl. a new file on disk)
+        assert!(!compaction_detected(&["000005.ldb".into()], &current));
+        assert!(!compaction_detected(
+            &["000005.ldb".into(), "000007.ldb".into()],
+            &current
+        ));
+        // a cached file gone from disk → a compaction consumed it → defer to full reparse
+        assert!(compaction_detected(
+            &["000005.ldb".into(), "000009.ldb".into()],
+            &current
+        ));
+    }
+
+    // Reuse a cached parse only on an exact size match — a size change means a partial→complete
+    // re-copy (or the rare recreated-DB filename reuse), so the cached bytes are stale and re-read.
+    #[test]
+    fn reuse_only_on_exact_size_match() {
+        assert!(can_reuse(Some(1234), 1234)); // cached + same size → reuse
+        assert!(!can_reuse(Some(1200), 1234)); // grew (partial→complete) → re-read
+        assert!(!can_reuse(Some(1234), 1200)); // shrank (filename reuse) → re-read
+        assert!(!can_reuse(None, 1234)); // uncached → read
     }
 }

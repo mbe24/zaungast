@@ -38,6 +38,9 @@ const MAPPING = `packages/libzaungast/src/schema/versions/${
 const LAYERS = {
   sstable: { bin: 'difftable', mode: 'perfile', harness: 'diff-sstable.mjs' },
   snapshot: { bin: 'diffsnap', mode: 'whole', harness: 'diff-snapshot.mjs' },
+  // Axis B copy-reuse: diffreuse self-asserts cold==warm==full (no false compaction) and emits the
+  // WARM cache-reusing report in diffsnap format, so the SAME oracle proves warm-reuse == TS-full.
+  reuse: { bin: 'diffreuse', mode: 'whole', harness: 'diff-snapshot.mjs' },
   ssv: { bin: 'diffssv', mode: 'whole', harness: 'diff-ssv.mjs' },
   fp: { bin: 'difffp', mode: 'whole', harness: 'diff-fp.mjs' },
   // extract needs the mapping file (repo-relative) passed to both the bin and the TS harness
