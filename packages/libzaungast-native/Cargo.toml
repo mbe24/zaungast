@@ -74,3 +74,8 @@ required-features = ["harness"]
 name = "diffincr"        # incremental layer: native refresh(prev)==full, per-table digest (B vs C)
 path = "src/bin/diffincr.rs"
 required-features = ["harness"]
+
+[[bin]]
+name = "profile"         # wall-clock + peak-RSS profiler → timings.json (twin of scripts/profile.mjs)
+path = "src/bin/profile.rs"
+required-features = ["harness"]

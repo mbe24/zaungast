@@ -17,6 +17,8 @@ pub use refresh::{
     RefreshState,
 };
 
+use std::time::{Duration, Instant};
+
 use rusqlite::Connection;
 use serde_json::Value;
 
@@ -40,25 +42,43 @@ const FTS_CREATE: &str = "create virtual table messages_fts using fts5(content, 
 /// Build an in-memory ChatStore from a snapshot + mapping (full ingest). `schema` is the DDL string
 /// handed in by the caller (the single-source libzaungast/src/schema.sql), execd verbatim.
 pub fn build_store(snap: &Snapshot, mapping: &Value, schema: &str) -> Connection {
+    build_store_timed(snap, mapping, schema).0
+}
+
+/// Like `build_store`, but also returns the store-build phase timings. Used by the `profile` harness
+/// bin; `build_store` and `ingest_to_file` just discard the timings (measure-and-drop — see the
+/// `PhaseTimings` doc). The timings are pure observation and never touch the `Connection`, so the
+/// store bytes are identical whether or not anyone reads them.
+pub fn build_store_timed(
+    snap: &Snapshot,
+    mapping: &Value,
+    schema: &str,
+) -> (Connection, PhaseTimings) {
     let conn = Connection::open_in_memory().expect("open");
     conn.execute_batch(schema).expect("schema");
     conn.execute_batch(FTS_CREATE).expect("fts");
-    populate(&conn, snap, mapping);
-    conn
+    let (_self_mri, timings) = populate(&conn, snap, mapping);
+    (conn, timings)
 }
 
 /// Populate an already-schema'd connection from a snapshot + mapping (the full-ingest apply* +
 /// recompute + FTS spine, shared by the in-memory harness build and the file-writing napi path).
-/// Returns the elected `selfMri` (the current user's MRI, or None).
-fn populate(conn: &Connection, snap: &Snapshot, mapping: &Value) -> Option<String> {
+/// Returns the elected `selfMri` (the current user's MRI, or None) and the per-sub-phase wall-clock
+/// (`PhaseTimings`). The `Instant` reads are pure observation — they touch no SQLite write and change
+/// no control flow, so the store output is unaffected; callers that don't profile just drop them.
+fn populate(conn: &Connection, snap: &Snapshot, mapping: &Value) -> (Option<String>, PhaseTimings) {
+    let t = Instant::now();
     let msgs = extract_rows(snap, mapping, "message");
     let convs = extract_rows(snap, mapping, "conversation");
     let profiles = extract_rows(snap, mapping, "profile");
     let events = extract_rows(snap, mapping, "event");
     let calls = extract_rows(snap, mapping, "call");
+    let extract = t.elapsed();
+
     let self_mri = vote_self_mri(&msgs);
     let mut handles = Handles::new();
 
+    let t = Instant::now();
     conn.execute_batch("BEGIN").unwrap();
     apply_conversation_meta(conn, &convs, &mut handles);
     apply_messages(conn, &msgs, self_mri.as_deref());
@@ -66,10 +86,25 @@ fn populate(conn: &Connection, snap: &Snapshot, mapping: &Value) -> Option<Strin
     replace_events(conn, &events);
     replace_calls(conn, &calls);
     conn.execute_batch("COMMIT").unwrap();
+    let apply = t.elapsed();
 
+    let t = Instant::now();
     recompute_derived(conn, self_mri.as_deref(), &mut handles);
+    let recompute = t.elapsed();
+
+    let t = Instant::now();
     refresh_fts(conn);
-    self_mri
+    let fts = t.elapsed();
+
+    (
+        self_mri,
+        PhaseTimings {
+            extract,
+            apply,
+            recompute,
+            fts,
+        },
+    )
 }
 
 /// The full seam-A pipeline: read the leveldb dir, fingerprint it, select among the caller's bundled
@@ -100,7 +135,9 @@ pub fn ingest_to_file(
         .map_err(|e| format!("fts create: {e}"))?;
 
     let (schema_matched, mapping_version, self_mri) = if let Some(m) = selected {
-        let self_mri = populate(&conn, &snap, m);
+        // Production path: measure-and-drop — the store-build phase timings are discarded here (only
+        // the `profile` bin, via `build_store_timed`, keeps them).
+        let (self_mri, _timings) = populate(&conn, &snap, m);
         // Write the in-file contract (_meta + user_version) so a later refresh reads its floor +
         // reuses this mapping. Build the state from populate's OWN outputs — its elected selfMri +
         // the cheap no-decode target lists — instead of compute_state, which would re-extract
@@ -155,6 +192,23 @@ pub fn ingest_to_file(
     };
     conn.close().map_err(|(_, e)| format!("close: {e}"))?;
     Ok(outcome)
+}
+
+/// Per-sub-phase wall-clock of a store build (`populate`), for the `profile` harness bin. Pure data:
+/// filled by `populate`, returned via `build_store_timed`, and dropped by the production paths
+/// (`build_store`/`ingest_to_file`) — it holds no `Connection` state and no wall-clock is ever
+/// written into the store, so byte-identity is unaffected. Not compiled into the napi addon's hot
+/// path in any meaningful way (six `Instant` reads per ingest, once, not in a loop).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PhaseTimings {
+    /// `extract_rows` over all five entities (structured-clone decode → row structs).
+    pub extract: Duration,
+    /// the `BEGIN … COMMIT` apply block (conversation meta + messages + profiles/events/calls).
+    pub apply: Duration,
+    /// `recompute_derived` (people rollups, conversation activity, handle assignment).
+    pub recompute: Duration,
+    /// `refresh_fts` (FTS5 index (re)build).
+    pub fts: Duration,
 }
 
 /// The meta a native ingest reports back so TS can build its StoreMeta without re-reading the store.
