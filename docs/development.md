@@ -18,7 +18,8 @@ Requires Node.js ≥ 22.5.
 | `npm run typecheck:test` | Type-check `test/` (via `test/tsconfig.json`; run in CI). |
 | `npm run format` | Format `src/` + `test/` with Prettier. |
 | `npm run format:check` | Verify formatting (run in CI). |
-| `npm test` | Data-free unit tests (all `*.unit.ts`, auto-discovered) — run in CI. |
+| `npm test` | Data-free unit tests (vitest `unit` project) — run in CI. |
+| `npm run test:watch` | Vitest in watch mode (all projects) for local development. |
 | `npm run test:fixture` | Generate a synthetic leveldb cache and drive the full read → ingest → tools pipeline against it — no real data; run in CI. |
 | `npm run test:integration:ci` | Run the mutation/equivalence harnesses against a synthetic `.ldb`+`.log` fixture — no real data; run in CI. |
 | `npm run test:integration` | Same harnesses against a **real** local Teams cache (see below). |
@@ -39,13 +40,17 @@ TS 7; the intended ruleset is typescript-eslint `recommended` + `no-unused-vars`
 
 ## Tests
 
-Test files are **discovered by role**, not enumerated: `scripts/run-tests.mjs` globs
-`packages/*/test/**` and dispatches by a suffix in the filename — `*.unit.ts` (pure, CI),
-`*.fixture.ts` (synthetic-fixture-driven, CI), `*.golden.ts` (synthetic golden, CI), `*.int.ts`
-(needs a leveldb dir), `*.real.ts` (needs a real cache). A test file with no recognized role suffix
-is a hard error (you can't add a test the runner forgets), and a data-role run with no cache prints a
-visible SKIP with the file list — never a silent pass. `npm test` / `test:fixture` / `test:golden` /
-`test:integration` / `test:golden:real` each run one role.
+Tests run on **vitest**, split into five **role projects** by a filename suffix — `*.unit.ts` (pure,
+CI), `*.fixture.ts` (synthetic-fixture-driven, CI), `*.golden.ts` (synthetic golden, CI), `*.int.ts`
+(integration — a synthetic fixture in CI, or a real cache locally), `*.real.ts` (real-cache golden,
+skip-if-absent). `npm test` / `test:fixture` / `test:golden` / `test:integration` / `test:golden:real`
+each run one project (`vitest run --project <role>`); `test:watch` runs them all in watch mode, and
+goldens update with `-u` (e.g. `npm run test:golden -- -u`).
+
+Two guarantees carry over from the previous bespoke runner. `check:test-naming` (run in CI) fails if
+any `test/**` file lacks a role suffix — vitest's include-globs would otherwise silently skip it, the
+exact "test the runner forgets" failure mode. And the data-gated projects (`int`/`real`) self-skip
+**green** when no cache is present, printing a visible reason — never a silent pass.
 
 - **Unit** (`npm test`) exercise the pure layers — Snappy, structured-clone decode, CRC32C,
   key coding, HTML→text, handles, topic extraction — with synthetic inputs and **no Teams
@@ -57,9 +62,9 @@ visible SKIP with the file list — never a silent pass. `npm test` / `test:fixt
   cache:
   - `npm run test:fixture` generates a WAL-only cache and drives the full read → ingest → tools
     pipeline, asserting the decoded content matches what was generated.
-  - `npm run test:integration:ci` generates a mixed `.ldb`+`.log` cache and runs the
-    mutation/equivalence harnesses (`incremental.int.ts`, `reuse.int.ts`, `feedback.int.ts`) against
-    it — including `.ldb` truncation and forced compaction.
+  - `npm run test:integration:ci` runs the mutation/equivalence harnesses (`incremental.int.ts`,
+    `reuse.int.ts`, `feedback.int.ts`), each generating its own synthetic `.ldb`+`.log` fixture —
+    including `.ldb` truncation and forced compaction.
 - **Real-cache integration** (`npm run test:integration`) runs the same `*.int.ts` harnesses against
   a **real** on-disk Teams cache — a belt-and-braces check that
   catches real-world format quirks the synthetic fixture doesn't model. It runs locally (shipping
@@ -96,6 +101,6 @@ byte-level spec each layer implements.
 ## Releasing
 
 CI (`.github/workflows/ci.yml`) runs typecheck + build + unit tests on every push/PR to
-`master`. To publish: bump `version` in `package.json`, tag `vX.Y.Z`, and push the tag — the
+`main`. To publish: bump `version` in `package.json`, tag `vX.Y.Z`, and push the tag — the
 release workflow verifies the tag matches the version and that CI is green for the commit,
 then publishes to npm with provenance.
