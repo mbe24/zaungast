@@ -1,7 +1,12 @@
 // Profiling harness for the zaungast reader/tools. Measures where time + memory go across a cold
-// full parse, warm full parses, the format-layer phases, incremental refresh (copy-reuse and
-// reparse; no-op AND a real changed delta), and every tool call — plus CPU + heap sampling
-// profiles around the full parse (warm), and a separate cold CPU profile.
+// full parse, warm full parses, the format-layer phases, the store-build phases, incremental refresh
+// (copy-reuse and reparse; no-op AND a real changed delta), and every tool call — plus CPU + heap
+// sampling profiles around the full parse (warm), and a separate cold CPU profile.
+//
+// Emits the v1 timings schema (scripts/lib/timings-v1.mjs) so the output lines up with the native
+// profiler (src/bin/profile.rs) and can be diffed by the compare tool. Shared metrics use canonical
+// names (format.*, storeBuild.*, fullParse.*, throughput.*, refresh.noop.*, memory.*); TS-only things
+// (MCP tools, the end-to-end changed delta, heap/cpu artifacts) go in engineExtra.
 //
 // Run against the BUILT dist (not tsx — avoids esbuild transpile noise in the samples), with GC
 // exposed so the phase timers can exclude cross-iteration GC pauses:
@@ -16,12 +21,11 @@
 // An explicit <iterations> arg overrides the mode's default N (the tool/topic/incremental iteration
 // counts still follow the mode).
 //
-// Outputs into profiling/<YYYYMMDD-HHMMSS>/ (gitignored): timings.json, full-parse.cpuprofile,
+// Outputs into profiling/<YYYYMMDD-HHMMSS>/ (gitignored): timings.json (v1), full-parse.cpuprofile,
 // full-parse.heapprofile, full-parse-cold.cpuprofile. The main session writes profiling.md there.
 
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import inspector from 'node:inspector';
 import { spawnSync } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
@@ -48,6 +52,7 @@ import {
   listEvents,
   listCalls,
 } from 'zaungast/tools.js';
+import { metric, scalar, envelope } from './lib/timings-v1.mjs';
 
 const gc = typeof global.gc === 'function' ? global.gc : null;
 
@@ -78,7 +83,8 @@ if (process.argv[2] === '--cold') {
   // Peak RSS of this fresh single-ingest process, straight from the OS high-water mark (maxRSS, in
   // KB). No sampler: getrusage/GetProcessMemoryInfo record the peak even while the synchronous
   // ingest blocks the event loop — which a setInterval sampler cannot. The parent folds this in.
-  const coldPeakRssMB = +(process.resourceUsage().maxRSS / 1024).toFixed(1);
+  // TS ingests into an in-memory store (:memory:), so this OS peak IS the in-memory store peak.
+  const coldPeakRssMB = process.resourceUsage().maxRSS / 1024; // raw MB (no writer rounding — v1)
   fs.writeFileSync(path.join(coldOut, 'cold-peak-rss.json'), JSON.stringify({ coldPeakRssMB }));
   process.exit(0);
 }
@@ -103,35 +109,9 @@ const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(
 const outDir = path.join('profiling', stamp);
 fs.mkdirSync(outDir, { recursive: true });
 
-// GC before each iteration (outside the timed region) so cross-iteration GC pauses don't land
-// inside random samples. Excludes GC from the timed window — slightly optimistic, noted in md.
-// Summary stats over a pre-collected sample array (shared by bench() and the onPhase collector so the
-// percentile rule + rounding are identical). nearest-rank percentile (ceil), clamped; population stddev.
-function stats(samples, label) {
-  const s = [...samples].sort((a, b) => a - b);
-  const iters = s.length;
-  const sum = s.reduce((a, b) => a + b, 0);
-  const mean = sum / iters;
-  const variance = s.reduce((a, b) => a + (b - mean) ** 2, 0) / iters;
-  const r3 = (x) => +x.toFixed(3);
-  const pc = (q) => s[Math.min(s.length - 1, Math.max(0, Math.ceil(iters * q) - 1))];
-  return {
-    label,
-    iters,
-    min: r3(s[0]),
-    p50: r3(pc(0.5)),
-    median: r3(pc(0.5)), // alias (some callers/throughput read .median)
-    p75: r3(pc(0.75)),
-    p90: r3(pc(0.9)),
-    p95: r3(pc(0.95)),
-    p99: r3(pc(0.99)),
-    max: r3(s[iters - 1]),
-    mean: r3(mean),
-    stddev: r3(Math.sqrt(variance)),
-  };
-}
-
-function bench(label, fn, iters = N) {
+// Time `fn` `iters` times (GC'd before each, OUTSIDE the timed window so cross-iteration GC pauses
+// don't land inside samples — slightly optimistic, noted in the md) → a RAW v1 metric (unit ms).
+function bench(fn, iters = N) {
   const s = [];
   for (let i = 0; i < iters; i++) {
     if (gc) gc();
@@ -139,121 +119,108 @@ function bench(label, fn, iters = N) {
     fn();
     s.push(performance.now() - t);
   }
-  return stats(s, label);
+  return metric('ms', s);
 }
 
-const results = { meta: {}, fullParse: {}, formatPhases: [], incremental: [], tools: [] };
 const parsedBytes = fs
   .readdirSync(DIR)
   .filter((f) => /\.(ldb|log)$/i.test(f)) // only what ingest actually reads
   .reduce((s, f) => s + fs.statSync(path.join(DIR, f)).size, 0);
-results.meta = {
-  when: d.toISOString(),
-  dir: DIR,
-  parsedBytes,
-  iterations: N,
-  mode: HEAVY ? 'heavy' : 'light',
-  iters: { tool: TOOL_ITERS, topic: TOPIC_ITERS, incremental: INC_ITERS },
-  gcPinned: !!gc,
-  node: process.version,
-  platform: `${os.platform()} ${os.release()}`,
-  cpu: os.cpus()[0]?.model,
-};
 
-// ---- 1. full parse: cold (1×) then warm (N×) ----
-// Peak-RSS during this in-process cold parse is deliberately NOT sampled here: a setInterval sampler
-// can't fire while the synchronous ingest blocks the event loop. The true peak is captured OS-side
-// (process.resourceUsage().maxRSS) in the fresh --cold child below → results.fullParse.coldPeakRssMB.
-let tc = performance.now();
+const metrics = {}; // canonical, cross-engine-comparable
+const extra = {}; // engineExtra — TS-only, not in the parity table
+let counts, lossy, liveEntries;
+
+// ---- 1. full parse (IN-MEMORY): cold 1× then warm N×. TS's ChatStore is :memory: (ingest/store.ts),
+// so these ARE the in-memory fullParse the schema wants — there is no disk write to strip (native's
+// production path writes a .db file, which it must bench separately as its in-memory build). ----
+const tc = performance.now();
 {
   const r = ingest(DIR);
-  results.meta.counts = r.meta.counts;
-  results.meta.lossy = r.meta.lossy;
-  results.fullParse.rssWithStoreMB = +(process.memoryUsage().rss / 1048576).toFixed(1); // store resident
+  counts = r.meta.counts;
+  lossy = r.meta.lossy;
+  extra['memory.rssWithStore'] = scalar('MB', process.memoryUsage().rss / 1048576); // store resident
   r.store.close();
 }
-results.fullParse.coldMs = +(performance.now() - tc).toFixed(3);
-results.fullParse.warm = bench('ingest (warm)', () => {
+metrics['fullParse.cold'] = scalar('ms', performance.now() - tc);
+metrics['fullParse.warm'] = bench(() => {
   const r = ingest(DIR);
   r.store.close();
 });
-// retained JS heap after one parse (small — the store is native SQLite memory, not JS heap)
 if (gc) {
   gc();
   const h0 = process.memoryUsage().heapUsed;
   const r = ingest(DIR);
   gc();
-  results.fullParse.retainedHeapMB = +((process.memoryUsage().heapUsed - h0) / 1048576).toFixed(1);
+  extra['memory.retainedHeap'] = scalar('MB', (process.memoryUsage().heapUsed - h0) / 1048576);
   r.store.close();
 }
 
-// ---- 2. format-layer phase breakdown (the API-reshape target) ----
-// Post-refactor: loadSnapshot replaces loadEntries (it decodes AND groups by store once);
-// fingerprint/entityTargets/extractEntity now take the Snapshot; selectMapping defaults to the
-// bundled mappings; extractEntity returns an EntityExtract envelope (the bench times the call).
+// ---- 2. format-layer phases (shared 1:1 with native format.*). loadSnapshot decodes AND groups by
+// store once; fingerprint/entityTargets/extractEntity take the Snapshot. entityTargets for
+// message/conversation are precomputed (as ingest does); event/call/profile recompute (as prod). ----
 const snap0 = loadSnapshot(DIR);
 const fp0 = fingerprint(snap0);
 const { mapping } = selectMapping(fp0);
-results.meta.liveEntries = snap0.uniqueCount;
-results.meta.throughput = {
-  entriesPerSec: Math.round(snap0.uniqueCount / (results.fullParse.warm.median / 1000)),
-  mbPerSec: +(parsedBytes / 1048576 / (results.fullParse.warm.median / 1000)).toFixed(1),
-};
-// precompute targets exactly as ingest does for message/conversation (passed in → no re-scan);
-// event/call/profile are extracted WITHOUT precomputed targets in production (applyEvents/…), so
-// bench them the same way. entityTargets is now an O(#stores) catalog lookup (post-Snapshot), not a scan.
+liveEntries = snap0.uniqueCount;
+const warmP50 = metrics['fullParse.warm'].p50;
+metrics['throughput.entries'] = scalar('perSec', liveEntries / (warmP50 / 1000));
+metrics['throughput.bytes'] = scalar('MBperSec', parsedBytes / 1048576 / (warmP50 / 1000));
 const msgTargets = entityTargets(snap0, mapping, 'message');
 const convTargets = entityTargets(snap0, mapping, 'conversation');
-results.formatPhases.push(bench('loadSnapshot (read+decode+group)', () => loadSnapshot(DIR)));
-results.formatPhases.push(bench('fingerprint', () => fingerprint(snap0)));
-results.formatPhases.push(bench('entityTargets (catalog lookup)', () => entityTargets(snap0, mapping, 'message')));
-results.formatPhases.push(bench('extractEntity(message) [targets passed]', () => extractEntity(snap0, mapping, 'message', msgTargets)));
-results.formatPhases.push(bench('extractEntity(conversation) [targets passed]', () => extractEntity(snap0, mapping, 'conversation', convTargets)));
+metrics['format.loadSnapshot'] = bench(() => loadSnapshot(DIR));
+metrics['format.fingerprint'] = bench(() => fingerprint(snap0));
+metrics['format.entityTargets'] = bench(() => entityTargets(snap0, mapping, 'message'));
+metrics['format.extract.message'] = bench(() =>
+  extractEntity(snap0, mapping, 'message', msgTargets),
+);
+metrics['format.extract.conversation'] = bench(() =>
+  extractEntity(snap0, mapping, 'conversation', convTargets),
+);
 for (const ent of ['event', 'call', 'profile']) {
-  results.formatPhases.push(bench(`extractEntity(${ent}) [targets recomputed, as prod]`, () => extractEntity(snap0, mapping, ent)));
+  metrics[`format.extract.${ent}`] = bench(() => extractEntity(snap0, mapping, ent));
 }
 
-// ---- 2b. store-build phase breakdown (extract/apply/recompute/fts) — the families that line up with
-// the native profiler's PhaseTimings. ingest() fires an opt-in onPhase hook per phase (dev only; a
-// no-op in production), so this measures the REAL build pipeline, not a re-implementation.
-// Two inherent attribution caveats vs native (NOT commit-for-commit comparable — the compare tool must
-// know): (1) profile/event/call row-SHAPING is timed here under `extract` (perf-1b keeps it inside
-// extractForFullIngest so the snapshot drops early), but native shapes those inside its `apply`;
-// (2) native's R1 write-tuning wraps apply+recompute+fts in ONE transaction with the COMMIT inside its
-// `fts` timer, whereas TS commits after `apply` and runs recompute/fts in autocommit — so `apply` and
-// `fts` differ by where the commit cost lands. Both are sub-ms on in-memory builds; `extract`/`recompute`
-// are clean. The heavy message/conversation rows transform at insert (inside `apply`) on both sides.
+// ---- 2b. store-build phases (shared with native PhaseTimings). ingest() fires an opt-in onPhase hook
+// per phase (dev only; a no-op in production), so this measures the REAL build pipeline. Two attribution
+// caveats vs native keep apply/fts from being commit-for-commit comparable (see plan/perf.typescript.md
+// C1/C2): TS shapes profile/event/call rows under `extract` (perf-1b) not `apply`; and native's R1
+// tuning wraps apply+recompute+fts in ONE txn (COMMIT in `fts`) whereas TS commits per-phase. ----
 {
-  const samples = { extract: [], apply: [], recompute: [], fts: [] };
+  const s = { extract: [], apply: [], recompute: [], fts: [] };
   for (let i = 0; i < N; i++) {
     if (gc) gc();
-    const r = ingest(DIR, { onPhase: (phase, ms) => samples[phase].push(ms) });
+    const r = ingest(DIR, { onPhase: (phase, x) => s[phase].push(x) });
     r.store.close();
   }
-  results.storeBuild = {
-    extract: stats(samples.extract, 'storeBuild.extract'),
-    apply: stats(samples.apply, 'storeBuild.apply'),
-    recompute: stats(samples.recompute, 'storeBuild.recompute'),
-    fts: stats(samples.fts, 'storeBuild.fts'),
-  };
+  for (const p of ['extract', 'apply', 'recompute', 'fts'])
+    metrics[`storeBuild.${p}`] = metric('ms', s[p]);
 }
 
-// ---- 3. incremental refresh ----
-// (a) no-op refresh floor, per mode. Warm one refresh first so the copy-reuse ldbCache is populated
-//     (iteration 1 is cold-cache and would skew the distribution).
+// ---- 3. incremental refresh. The no-op floor per mode is shared (refresh.noop.<mode>); the changed
+// delta is end-to-end n=1 (applyIncremental mutates the store, so it can't be looped) → engineExtra. ----
+const NOOP_KEY = { 'copy-reuse': 'copyReuse', reparse: 'reparse' };
 for (const mode of ['copy-reuse', 'reparse']) {
-  const s = new Session({ overrideDir: DIR, incrementalMode: mode, minDebounceMs: 0, maxIncrementals: 1_000_000 });
-  const t = performance.now();
-  s.refreshNow(true);
-  const fullMs = +(performance.now() - t).toFixed(3);
-  s.refreshNow(false); // warm the cache (copy-reuse)
-  const inc = bench(`incremental no-op (${mode})`, () => s.refreshNow(false), INC_ITERS);
-  s.dispose();
-  results.incremental.push({ mode, kind: 'no-op', fullMs, ...inc });
+  const sess = new Session({
+    overrideDir: DIR,
+    incrementalMode: mode,
+    minDebounceMs: 0,
+    maxIncrementals: 1_000_000,
+  });
+  sess.refreshNow(true);
+  sess.refreshNow(false); // warm the copy-reuse ldbCache (iteration 1 is cold-cache; would skew)
+  const s = [];
+  for (let i = 0; i < INC_ITERS; i++) {
+    if (gc) gc();
+    const t = performance.now();
+    sess.refreshNow(false);
+    s.push(performance.now() - t);
+  }
+  sess.dispose();
+  metrics[`refresh.noop.${NOOP_KEY[mode]}`] = metric('ms', s);
 }
-// (b) a REAL changed delta (reparse path): build a store as-of an earlier sequence, then apply the
-//     remaining real records. Single-shot (applyIncremental mutates the store). No live data touched.
 {
+  // Build a store as-of an earlier sequence, then apply the remaining real records (reparse path).
   const seqs = [...snap0.buckets.values()]
     .flatMap((b) => b.records.map((r) => r.seq))
     .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
@@ -262,14 +229,16 @@ for (const mode of ['copy-reuse', 'reparse']) {
   const before = part.store.counts().messages;
   const t = performance.now();
   applyIncremental(part.store, part.state, DIR);
-  const changedMs = +(performance.now() - t).toFixed(3);
-  const appliedMsgs = part.store.counts().messages - before;
+  const changedMs = performance.now() - t;
+  extra['refresh.changed.reparse'] = {
+    ...scalar('ms', changedMs),
+    appliedMsgs: part.store.counts().messages - before,
+  };
   part.store.close();
-  results.incremental.push({ mode: 'reparse', kind: 'changed', appliedMsgs, changedMs, iters: 1 });
 }
 
-// ---- 4. tool calls (through the public facade — tools now take (view, args); openStore's static
-//         TeamsStore is a valid view). Pick the busiest channel + a flat conv via the facade. ----
+// ---- 4. tool calls (engineExtra — native has no MCP layer). Through the public facade; pick the
+// busiest channel + a flat conv via openStore's static view. ----
 {
   const store = openStore(DIR);
   const convs = store.conversations.list({ n: 500 });
@@ -277,19 +246,26 @@ for (const mode of ['copy-reuse', 'reparse']) {
     convs.filter((c) => c.kind === kind).sort((a, b) => b.msgCount - a.msgCount)[0]?.handle;
   const flat = busiest('1:1') ?? busiest('group');
   const chan = busiest('channel');
-  const T = TOOL_ITERS;
-  if (flat) results.tools.push(bench('read_messages (flat)', () => readConversation(store, { conversation: flat, limit: 40 }), T));
-  if (chan) results.tools.push(bench('read_messages (channel digest)', () => readConversation(store, { conversation: chan, limit: 40 }), T));
-  results.tools.push(bench('search "the"', () => search(store, { query: 'the', limit: 20 }), T));
-  results.tools.push(bench('top_topics 30d', () => rankTopics(store, { window: '30d' }), TOPIC_ITERS));
-  results.tools.push(bench('list_conversations', () => listConversations(store, {}), T));
-  results.tools.push(bench('find_person (roster)', () => findPerson(store, {}), T));
-  results.tools.push(bench('list_events', () => listEvents(store, { since: '2020-01-01', until: '2030-01-01', limit: 30 }), T));
-  results.tools.push(bench('list_calls', () => listCalls(store, { limit: 30 }), T));
+  const tool = (name, fn, iters = TOOL_ITERS) => {
+    extra[`tool.${name}`] = bench(fn, iters);
+  };
+  if (flat)
+    tool('read_messages_flat', () => readConversation(store, { conversation: flat, limit: 40 }));
+  if (chan)
+    tool('read_messages_channel', () => readConversation(store, { conversation: chan, limit: 40 }));
+  tool('search', () => search(store, { query: 'the', limit: 20 }));
+  tool('top_topics', () => rankTopics(store, { window: '30d' }), TOPIC_ITERS);
+  tool('list_conversations', () => listConversations(store, {}));
+  tool('find_person', () => findPerson(store, {}));
+  tool('list_events', () =>
+    listEvents(store, { since: '2020-01-01', until: '2030-01-01', limit: 30 }),
+  );
+  tool('list_calls', () => listCalls(store, { limit: 30 }));
   store.close();
 }
 
-// ---- 5. warm CPU + heap sampling profiles around a full-parse block ----
+// ---- 5. warm CPU + heap sampling profiles around a full-parse block, then a cold CPU profile + OS
+// peak RSS in a fresh child (the profiler must precede the first-ever ingest). ----
 const PROF_ITERS = Math.max(N, 10);
 await cpuProfile(DIR, PROF_ITERS, path.join(outDir, 'full-parse.cpuprofile'));
 {
@@ -304,34 +280,94 @@ await cpuProfile(DIR, PROF_ITERS, path.join(outDir, 'full-parse.cpuprofile'));
   fs.writeFileSync(path.join(outDir, 'full-parse.heapprofile'), JSON.stringify(profile));
   s.disconnect();
 }
-// cold CPU profile + OS-tracked peak RSS in a fresh process (profiler must precede the first-ever ingest)
-spawnSync(process.execPath, ['--experimental-sqlite', '--expose-gc', 'scripts/profile.mjs', '--cold', DIR, outDir], { stdio: 'inherit' });
-try {
-  const { coldPeakRssMB } = JSON.parse(fs.readFileSync(path.join(outDir, 'cold-peak-rss.json'), 'utf8'));
-  results.fullParse.coldPeakRssMB = coldPeakRssMB;
-} catch {
-  /* cold child didn't emit peak — leave undefined */
-}
-
-// ---- write timings + console summary ----
-fs.writeFileSync(path.join(outDir, 'timings.json'), JSON.stringify(results, null, 2));
-const row = (r) => `  ${r.label.padEnd(44)} p50 ${String(r.p50).padStart(8)} p90 ${String(r.p90).padStart(8)} p95 ${String(r.p95).padStart(8)} p99 ${String(r.p99).padStart(8)} ±${String(r.stddev).padStart(7)}ms`;
-console.log(`\n=== profile → ${outDir} ===`);
-console.log(`data: ${DIR}`);
-console.log(`  ${results.meta.liveEntries} entries · ${(parsedBytes / 1048576).toFixed(1)} MB parsed · counts ${JSON.stringify(results.meta.counts)} · gcPinned ${!!gc}`);
-console.log(`  mode: ${HEAVY ? 'HEAVY' : 'light'} (N=${N} · tools ${TOOL_ITERS} · top_topics ${TOPIC_ITERS} · incremental ${INC_ITERS})`);
-console.log(`\nfull parse: cold ${results.fullParse.coldMs}ms · warm median ${results.fullParse.warm.median}ms · cold peak RSS ${results.fullParse.coldPeakRssMB ?? '—'}MB · RSS w/store ${results.fullParse.rssWithStoreMB}MB`);
-console.log(`throughput: ${results.meta.throughput.entriesPerSec} entries/s · ${results.meta.throughput.mbPerSec} MB/s`);
-console.log('\nformat phases:');
-results.formatPhases.forEach((r) => console.log(row(r)));
-console.log('\nstore-build phases (~= native PhaseTimings; apply/fts not commit-for-commit — see 2b):');
-for (const p of ['extract', 'apply', 'recompute', 'fts']) console.log(row(results.storeBuild[p]));
-console.log('\nincremental:');
-results.incremental.forEach((r) =>
-  r.kind === 'no-op'
-    ? console.log(`  no-op (${r.mode}): full ${r.fullMs}ms · refresh p50 ${r.p50} p90 ${r.p90} p95 ${r.p95} p99 ${r.p99} ±${r.stddev}ms`)
-    : console.log(`  changed (${r.mode}): applied ${r.appliedMsgs} msgs in ${r.changedMs}ms`),
+spawnSync(
+  process.execPath,
+  ['--experimental-sqlite', '--expose-gc', 'scripts/profile.mjs', '--cold', DIR, outDir],
+  { stdio: 'inherit' },
 );
-console.log('\ntools:');
-results.tools.forEach((r) => console.log(row(r)));
-console.log(`\nartifacts in ${outDir}: timings.json · full-parse{,-cold}.cpuprofile · full-parse.heapprofile`);
+try {
+  const { coldPeakRssMB } = JSON.parse(
+    fs.readFileSync(path.join(outDir, 'cold-peak-rss.json'), 'utf8'),
+  );
+  // TS's cold child ingests into :memory:, so its OS peak IS the in-memory store peak (shared metric).
+  metrics['memory.storePeakRss'] = scalar('MB', coldPeakRssMB);
+} catch {
+  /* cold child didn't emit peak — leave the metric absent */
+}
+extra['artifacts'] = {
+  cpuProfile: 'full-parse.cpuprofile',
+  coldCpuProfile: 'full-parse-cold.cpuprofile',
+  heapProfile: 'full-parse.heapprofile',
+};
+
+// ---- write the v1 envelope + a human console summary (console rounds; the JSON stays raw) ----
+const env = envelope({
+  engine: 'ts',
+  dataset: {
+    dir: DIR,
+    entries: liveEntries,
+    bytes: parsedBytes,
+    counts,
+    fingerprint: fp0.hash,
+    lossy,
+    gcPinned: !!gc,
+  },
+  mode: HEAVY ? 'heavy' : 'light',
+  iters: { full: N, tools: TOOL_ITERS, topics: TOPIC_ITERS, incremental: INC_ITERS },
+  metrics,
+  engineExtra: extra,
+});
+fs.writeFileSync(path.join(outDir, 'timings.json'), JSON.stringify(env, null, 2));
+
+const r3 = (x) => (x == null ? '—' : +x.toFixed(3));
+const val = (m) =>
+  m == null
+    ? '—'
+    : m.n === 1
+      ? `${r3(m.value)} ${m.unit}`
+      : `p50 ${String(r3(m.p50)).padStart(9)}  p90 ${String(r3(m.p90)).padStart(9)}  p99 ${String(r3(m.p99)).padStart(9)}  ±${r3(m.stddev)} ${m.unit}`;
+const show = (title, keys, from = metrics) => {
+  console.log(`\n${title}:`);
+  for (const k of keys) if (from[k] != null) console.log(`  ${k.padEnd(26)} ${val(from[k])}`);
+};
+
+console.log(`\n=== profile (ts) → ${outDir} ===`);
+console.log(`data: ${DIR}`);
+console.log(
+  `  ${liveEntries} entries · ${(parsedBytes / 1048576).toFixed(1)} MB · counts ${JSON.stringify(counts)} · gcPinned ${!!gc} · fp ${fp0.hash}`,
+);
+console.log(
+  `  mode: ${env.mode} (full N=${N} · tools ${TOOL_ITERS} · topics ${TOPIC_ITERS} · incremental ${INC_ITERS})`,
+);
+show('full parse (in-memory)', [
+  'fullParse.cold',
+  'fullParse.warm',
+  'memory.storePeakRss',
+  'throughput.entries',
+  'throughput.bytes',
+]);
+show('format phases', [
+  'format.loadSnapshot',
+  'format.fingerprint',
+  'format.entityTargets',
+  'format.extract.message',
+  'format.extract.conversation',
+  'format.extract.event',
+  'format.extract.call',
+  'format.extract.profile',
+]);
+show(
+  'store-build phases (~= native PhaseTimings; apply/fts not commit-for-commit — see perf.typescript.md)',
+  ['storeBuild.extract', 'storeBuild.apply', 'storeBuild.recompute', 'storeBuild.fts'],
+);
+show('incremental (no-op floor)', ['refresh.noop.copyReuse', 'refresh.noop.reparse']);
+show(
+  'engineExtra (TS-only)',
+  Object.keys(extra).filter(
+    (k) => k.startsWith('tool.') || k.startsWith('refresh.') || k.startsWith('memory.'),
+  ),
+  extra,
+);
+console.log(
+  `\nartifacts in ${outDir}: timings.json (v1) · full-parse{,-cold}.cpuprofile · full-parse.heapprofile`,
+);
