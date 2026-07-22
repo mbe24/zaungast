@@ -1,6 +1,6 @@
 import type { GetMessageArgs } from '../schemas.js';
 import { getMessageShape } from '../schemas.js';
-import type { QueryTool } from './types.js';
+import type { QueryTool, RenderCtx } from './types.js';
 import type { View } from './shared.js';
 import {
   HISTORY_NOTE,
@@ -17,7 +17,11 @@ import { renderReactions, resolveConversationArg, whoLabel } from './readConvers
 // newline-preserving body, paged by CHARACTER via offset for a pathologically long body).
 const CHUNK = 4000;
 
-export function getMessage(view: View, args: GetMessageArgs = {} as GetMessageArgs): string {
+export function getMessage(
+  view: View,
+  args: GetMessageArgs = {} as GetMessageArgs,
+  ctx?: RenderCtx,
+): string {
   if (!args.conversation) return 'error: conversation (handle or title substring) is required';
   if (!args.message) return 'error: message (the m:… id from a search hit) is required';
   const resolved = resolveConversationArg(view, String(args.conversation));
@@ -25,7 +29,7 @@ export function getMessage(view: View, args: GetMessageArgs = {} as GetMessageAr
   const convId = resolved.id;
   const id = String(args.message).replace(/^m:/, '');
   const row = view.messages.get(convId, id);
-  if (!row) return `${envelope(view)}\nmessage m:${id} not found in this conversation`;
+  if (!row) return `${envelope(view, ctx)}\nmessage m:${id} not found in this conversation`;
 
   const conv = view.conversations.get(convId)!;
   const ownerNm = ownerDisplayName(view);
@@ -48,7 +52,7 @@ export function getMessage(view: View, args: GetMessageArgs = {} as GetMessageAr
   const marks = (row.hasAttachment ? ' [attachment]' : '') + (row.mentionsMe ? ' [@me]' : '');
   const body = total === 0 ? '(no message body)' : slice;
   const cont = end < total ? `\n… +${total - end} chars · get_message(offset:${end})` : '';
-  const msgLine = `${fmtTs(row.ts)} ${whoLabel(row, ownerNm)}> ${body}${marks}${cont}`;
+  const msgLine = `${fmtTs(row.ts, ctx)} ${whoLabel(row, ownerNm)}> ${body}${marks}${cont}`;
 
   const rxLine = renderReactions(row.reactions, view, view.meta.selfMri, true);
   const pivot =
@@ -57,7 +61,7 @@ export function getMessage(view: View, args: GetMessageArgs = {} as GetMessageAr
       : '';
   const legend = row.isMine ? viewerLegend(ownerNm) : '';
 
-  return [envelope(view), head, msgLine, rxLine, pivot, legend].filter(Boolean).join('\n');
+  return [envelope(view, ctx), head, msgLine, rxLine, pivot, legend].filter(Boolean).join('\n');
 }
 
 export const getMessageTool: QueryTool = {

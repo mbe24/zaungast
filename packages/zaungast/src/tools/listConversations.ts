@@ -1,27 +1,31 @@
 import type { ListConversationsArgs } from '../schemas.js';
 import { listConversationsShape } from '../schemas.js';
-import type { QueryTool } from './types.js';
+import type { QueryTool, RenderCtx } from './types.js';
 import type { View } from './shared.js';
 import { HISTORY_NOTE, badTime, envelope, fmtTs, parseTime } from './shared.js';
 
 // list_conversations = render(conversations.list(...)).
-export function listConversations(view: View, args: ListConversationsArgs = {}): string {
-  const bt = badTime(args, ['since']);
+export function listConversations(
+  view: View,
+  args: ListConversationsArgs = {},
+  ctx?: RenderCtx,
+): string {
+  const bt = badTime(args, ['since'], ctx);
   if (bt) return bt;
   const rows = view.conversations.list({
     n: args.n,
     kind: args.kind,
     query: args.query,
     participant: args.participant,
-    sinceTs: parseTime(args.since),
+    sinceTs: parseTime(args.since, ctx),
     includeEmpty: args.include_empty,
   });
   const lines = rows.map((r) => {
     const title = r.topic || r.participantNames || '(untitled)';
-    return `${r.handle} [${r.kind}] "${title}" · ${r.msgCount} msg · last ${fmtTs(r.lastTs)}`;
+    return `${r.handle} [${r.kind}] "${title}" · ${r.msgCount} msg · last ${fmtTs(r.lastTs, ctx)}`;
   });
   const extra = `${rows.length} conversations`;
-  return `${envelope(view, extra)}\n${lines.join('\n') || '(none)'}`;
+  return `${envelope(view, ctx, extra)}\n${lines.join('\n') || '(none)'}`;
 }
 
 export const listConversationsTool: QueryTool = {

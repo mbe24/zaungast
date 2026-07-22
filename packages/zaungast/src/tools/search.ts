@@ -1,7 +1,7 @@
 import type { SearchHit, Conversation } from 'libzaungast';
 import type { SearchArgs } from '../schemas.js';
 import { searchShape } from '../schemas.js';
-import type { QueryTool } from './types.js';
+import type { QueryTool, RenderCtx } from './types.js';
 import type { View } from './shared.js';
 import {
   HISTORY_NOTE,
@@ -32,9 +32,9 @@ function fromAmbiguityNote(view: View, from: string): string {
 
 // Render the cache-horizon note from querySearch's coverage span. `hi===0` means the scope holds no
 // cached messages at all. Claims only what the cache knows ("newest cached"), never "quiet".
-function coverageNoteText(hi: number, lo: number): string {
+function coverageNoteText(hi: number, lo: number, ctx?: RenderCtx): string {
   if (!hi) return 'no cached messages in this scope';
-  return `newest cached in this scope: ${fmtTs(hi)} · oldest ${fmtTs(lo)} — local cache may lag the server`;
+  return `newest cached in this scope: ${fmtTs(hi, ctx)} · oldest ${fmtTs(lo, ctx)} — local cache may lag the server`;
 }
 
 // Build the per-hit lines and the (optional) conversation legend, resolving conv id → view once per
@@ -43,6 +43,7 @@ function buildSearchResults(
   view: View,
   rows: SearchHit[],
   ownerFallback: string | null,
+  ctx?: RenderCtx,
 ): { lines: string[]; legend: string } {
   const cache = new Map<string, Conversation | null>();
   const conv = (cid: string): Conversation | null => {
@@ -62,13 +63,13 @@ function buildSearchResults(
       : '';
   const lines = rows.map((r) => {
     const label = r.isMine ? ownerLabel(r.senderName, ownerFallback) : r.senderName;
-    return `${hn(r.convId)} ${fmtTs(r.ts)} m:${r.id} ${label}> ${clip(r.snippet, 140)}`;
+    return `${hn(r.convId)} ${fmtTs(r.ts, ctx)} m:${r.id} ${label}> ${clip(r.snippet, 140)}`;
   });
   return { lines, legend };
 }
 
-export function search(view: View, args: SearchArgs = {}): string {
-  const bt = badTime(args, ['since', 'until']);
+export function search(view: View, args: SearchArgs = {}, ctx?: RenderCtx): string {
+  const bt = badTime(args, ['since', 'until'], ctx);
   if (bt) return bt;
   const limit = Math.min(Number(args.limit) || 20, 60);
   const res = view.messages.search({
@@ -79,8 +80,8 @@ export function search(view: View, args: SearchArgs = {}): string {
     mentionsMe: args.mentions_me,
     hasAttachment: args.has_attachment,
     exclude: args.exclude,
-    sinceTs: parseTime(args.since),
-    untilTs: parseTime(args.until),
+    sinceTs: parseTime(args.since, ctx),
+    untilTs: parseTime(args.until, ctx),
     limit,
   });
   if (!res.ok) return describeMiss(res.reason);
@@ -99,14 +100,14 @@ export function search(view: View, args: SearchArgs = {}): string {
   }
 
   const ownerNm = ownerDisplayName(view);
-  const { lines, legend } = buildSearchResults(view, rows, ownerNm);
-  const coverage = res.coverage ? coverageNoteText(res.coverage.hi, res.coverage.lo) : '';
+  const { lines, legend } = buildSearchResults(view, rows, ownerNm, ctx);
+  const coverage = res.coverage ? coverageNoteText(res.coverage.hi, res.coverage.lo, ctx) : '';
   // Owner-label legend, only when a hit is owner-authored (search interleaves conversations, so
   // the (you) rows can be scattered — the legend matters here at least as much as in read_conversation).
   const vlegend = rows.some((r) => r.isMine) ? viewerLegend(ownerNm) : '';
 
   const head = [
-    envelope(view, `order:${order} · ${rows.length} hits`),
+    envelope(view, ctx, `order:${order} · ${rows.length} hits`),
     ...notes,
     vlegend,
     legend,

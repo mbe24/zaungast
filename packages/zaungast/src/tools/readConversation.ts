@@ -3,7 +3,7 @@ import { byCodeUnit } from '../util/sort.js';
 import type { Message, ReactionGroup, Conversation, ThreadSummary } from 'libzaungast';
 import type { ReadConversationArgs, ReadThreadArgs } from '../schemas.js';
 import { readConversationShape, readThreadShape } from '../schemas.js';
-import type { QueryTool } from './types.js';
+import type { QueryTool, RenderCtx } from './types.js';
 import type { View } from './shared.js';
 import {
   HISTORY_NOTE,
@@ -114,9 +114,16 @@ export function whoLabel(r: Message, ownerFallback: string | null): string {
 // One rendered message at `indent`: `<indent><ts> <who>> <content><marks><suffix>`, plus an
 // indented reaction line beneath it when reacted. `who` is precomputed (name / "<name> (you)" /
 // "↳" burst mark); `suffix` (e.g. a thread tag) rides the text line, before any reaction line.
-function msgText(r: Message, who: string, indent: string, rx?: ReactionCtx, suffix = ''): string {
+function msgText(
+  r: Message,
+  who: string,
+  indent: string,
+  ctx: RenderCtx | undefined,
+  rx?: ReactionCtx,
+  suffix = '',
+): string {
   const marks = (r.hasAttachment ? ' [attachment]' : '') + (r.mentionsMe ? ' [@me]' : '');
-  const line = `${indent}${fmtTs(r.ts)} ${who}> ${clip(r.content, 280)}${marks}${suffix}`;
+  const line = `${indent}${fmtTs(r.ts, ctx)} ${who}> ${clip(r.content, 280)}${marks}${suffix}`;
   const rxLine = rx ? renderReactions(r.reactions, rx.view, rx.selfMri, rx.full) : '';
   return rxLine ? `${line}\n${indent}      ${rxLine}` : line;
 }
@@ -126,6 +133,7 @@ function msgText(r: Message, who: string, indent: string, rx?: ReactionCtx, suff
 function renderMessageLines(
   rows: Message[],
   ownerFallback: string | null,
+  ctx?: RenderCtx,
   rx?: ReactionCtx,
 ): string[] {
   let lastMri: string | null = null;
@@ -135,7 +143,7 @@ function renderMessageLines(
     lastMri = r.senderMri;
     lastTs = r.ts;
     const who = collapsed ? '  ↳' : whoLabel(r, ownerFallback);
-    return msgText(r, who, '', rx);
+    return msgText(r, who, '', ctx, rx);
   });
 }
 
@@ -149,13 +157,14 @@ function renderThread(
   root: Message,
   replies: Message[],
   ownerFallback: string | null,
+  ctx: RenderCtx | undefined,
   rx: ReactionCtx | undefined,
   opts: { suffix?: string; preReplies?: string; hitId?: string } = {},
 ): string[] {
   const mark = (r: Message, base: string) =>
     (opts.hitId && String(r.id) === opts.hitId ? '→ ' : '') + base;
   const out: string[] = [
-    msgText(root, mark(root, whoLabel(root, ownerFallback)), '', rx, opts.suffix),
+    msgText(root, mark(root, whoLabel(root, ownerFallback)), '', ctx, rx, opts.suffix),
   ];
   if (opts.preReplies) out.push(`${REPLY_INDENT}${opts.preReplies}`);
   let lastMri: string | null = null;
@@ -165,7 +174,7 @@ function renderThread(
     lastMri = r.senderMri;
     lastTs = r.ts;
     const who = mark(r, collapsed ? '↳' : whoLabel(r, ownerFallback));
-    out.push(msgText(r, who, REPLY_INDENT, rx));
+    out.push(msgText(r, who, REPLY_INDENT, ctx, rx));
   }
   return out;
 }
@@ -191,21 +200,22 @@ function renderDigestThread(
   rows: Message[],
   rootId: string,
   ownerNm: string | null,
+  ctx: RenderCtx | undefined,
   rx: ReactionCtx,
 ): string[] {
   const { root, replies } = splitThread(rows, rootId);
   const rootMissing = String(root.id) !== rootId;
   const nReplies = replies.length;
-  const last = fmtTs(rows[rows.length - 1].ts);
+  const last = fmtTs(rows[rows.length - 1].ts, ctx);
   const suffix = nReplies
     ? `  [thread m:${rootId} · ${nReplies} ${nReplies === 1 ? 'reply' : 'replies'} · last ${last}]`
     : '';
   const missNote = rootMissing ? `[root m:${rootId} not in local cache]` : undefined;
   if (rows.length <= 5)
-    return renderThread(root, replies, ownerNm, rx, { suffix, preReplies: missNote });
+    return renderThread(root, replies, ownerNm, ctx, rx, { suffix, preReplies: missNote });
   const shown = replies.slice(-3);
   const pre = `+${nReplies - shown.length} earlier · read_thread(thread: m:${rootId})`;
-  return renderThread(root, shown, ownerNm, rx, {
+  return renderThread(root, shown, ownerNm, ctx, rx, {
     suffix,
     preReplies: missNote ? `${missNote}  ${pre}` : pre,
   });
@@ -222,6 +232,7 @@ function renderChannelDigest(
   since: number | undefined,
   until: number | undefined,
   ownerNm: string | null,
+  ctx: RenderCtx | undefined,
   rx: ReactionCtx,
 ): string {
   // thread summaries (in-window activity decides which threads appear)
@@ -253,7 +264,7 @@ function renderChannelDigest(
   // display oldest-active first so the most-recently-active thread sits at the bottom
   const blocks = [...picked].reverse().map((s) => {
     const rows = view.messages.thread(convId, s.rootId);
-    return renderDigestThread(rows, String(s.rootId), ownerNm, rx).join('\n');
+    return renderDigestThread(rows, String(s.rootId), ownerNm, ctx, rx).join('\n');
   });
   const oldestShown = picked[picked.length - 1];
   const olderCur =
@@ -263,11 +274,11 @@ function renderChannelDigest(
   const { total, earliestTs, newestTs } = view.messages.stats(convId);
   const head = channelHead(
     conv,
-    `${total} msgs / ${threadTotal} threads · showing ${picked.length} threads, ${budget} msgs · threads by last activity · local cache ${fmtTs(earliestTs)}–${fmtTs(newestTs)}${olderCur}`,
+    `${total} msgs / ${threadTotal} threads · showing ${picked.length} threads, ${budget} msgs · threads by last activity · local cache ${fmtTs(earliestTs, ctx)}–${fmtTs(newestTs, ctx)}${olderCur}`,
   );
   const body = blocks.join('\n\n') || '(no threads)';
   const legend = /\(you\)>/.test(body) ? viewerLegend(ownerNm) : '';
-  return `${[envelope(view), head, legend].filter(Boolean).join('\n')}\n${body}`;
+  return `${[envelope(view, ctx), head, legend].filter(Boolean).join('\n')}\n${body}`;
 }
 
 // A single reply-chain read in full: inlines the whole chain up to THREAD_INLINE_MAX; larger chains
@@ -280,11 +291,13 @@ function renderThreadView(
   rootId: string,
   args: ReadThreadArgs,
   ownerNm: string | null,
+  ctx: RenderCtx | undefined,
   rx: ReactionCtx,
   hitId?: string,
 ): string {
   const rows = view.messages.thread(convId, rootId);
-  if (!rows.length) return `${envelope(view)}\nthread m:${rootId} not found in this conversation`;
+  if (!rows.length)
+    return `${envelope(view, ctx)}\nthread m:${rootId} not found in this conversation`;
   const { root, replies } = splitThread(rows, rootId);
   const rootMissing = String(root.id) !== rootId;
   const total = rows.length;
@@ -319,7 +332,7 @@ function renderThreadView(
   const preParts: string[] = [];
   if (rootMissing) preParts.push(`[root m:${rootId} not in local cache]`);
   if (more) preParts.push(`… +${earlier} earlier · more: before m:${shown[0].id}`);
-  const lines = renderThread(root, shown, ownerNm, rx, {
+  const lines = renderThread(root, shown, ownerNm, ctx, rx, {
     preReplies: preParts.join('  ') || undefined,
     hitId,
   });
@@ -329,7 +342,7 @@ function renderThreadView(
     `thread m:${rootId}${hitId ? ` around m:${hitId}` : ''} · showing ${1 + shown.length}/${total} · ${status}`,
   );
   const legend = rows.some((r) => r.isMine) ? viewerLegend(ownerNm) : '';
-  return `${[envelope(view), head, legend].filter(Boolean).join('\n')}\n${lines.join('\n')}`;
+  return `${[envelope(view, ctx), head, legend].filter(Boolean).join('\n')}\n${lines.join('\n')}`;
 }
 
 function buildConversationHead(
@@ -339,9 +352,10 @@ function buildConversationHead(
   earliest: number,
   newest: number,
   olderCursor: string,
+  ctx?: RenderCtx,
 ): string {
   const olderSuffix = olderCursor ? ` · older: ${olderCursor}` : '';
-  return `${conv.handle} [${conv.kind}] "${conv.topic || conv.participantNames}" · showing ${shown}/${total} · local cache ${fmtTs(earliest)}–${fmtTs(newest)}${olderSuffix}`;
+  return `${conv.handle} [${conv.kind}] "${conv.topic || conv.participantNames}" · showing ${shown}/${total} · local cache ${fmtTs(earliest, ctx)}–${fmtTs(newest, ctx)}${olderSuffix}`;
 }
 
 // read_conversation — browse one conversation's messages in story order. Channels render as a
@@ -351,16 +365,17 @@ function buildConversationHead(
 export function readConversation(
   view: View,
   args: ReadConversationArgs = {} as ReadConversationArgs,
+  ctx?: RenderCtx,
 ): string {
-  const bt = badTime(args, ['since', 'until']);
+  const bt = badTime(args, ['since', 'until'], ctx);
   if (bt) return bt;
   if (!args.conversation) return 'error: conversation (handle or title substring) is required';
   const resolved = resolveConversationArg(view, String(args.conversation));
   if ('early' in resolved) return resolved.early;
   const id = resolved.id;
   const limit = Math.min(Number(args.limit) || 40, 200);
-  const since = parseTime(args.since);
-  const until = parseTime(args.until);
+  const since = parseTime(args.since, ctx);
+  const until = parseTime(args.until, ctx);
   const conv = view.conversations.get(id)!;
   const ownerNm = ownerDisplayName(view);
   const rx: ReactionCtx = {
@@ -369,7 +384,7 @@ export function readConversation(
     full: String(args.reactions) === 'full',
   };
   if (conv.kind === 'channel')
-    return renderChannelDigest(view, conv, id, args, limit, since, until, ownerNm, rx);
+    return renderChannelDigest(view, conv, id, args, limit, since, until, ownerNm, ctx, rx);
 
   const res = view.messages.inConversation(id, {
     sinceTs: since,
@@ -382,10 +397,18 @@ export function readConversation(
 
   const { total, earliestTs, newestTs } = view.messages.stats(id);
   const olderCursor = res.nextOlder ?? '';
-  const head = buildConversationHead(conv, rows.length, total, earliestTs, newestTs, olderCursor);
-  const lines = renderMessageLines(rows, ownerNm, rx);
+  const head = buildConversationHead(
+    conv,
+    rows.length,
+    total,
+    earliestTs,
+    newestTs,
+    olderCursor,
+    ctx,
+  );
+  const lines = renderMessageLines(rows, ownerNm, ctx, rx);
   const legend = rows.some((r) => r.isMine) ? viewerLegend(ownerNm) : '';
-  const out = [envelope(view), head, legend].filter(Boolean).join('\n');
+  const out = [envelope(view, ctx), head, legend].filter(Boolean).join('\n');
   return `${out}\n${lines.join('\n') || '(no messages)'}`;
 }
 
@@ -401,7 +424,11 @@ export const readConversationTool: QueryTool = {
 // read_thread — read ONE channel reply-chain in full. `thread` accepts the m:<id> of the chain's
 // root OR of any reply in it (resolves to the chain either way); a reply id centers + marks that
 // message. Pages a very long chain backward with the returned `more: before m:<id>` cursor.
-export function readThread(view: View, args: ReadThreadArgs = {} as ReadThreadArgs): string {
+export function readThread(
+  view: View,
+  args: ReadThreadArgs = {} as ReadThreadArgs,
+  ctx?: RenderCtx,
+): string {
   if (!args.conversation) return 'error: conversation (handle or title substring) is required';
   if (!args.thread) return 'error: thread (the m:… id of the chain root or any reply) is required';
   const resolved = resolveConversationArg(view, String(args.conversation));
@@ -409,7 +436,7 @@ export function readThread(view: View, args: ReadThreadArgs = {} as ReadThreadAr
   const convId = resolved.id;
   const conv = view.conversations.get(convId)!;
   if (conv.kind !== 'channel')
-    return `${envelope(view)}\nread_thread is for channel reply-chains — this conversation is a ${conv.kind}; use read_conversation instead`;
+    return `${envelope(view, ctx)}\nread_thread is for channel reply-chains — this conversation is a ${conv.kind}; use read_conversation instead`;
   const ownerNm = ownerDisplayName(view);
   const rx: ReactionCtx = {
     view,
@@ -420,7 +447,7 @@ export function readThread(view: View, args: ReadThreadArgs = {} as ReadThreadAr
   const msg = view.messages.get(convId, givenId);
   const rootId = msg ? String(msg.rootId) : givenId; // uncached root → treat the given id as the root
   const hitId = msg && String(msg.id) !== rootId ? givenId : undefined; // a reply → center + mark it
-  return renderThreadView(view, conv, convId, rootId, args, ownerNm, rx, hitId);
+  return renderThreadView(view, conv, convId, rootId, args, ownerNm, ctx, rx, hitId);
 }
 
 export const readThreadTool: QueryTool = {

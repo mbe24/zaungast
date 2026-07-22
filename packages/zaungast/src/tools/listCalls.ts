@@ -1,7 +1,7 @@
 import type { RecordingLink } from 'libzaungast';
 import type { ListCallsArgs } from '../schemas.js';
 import { listCallsShape } from '../schemas.js';
-import type { QueryTool } from './types.js';
+import type { QueryTool, RenderCtx } from './types.js';
 import type { View } from './shared.js';
 import { HISTORY_NOTE, badTime, envelope, fmtTs, pad, parseTime } from './shared.js';
 
@@ -27,14 +27,14 @@ function renderRecordingPivot(view: View, link: RecordingLink | null): string {
 
 // list_calls = render(calls.list(...)). Library resolves + filters + limits the rows; this
 // renderer owns arg validation and the arrow/tail/tags/pivot layout.
-export function listCalls(view: View, args: ListCallsArgs = {}): string {
-  const bt = badTime(args, ['since', 'until']);
+export function listCalls(view: View, args: ListCallsArgs = {}, ctx?: RenderCtx): string {
+  const bt = badTime(args, ['since', 'until'], ctx);
   if (bt) return bt;
   const rows = view.calls.list({
     direction: args.direction,
     missed: args.missed,
-    sinceTs: parseTime(args.since),
-    untilTs: parseTime(args.until),
+    sinceTs: parseTime(args.since, ctx),
+    untilTs: parseTime(args.until, ctx),
     participant: args.participant,
     limit: args.limit,
   });
@@ -49,9 +49,9 @@ export function listCalls(view: View, args: ListCallsArgs = {}): string {
       (r.spamLevel && !/^none$/i.test(r.spamLevel) ? ' [spam?]' : '') +
       (!r.isCurrentUserPart ? ' [not-you]' : '');
     const pivot = renderRecordingPivot(view, r.recordingLink);
-    return `${fmtTs(r.startTs)} ${arrow} ${r.label} · ${tail}${tags}${pivot}`;
+    return `${fmtTs(r.startTs, ctx)} ${arrow} ${r.label} · ${tail}${tags}${pivot}`;
   });
-  const head = envelope(view, `${rows.length} calls`);
+  const head = envelope(view, ctx, `${rows.length} calls`);
   return `${head}\n${lines.join('\n') || '(no calls)'}`;
 }
 

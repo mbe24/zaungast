@@ -2,20 +2,19 @@ import { htmlToText } from 'libzaungast';
 import type { CalendarEvent, Attendee } from 'libzaungast';
 import type { ListEventsArgs } from '../schemas.js';
 import { listEventsShape } from '../schemas.js';
-import type { QueryTool } from './types.js';
+import type { QueryTool, RenderCtx } from './types.js';
 import type { View } from './shared.js';
-import { HISTORY_NOTE, badTime, clip, envelope, fmtTs, pad, parseTime } from './shared.js';
+import { HISTORY_NOTE, badTime, clip, envelope, fmtHm, fmtTs, parseTime } from './shared.js';
 
-// `07-16 10:00` — same MM-DD HH:mm shape as fmtTs but WITHOUT the year prefix (a time range's
-// second half never needs one) and without the seconds; used for the `–HH:mm` end half below.
-function hm(ts: number): string {
-  const d = new Date(ts);
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-function eventTimeRange(startTs: number, endTs: number, isAllDay: boolean): string {
-  if (isAllDay) return `${fmtTs(startTs).split(' ')[0]} (all day)`;
-  const startLabel = fmtTs(startTs);
-  return endTs > startTs ? `${startLabel}–${hm(endTs)}` : startLabel;
+function eventTimeRange(
+  startTs: number,
+  endTs: number,
+  isAllDay: boolean,
+  ctx?: RenderCtx,
+): string {
+  if (isAllDay) return `${fmtTs(startTs, ctx).split(' ')[0]} (all day)`;
+  const startLabel = fmtTs(startTs, ctx);
+  return endTs > startTs ? `${startLabel}–${fmtHm(endTs, ctx)}` : startLabel;
 }
 
 // Cap attendees exactly like reactions: total + accepted tally, plus ≤3 names + `+K` overflow —
@@ -39,12 +38,12 @@ function elideUrlsToHostnames(text: string): string {
 }
 
 // One event row, fully rendered (subject/org/attendees/response/chat-pivot/tags).
-function renderEventLine(view: View, r: CalendarEvent): string {
+function renderEventLine(view: View, r: CalendarEvent, ctx?: RenderCtx): string {
   const tags =
     (r.isCancelled ? ' [cancelled]' : '') +
     (r.isConfidential ? ' [confidential]' : '') +
     (r.hasAttachment ? ' [attachment]' : '');
-  const timeRange = eventTimeRange(r.startTs, r.endTs, !!r.isAllDay);
+  const timeRange = eventTimeRange(r.startTs, r.endTs, !!r.isAllDay, ctx);
   const org = r.organizerName ? `org: ${r.organizerName}` : 'org: (unknown)';
   const attendees = renderAttendees(r.attendees);
   const you = r.myResponse ? `you: ${r.myResponse}` : '';
@@ -59,7 +58,7 @@ function renderEventLine(view: View, r: CalendarEvent): string {
 
 // Recurrence run-collapse: rows sharing a series_id, in the window, beyond the first 2 collapse
 // to one summary line (the chat handle prints once — on the fully-rendered first occurrence).
-function renderEventGroups(view: View, rows: CalendarEvent[]): string[] {
+function renderEventGroups(view: View, rows: CalendarEvent[], ctx?: RenderCtx): string[] {
   // Group by series_id, preserving each row's relative chronological position (rows arrive
   // pre-sorted by start_ts asc, so a group's array is automatically in series order too).
   const bySeries = new Map<string, CalendarEvent[]>();
@@ -78,26 +77,26 @@ function renderEventGroups(view: View, rows: CalendarEvent[]): string[] {
       if (group.length > 2) {
         if (collapsedHandled.has(r.seriesId)) continue; // already summarized
         collapsedHandled.add(r.seriesId);
-        lines.push(renderEventLine(view, r));
+        lines.push(renderEventLine(view, r, ctx));
         const rest = group.length - 1;
         const next = group[1];
         lines.push(
-          `  ↻ ${r.subject || '(no subject)'} ×${rest} more (next ${fmtTs(next.startTs)})`,
+          `  ↻ ${r.subject || '(no subject)'} ×${rest} more (next ${fmtTs(next.startTs, ctx)})`,
         );
         continue;
       }
     }
-    lines.push(renderEventLine(view, r));
+    lines.push(renderEventLine(view, r, ctx));
   }
   return lines;
 }
 
-export function listEvents(view: View, args: ListEventsArgs = {}): string {
-  const bt = badTime(args, ['since', 'until']);
+export function listEvents(view: View, args: ListEventsArgs = {}, ctx?: RenderCtx): string {
+  const bt = badTime(args, ['since', 'until'], ctx);
   if (bt) return bt;
-  const now = Date.now();
-  const sinceArg = parseTime(args.since);
-  const untilArg = parseTime(args.until);
+  const now = ctx?.now ?? Date.now();
+  const sinceArg = parseTime(args.since, ctx);
+  const untilArg = parseTime(args.until, ctx);
   const noWindowGiven = sinceArg == null && untilArg == null;
   // Forward default window: today..+7d — a calendar tool defaults to what's COMING UP, unlike
   // messages tools which default to recent history. (Window policy stays MCP-side.)
@@ -123,7 +122,7 @@ export function listEvents(view: View, args: ListEventsArgs = {}): string {
     const maxStart = view.events.maxStart();
     if (winUntil > maxStart)
       notes.push(
-        `note: window extends past the newest cached occurrence (${fmtTs(maxStart)}) — the cache only holds materialized occurrences; recurring events further out may be under-reported`,
+        `note: window extends past the newest cached occurrence (${fmtTs(maxStart, ctx)}) — the cache only holds materialized occurrences; recurring events further out may be under-reported`,
       );
   }
 
@@ -143,8 +142,8 @@ export function listEvents(view: View, args: ListEventsArgs = {}): string {
     }
   }
 
-  const lines = renderEventGroups(view, rows);
-  const head = [envelope(view, `${rows.length} events`), ...notes].filter(Boolean).join('\n');
+  const lines = renderEventGroups(view, rows, ctx);
+  const head = [envelope(view, ctx, `${rows.length} events`), ...notes].filter(Boolean).join('\n');
   return `${head}\n${(lines.join('\n') || '(no events)') + bodyBlock}`;
 }
 
