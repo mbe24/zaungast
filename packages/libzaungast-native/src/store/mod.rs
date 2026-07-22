@@ -1,5 +1,5 @@
 //! The SQLite store writer — port of ingest.ts's apply* + store.ts. Builds a ChatStore (rusqlite)
-//! from a snapshot + mapping and writes it to a file end-to-end (the seam-A pipeline), plus the
+//! from a snapshot + mapping and writes it to a file end-to-end (the native ingest-to-file pipeline), plus the
 //! incremental refresh. Split into: `convert` (pure Ssv/JS-coercion/transform/time helpers), `extract`
 //! (row extraction + insertion + Handles), `fts` (FTS5 refresh), `refresh` (incremental delta apply +
 //! the file `_meta` contract), and this `mod` (orchestration: build_store/populate/ingest_to_file +
@@ -78,7 +78,7 @@ fn populate(conn: &Connection, snap: &Snapshot, mapping: &Value) -> (Option<Stri
     let self_mri = vote_self_mri(&msgs);
     let mut handles = Handles::new();
 
-    // R1 write-tuning: ONE transaction spans apply + recompute + FTS (was a txn around apply only, then
+    // Single-transaction write tuning: ONE transaction spans apply + recompute + FTS (was a txn around apply only, then
     // recompute/FTS auto-committing per statement). On the file path (ingest_to_file) this, plus
     // journal_mode=OFF/synchronous=OFF, collapses the fsync-per-commit cost. Byte output is unchanged —
     // recompute/FTS read their own uncommitted writes within the txn, the same rows as before.
@@ -111,7 +111,7 @@ fn populate(conn: &Connection, snap: &Snapshot, mapping: &Value) -> (Option<Stri
     )
 }
 
-/// The full seam-A pipeline: read the leveldb dir, fingerprint it, select among the caller's bundled
+/// The full native ingest-to-file pipeline: read the leveldb dir, fingerprint it, select among the caller's bundled
 /// mappings, and write the ChatStore to `dest_path` (overwriting any prior file). `schema` and
 /// `mappings_json` come from the TS package (single-source schema.sql + bundled mapping JSONs), so
 /// Rust does the expensive read/decode/build end-to-end and TS opens the result read-only. Returns
@@ -122,7 +122,7 @@ pub fn ingest_to_file(
     schema: &str,
     mappings_json: &[String],
 ) -> Result<IngestOutcome, String> {
-    // R3: source-file signature AS OF the read (before load_snapshot), stored in _meta so a later
+    // No-op-refresh short-circuit: source-file signature AS OF the read (before load_snapshot), stored in _meta so a later
     // refresh can short-circuit a no-op tick without re-reading. Fail-open (empty on error).
     let source_sig = crate::idb::source_signature(dir).unwrap_or_default();
     let snap = load_snapshot(dir).map_err(|e| format!("load_snapshot: {e}"))?;
@@ -136,7 +136,7 @@ pub fn ingest_to_file(
     // A fresh full rebuild: never open onto a stale file (would leave rows from a prior schema).
     let _ = std::fs::remove_file(dest_path);
     let conn = Connection::open(dest_path).map_err(|e| format!("open {dest_path}: {e}"))?;
-    // R1 write-tuning: this file is a throwaway full rebuild (removed + rebuilt from leveldb on any
+    // Single-transaction write tuning: this file is a throwaway full rebuild (removed + rebuilt from leveldb on any
     // failure), so durability is irrelevant — skip the rollback journal + per-commit fsync. This is the
     // bulk of the ~2.3s file-write cost. SAFE ONLY because the file is disposable; NEVER set these on a
     // live-store refresh path (a crash there would corrupt the store TS is reading).

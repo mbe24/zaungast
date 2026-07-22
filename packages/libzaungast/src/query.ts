@@ -1,8 +1,8 @@
-// Library-side structured query layer (the future libzaungast public data API — B1 of the
-// format-api-reshape / library-extraction plan). These functions return typed, engine-agnostic
+// Library-side structured query layer (the future libzaungast public data API, part of the
+// library-extraction effort). These functions return typed, engine-agnostic
 // rows over the in-memory ChatStore; the MCP layer (tools.ts) renders them into token-economical
 // text. The split is being done incrementally, one tool at a time, each proven byte-identical by
-// the G2 MCP-output golden. Nothing here knows about MCP, agents, or token budgets.
+// the MCP-output golden. Nothing here knows about MCP, agents, or token budgets.
 import { isBotMri, type ChatStore } from './ingest/store.js';
 import { makeExtractor } from './util/topics.js';
 import { byCodeUnit } from './util/sort.js';
@@ -943,7 +943,7 @@ export interface TopicsScopeOptions {
 // disclosure note), `minSenders` (person/1:1 scope relaxes the ≥2-sender anti-spam gate to ≥1),
 // `excludeWords` (plain exclude words → phrase-extractor stopwords), and `scopeConvIds` (resolved
 // ids when scope=conversation:, for the ambiguity note). A conversation/person scope matching
-// NOTHING is a miss, never a silent fall-through to whole-DB topics (P4).
+// NOTHING is a miss, never a silent fall-through to whole-DB topics.
 export type TopicsScopeResult =
   | { ok: false; reason: QueryMiss }
   | {

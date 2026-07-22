@@ -1,4 +1,4 @@
-// Native-triples consistency guard (T5). The manual native.yml matrix builds a prebuilt .node per
+// Native-triples consistency guard. The manual native.yml matrix builds a prebuilt .node per
 // target; `napi build` + the generated CJS addon loader cover exactly package.json's napi.triples. If
 // a native.yml leg isn't in napi.triples, that platform builds nothing and the generated loader has no
 // branch for it — a silent coverage gap. This asserts native.yml's matrix targets ⊆ napi.triples.

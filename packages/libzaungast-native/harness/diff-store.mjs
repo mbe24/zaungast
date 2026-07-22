@@ -1,5 +1,5 @@
 // Differential harness — store layer. Runs the TS full ingest, dumps a per-table content digest, and
-// (with --rust) diffs against Rust's `diffstore`. This is the seam-A gate: the Rust-built ChatStore
+// (with --rust) diffs against Rust's `diffstore`. This is the native-vs-TS store gate: the Rust-built ChatStore
 // must equal a TS full rebuild, table for table. Needs --experimental-sqlite (TS ingest uses node:sqlite).
 //   node --experimental-sqlite .../diff-store.mjs <leveldb-dir> --mapping <m.json> [--rust <report>]
 import fs from 'node:fs';

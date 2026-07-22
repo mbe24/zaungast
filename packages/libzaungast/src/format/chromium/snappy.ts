@@ -10,7 +10,7 @@
 
 // `scratch`, when given and large enough, receives the output (grow-only reuse across calls for
 // hot per-value decompression — see indexeddb.ts::decodeValue). Callers whose output must persist
-// (sstable block buffers, A2) pass no scratch and get a fresh buffer.
+// (sstable block buffers) pass no scratch and get a fresh buffer.
 export function uncompress(input: Buffer, scratch?: Buffer): Buffer {
   let ip = 0;
   // uncompressed length (varint)

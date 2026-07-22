@@ -1,6 +1,6 @@
 # libzaungast-native (WIP)
 
-Optional **Rust accelerator** for `libzaungast` (plan: `plan/rust-core-plan.md`, seam A — Rust reads
+Optional **Rust accelerator** for `libzaungast` (the native ingest-to-file path — Rust reads
 the Teams leveldb dir and writes the ChatStore SQLite file; the TS `libzaungast` opens it read-only).
 `libzaungast` works fully **without** this package (pure TS, zero deps); installing this only makes
 ingest faster. End users get **prebuilt** per-platform binaries — no Rust, no cargo, no Docker.

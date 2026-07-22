@@ -89,7 +89,7 @@ export interface StoreBucket {
   dbName: string | null; // resolved by the loader from the db-name catalog rows
   storeName: string | null;
   records: SnapshotRecord[]; // dedup-insertion order (fingerprint sampling depends on it)
-  maxSeq: number; // high-water over this store's live records (see api-design §2.6)
+  maxSeq: number; // high-water over this store's live records
 }
 
 export interface Snapshot {

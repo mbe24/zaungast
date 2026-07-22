@@ -9,7 +9,7 @@ import type { RawTool } from './types.js';
 //
 // The proposal ALGORITHM (structural walk, db-name normalization, candidate matching, scoring,
 // proposal assembly) is library-side in `proposeSchema` (schema/domain knowledge — see
-// format/propose.ts, Q1). This module is the MCP PRESENTATION: it renders the proposal as text.
+// format/propose.ts). This module is the MCP PRESENTATION: it renders the proposal as text.
 
 // Fields any proposal might reference are pinned to the FRONT of the printed list so a
 // truncation can never hide exactly the paths the proposal maps (that's what made the old

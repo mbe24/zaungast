@@ -1,4 +1,4 @@
-// Dependency-direction guard (B0): libzaungast must NEVER import from zaungast (the MCP). The MCP
+// Dependency-direction guard: libzaungast must NEVER import from zaungast (the MCP). The MCP
 // depends on the library, never the reverse. Fails loudly if any lib source references a zaungast
 // module by package name or by a relative path escaping into packages/zaungast.
 import fs from 'node:fs';

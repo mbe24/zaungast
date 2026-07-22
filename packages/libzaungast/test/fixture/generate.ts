@@ -185,8 +185,8 @@ function buildEventRecord(e: EventDef): Record<string, unknown> {
   };
 }
 
-// Inverse of the 'call' mapping entity. `conversationId` (48:calllogs, deliberately unmapped —
-// see the spec's privacy rule) is intentionally NOT emitted here: this fixture only ever writes
+// Inverse of the 'call' mapping entity. `conversationId` (48:calllogs, deliberately unmapped
+// for privacy) is intentionally NOT emitted here: this fixture only ever writes
 // fields the reader is actually meant to touch.
 function buildCallRecord(c: CallDef): Record<string, unknown> {
   return {

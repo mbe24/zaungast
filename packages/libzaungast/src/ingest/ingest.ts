@@ -108,7 +108,7 @@ function applyMessages(store: ChatStore, msgRows: any[], selfMri: string | null)
 
 // Extract the profiles name-source rows (mri → display name) from the snapshot. Split from
 // applyProfiles so a full ingest can extract every entity's rows BEFORE building the store, then
-// drop the snapshot (perf 1b — see ingest()).
+// drop the snapshot (the extract-then-drop-snapshot ordering — see ingest()).
 function buildProfileRows(snap: Snapshot, mapping: any) {
   return extractEntity(snap, mapping, 'profile').records.map((r: any) => ({
     mri: String(r.mri ?? ''),
@@ -155,15 +155,15 @@ function compactAttendees(attendees: unknown): string | null {
 }
 
 // Build the events table rows (calendar) from the snapshot. Split from applyEvents for the
-// extract-then-drop-snapshot ordering (perf 1b). `RecurringMaster` rows are series templates,
+// extract-then-drop-snapshot ordering. `RecurringMaster` rows are series templates,
 // never rendered as an event, so they're dropped here rather than inserted and filtered later.
 function buildEventRows(snap: Snapshot, mapping: any) {
   const rows = extractEntity(snap, mapping, 'event').records;
   const out = [];
   for (const r of rows as any[]) {
     if (r.eventType === 'RecurringMaster') continue;
-    // objectId verified unique+present across all 407 real rows (0 missing, 0 duplicates) — see
-    // the spec's ingest report. Per-row fallback to the leveldb record key (__key, the same
+    // objectId verified unique+present across all 407 real rows (0 missing, 0 duplicates).
+    // Per-row fallback to the leveldb record key (__key, the same
     // mechanism extractEntity attaches for messages) stays as defensive belt-and-braces in case a
     // future/odd row ever lacks one.
     const id = r.id ? String(r.id) : String(r.__key);
@@ -228,9 +228,9 @@ function recordingLinkOf(r: any): string | null {
 }
 
 // Build the calls table rows (call-history) from the snapshot. Split from applyCalls for the
-// extract-then-drop-snapshot ordering (perf 1b).
+// extract-then-drop-snapshot ordering.
 // `is_missed` maps ONLY callState==='Missed' (the real data's other observed value, 'Declined',
-// is a deliberate reject — not a miss — see the ingest report for the full enumeration).
+// is a deliberate reject — not a miss).
 function buildCallRows(snap: Snapshot, mapping: any) {
   const rows = extractEntity(snap, mapping, 'call').records;
   const out = [];
@@ -343,7 +343,7 @@ type PhaseHook = (phase: 'extract' | 'apply' | 'recompute' | 'fts', ms: number) 
 // slices) becomes unreachable as this frame unwinds, BEFORE ingest() builds the SQLite store.
 // Extracted rows carry only decoded values + a latin1 __key string (resolver.ts:141), never Buffer
 // slices, so nothing returned here pins the snapshot. This keeps the decode-graph peak and the
-// growing-store peak from coexisting → lower peak RSS (perf 1b). Byte-identical: extraction order
+// growing-store peak from coexisting → lower peak RSS. Byte-identical: extraction order
 // doesn't affect any inserted value, selfMri, or the fingerprint (computed here, unchanged).
 function extractForFullIngest(
   dir: string,
@@ -417,7 +417,7 @@ export function openStoreFile(
 // an earlier sequence, so a following applyIncremental can be proven to reach a full rebuild.
 export function ingest(dir: string, opts: { seqCap?: number; onPhase?: PhaseHook } = {}): Ingested {
   // Extract every entity's rows first; the helper's frame drops the Snapshot before we build the
-  // store below, so the two memory peaks never coexist (perf 1b).
+  // store below, so the two memory peaks never coexist.
   const ex = extractForFullIngest(dir, opts);
   if (!ex.mapping) {
     const store = new ChatStore();
@@ -484,12 +484,12 @@ export function applyIncremental(
 ): { needFullRebuild: boolean; newMaxSeq: number; skipped: boolean } {
   const snap = typeof source === 'string' ? loadSnapshot(source) : source;
   const { maxSeq: newMax, lossy } = snap;
-  // HOLE 1 fix: a lossy load (a table/log couldn't be fully read) makes chains spuriously
+  // Lossy-load guard: a lossy load (a table/log couldn't be fully read) makes chains spuriously
   // absent from `live`, which the deletion reconcile would treat as deletions. Refuse to apply
   // — serve the current store; a clean read next refresh will catch up.
   if (lossy) return { needFullRebuild: false, newMaxSeq: state.maxSeq, skipped: true };
 
-  // H3/H5 tripwire: if OUR mapped message/conversation stores resolve to different (dbId:osId)
+  // Schema tripwire: if OUR mapped message/conversation stores resolve to different (dbId:osId)
   // pairs than at full ingest, the schema changed under us — a store migrated to a new osId, or
   // a new mapped database appeared → full rebuild. Recomputed from live metadata each refresh.
   // Irrelevant store churn (Teams creates messaging-slice / consumption stores dynamically) is
@@ -499,7 +499,7 @@ export function applyIncremental(
   if (!setEq(msgT, state.msgTargets) || !setEq(convT, state.convTargets))
     return { needFullRebuild: true, newMaxSeq: state.maxSeq, skipped: false };
 
-  // A6 no-op fast-exit (after the schema tripwire, so a genuine migration still forces a rebuild):
+  // No-op fast-exit (after the schema tripwire, so a genuine migration still forces a rebuild):
   // `maxSeq` counts tombstones too, so newMax === state.maxSeq means NO writes AND no deletions
   // have landed since the last apply — the store already equals a full rebuild. Skip the whole
   // apply (extract + whole-store replace + recomputeDerived + refreshFts), the bulk of the ~1s
@@ -526,13 +526,13 @@ export function applyIncremental(
     }
   }
 
-  // HOLE 2 fix: on any error inside the transaction, ROLLBACK and demand a full rebuild rather
+  // Rollback-on-error guard: on any error inside the transaction, ROLLBACK and demand a full rebuild rather
   // than leave a half-mutated store (which the Session's catch would otherwise serve forever).
   try {
     store.db.exec('BEGIN');
     // deletions first (whole-chain gone), then delete changed chains before re-inserting them.
-    // Accumulate every deleted + re-inserted message id → `ftsIds`, for a DELTA FTS refresh (perf
-    // 2) instead of a full 11.8k-row rebuild. The union provably equals a full rebuild: it covers
+    // Accumulate every deleted + re-inserted message id → `ftsIds`, for a DELTA FTS refresh
+    // instead of a full 11.8k-row rebuild. The union provably equals a full rebuild: it covers
     // every id whose messages-table row changed (removed, re-inserted, or both); any message left
     // untouched keeps its existing — and still correct — FTS row.
     const ftsIds = new Set<string>(store.deleteMessagesForMissingChains(liveChainKeys));
@@ -566,7 +566,7 @@ export function applyIncremental(
     // messages but stale aggregates) also returns needFullRebuild, so the Session rebuilds a
     // clean store rather than serving inconsistent aggregates.
     store.recomputeDerived(state.selfMri);
-    store.refreshFts(ftsIds); // delta (perf 2): deleted ∪ re-inserted ids, provably == full rebuild
+    store.refreshFts(ftsIds); // delta: deleted ∪ re-inserted ids, provably == full rebuild
   } catch (e) {
     try {
       store.db.exec('ROLLBACK');

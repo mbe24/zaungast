@@ -94,7 +94,7 @@ struct BlockRead {
 /// Read a block's bytes: 5-byte trailer = 1 compression byte + 4-byte masked CRC. Type 0 = raw,
 /// type 1 = snappy. `None` on any bounds/decompress failure or unsupported type (→ caller lossy).
 /// Returns the block as `Bytes` so `parse_block` can hand out zero-copy refcounted VALUE views into
-/// it (★c) — snappy adopts the decompressed Vec for free; a raw block is copied once (rare).
+/// it (zero-copy, Bytes-backed — no per-record value copy) — snappy adopts the decompressed Vec for free; a raw block is copied once (rare).
 fn read_block(file: &[u8], offset: usize, size: usize, verify_crc: bool) -> Option<BlockRead> {
     let comp = *file.get(offset + size)?;
     let crc_ok = if verify_crc {
@@ -115,7 +115,7 @@ fn read_block(file: &[u8], offset: usize, size: usize, verify_crc: bool) -> Opti
 
 /// Parse a data/index block's entries (restart-point prefix compression). `None` on corruption.
 /// `data` is the (owned) block; each VALUE is a `Bytes::slice` VIEW into it (zero-copy, refcounted),
-/// so the fold never re-copies value bytes (★c). Keys are rebuilt from the prefix-compression, so
+/// so the fold never re-copies value bytes (zero-copy, Bytes-backed). Keys are rebuilt from the prefix-compression, so
 /// they're freshly allocated then adopted by `Bytes::from` — but `prev_key` is kept as a `Bytes`
 /// refcount, not a re-clone, across the loop.
 fn parse_block(data: &Bytes) -> Option<Vec<(Bytes, Bytes)>> {
@@ -159,7 +159,7 @@ fn parse_block(data: &Bytes) -> Option<Vec<(Bytes, Bytes)>> {
 
 /// The result of reading a whole table: its (key, value) entries in table order, and whether any
 /// block was skipped (lossy). Entries are `Bytes` (refcounted views into the parsed blocks) so the
-/// dedup fold and the copy-reuse cache reuse them without re-copying (★c).
+/// dedup fold and the copy-reuse cache reuse them without re-copying (zero-copy, Bytes-backed).
 pub struct TableRead {
     pub entries: Vec<(Bytes, Bytes)>,
     pub lossy: bool,

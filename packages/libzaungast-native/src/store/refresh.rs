@@ -351,7 +351,7 @@ pub struct FileMeta {
     pub mapping_version: Option<String>,
     pub lossy: bool,
     pub state: RefreshState,
-    /// The leveldb source-file signature recorded when this file was written (R3 no-op gate). `None`
+    /// The leveldb source-file signature recorded when this file was written (no-op-refresh source-signature gate). `None`
     /// for a stale/v1 file (never trusted → full rebuild).
     pub source_sig: Option<String>,
 }
@@ -404,7 +404,7 @@ fn read_meta(conn: &Connection) -> Result<FileMeta, String> {
     .map_err(|e| format!("read _meta: {e}"))
 }
 
-/// Incremental seam-A entry (across FFI calls): copy the previous file to `new_path`, read its
+/// Incremental native ingest-to-file entry (across FFI calls): copy the previous file to `new_path`, read its
 /// `_meta` for the refresh floor + the same mapping (reused by mappingVersion), apply the delta up to
 /// the current sequence, and rewrite `_meta`. On a schema tripwire / stale file / lossy load it
 /// signals the caller to full-rebuild instead (need_full_rebuild) or serve-current (skipped). The
@@ -415,7 +415,7 @@ pub fn refresh_to_file(
     new_path: &str,
     mappings_json: &[String],
 ) -> Result<RefreshFileOutcome, String> {
-    // R3 no-op short-circuit: if the leveldb source files are byte-identical to when prev was written,
+    // No-op-refresh short-circuit: if the leveldb source files are byte-identical to when prev was written,
     // nothing landed → keep serving prev with NO copy and NO load_snapshot (returns `skipped`, which
     // the Session already treats as "keep current"). Open prev READ-ONLY (never mutate it — TS may hold
     // a handle). Fail-open: any error / empty sig / non-match falls through to the full refresh path.
@@ -494,12 +494,12 @@ pub fn refresh_to_file(
     Ok(out)
 }
 
-/// Copy-reuse incremental refresh (Axis B). Twin of `refresh_to_file`, but loads the snapshot via the
+/// Copy-reuse incremental refresh. Twin of `refresh_to_file`, but loads the snapshot via the
 /// cache-reusing loader (reuse immutable `.ldb` parses, re-read only the `.log`) instead of a full
 /// re-read. `cache` persists across calls (owned by the TS handle). On a compaction (a cached `.ldb`
 /// vanished) it returns `deferred` — nothing is written, and the caller falls back to the cacheless
 /// `refresh_to_file`, whose fresh full read reconciles any compaction-elided deletion. Everything else
-/// — R3 no-op short-circuit, schema tripwire, delta-apply, `_meta` rewrite — matches `refresh_to_file`.
+/// — no-op-refresh short-circuit, schema tripwire, delta-apply, `_meta` rewrite — matches `refresh_to_file`.
 /// The compaction/defer check + the prev meta read happen BEFORE any copy, so a defer/rebuild costs no
 /// file I/O. The previous file is never mutated (opened READ-ONLY) — TS swaps to `new_path` on success.
 pub fn reuse_refresh_to_file(
@@ -509,7 +509,7 @@ pub fn reuse_refresh_to_file(
     mappings_json: &[String],
     cache: &mut LdbCache,
 ) -> Result<RefreshFileOutcome, String> {
-    // R3 no-op short-circuit: unchanged source ⇒ keep serving prev, no copy/load. Same as refresh_to_file.
+    // No-op-refresh short-circuit: unchanged source ⇒ keep serving prev, no copy/load. Same as refresh_to_file.
     if let Ok(sig) = crate::idb::source_signature(dir) {
         if !sig.is_empty() {
             if let Ok(prev) =
@@ -670,7 +670,7 @@ mod composed_tests {
     //! Composed correctness of `reuse_refresh_to_file` on REAL data. Env-gated: runs only when
     //! `ZAUNGAST_TEST_DIR` points at a leveldb dir, otherwise it skips (so dep-free `cargo test`/CI
     //! stays green). `diffreuse` proves the reuse LOADER == full and `diffincr` proves `refresh_store`
-    //! == full; this closes the last gap — that their COMPOSITION in the FILE wrapper (R3 gate + defer
+    //! == full; this closes the last gap — that their COMPOSITION in the FILE wrapper (no-op-refresh gate + defer
     //! ordering + copy + delta-apply + `_meta` rewrite) is ALSO byte-identical to a full rebuild, for
     //! a cold AND a warm cache. Self-oracle (== a native full rebuild); no new TS oracle needed.
     use super::{compute_state, refresh_store, reuse_refresh_to_file, write_meta};
@@ -729,7 +729,7 @@ mod composed_tests {
 
         // "Previous" store as of cap = maxSeq/2, written to a FILE. VACUUM INTO copies the in-memory
         // build (incl. FTS) to a real file; write_meta then stamps the incremental floor + user_version
-        // with source_sig="" so R3's no-op gate never short-circuits (we WANT the delta path exercised).
+        // with source_sig="" so the no-op gate never short-circuits (we WANT the delta path exercised).
         let cap = full.max_seq / 2;
         let capped = load_snapshot_capped(&dir, cap).expect("load_snapshot_capped");
         let prev_path = std::env::temp_dir().join("zaungast-reuse-prev.db");
@@ -807,7 +807,7 @@ mod composed_tests {
     // A compaction (a cached `.ldb` vanishing) must make `reuse_refresh_to_file` DEFER: no file
     // written, so the Session falls back to the cacheless reparse (which reconciles the elided
     // deletion). Exercises the compacted → `defer()` early-out through the whole file wrapper — the
-    // pure-Rust half of Q6's mandatory compaction scenario (the live forced-compaction is a WSL leg).
+    // pure-Rust half of the mandatory compaction scenario (the live forced-compaction is a WSL leg).
     #[test]
     fn reuse_refresh_defers_on_compaction() {
         let Ok(src) = std::env::var("ZAUNGAST_TEST_DIR") else {
@@ -839,7 +839,7 @@ mod composed_tests {
         )
         .expect("no mapping matched M");
 
-        // Prev store as of cap, source_sig="" so R3 never short-circuits (the reuse load must run).
+        // Prev store as of cap, source_sig="" so the no-op gate never short-circuits (the reuse load must run).
         let cap = full.max_seq / 2;
         let capped = load_snapshot_capped(&m, cap).expect("capped");
         let prev_path = std::env::temp_dir().join("zaungast-reuse-compact-prev.db");

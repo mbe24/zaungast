@@ -153,7 +153,7 @@ export class ChatStore {
     reactions?: string | null;
     rootId?: string | null;
   }) {
-    // H3: the conflict path must update is_system/is_mine/kind too — soft-deletes are edits
+    // The conflict path must update is_system/is_mine/kind too — soft-deletes are edits
     // that clear content and flip these flags. Version guard keeps newest-wins. Reactions ride the
     // same record (a reaction change rewrites the reply-chain record with a fresh seq), so the
     // >= guard lets an equal-version rewrite refresh them.
@@ -354,7 +354,7 @@ export class ChatStore {
     for (const r of missing) insC.run(r.conv_id, this.handleFor('c', r.conv_id), r.kind);
 
     // people FIRST — its deterministic name (most-recent message, ts,id tiebreak) is the
-    // canonical display name, which participant_names then reuses (R6: avoids SQLite's
+    // canonical display name, which participant_names then reuses (avoids SQLite's
     // nondeterministic bare-column-with-max pick on same-sender equal-ts different names).
     this.db.exec('delete from people');
     const ppl = this.db

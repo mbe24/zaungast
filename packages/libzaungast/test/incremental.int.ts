@@ -98,7 +98,7 @@ function ftsConsistent(store: ChatStore): boolean {
     .get() as any;
   return (a?.g ?? null) === (b?.g ?? null);
 }
-// Full FTS CONTENT dump (not just membership) — so a delta FTS refresh (perf 2) that left stale
+// Full FTS CONTENT dump (not just membership) — so a delta FTS refresh that left stale
 // content on a changed id, or failed to drop a deleted id, is caught against a full rebuild.
 function ftsDump(store: ChatStore): string {
   return JSON.stringify(
@@ -382,7 +382,7 @@ console.log('\n=== I. store-level: edit + soft-delete update flags and FTS (Hole
         .get() as any
     ).n === 1,
   );
-  // soft-delete: content cleared, is_system flips (H3 — SET must update is_system)
+  // soft-delete: content cleared, is_system flips (SET must update is_system)
   st.insertMessage({ ...base, id: '1', version: 3, isSystem: 1, content: '' });
   st.refreshFts(null);
   ok(

@@ -304,7 +304,7 @@ console.log('\n=== H. Session copy-reuse multi-step (add then delete) == reparse
 }
 
 console.log(
-  '\n=== I. H1 end-to-end: compaction (merge .ldb) → copy-reuse store == reparse, no resurrection ===',
+  '\n=== I. end-to-end: compaction (merge .ldb) → copy-reuse store == reparse, no resurrection ===',
 );
 {
   const { Session } = await import('../src/session.js');

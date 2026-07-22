@@ -1,7 +1,7 @@
 // Engine selection for the MCP server. libzaungast ships PURE (its built-in JS engine only); the
 // optional native accelerator (libzaungast-native) is an OPTIONAL dependency. This is the single
 // place that decides which IngestEngine to inject into openStore / openLiveStore, honoring the
-// ZAUNGAST_ENGINE env var — libzaungast never chooses or falls back on its own (T4/T5 split):
+// ZAUNGAST_ENGINE env var — libzaungast never chooses or falls back on its own (the client/engine split):
 //   js (default)  — the built-in JS engine (inject nothing; the library uses createJsEngine()).
 //   native        — REQUIRE the native engine; if it's absent or fails the conformance handshake,
 //                   fail LOUDLY (the operator explicitly asked for native — don't silently downgrade).

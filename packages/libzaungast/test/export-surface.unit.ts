@@ -1,4 +1,4 @@
-// Public-surface guard (data-free, CI). T4 split the package into a narrow CLIENT API ('.') and an
+// Public-surface guard (data-free, CI). The package is split into a narrow CLIENT API ('.') and an
 // engine-author SPI ('libzaungast/engine-spi'), with everything else INTERNAL (unreachable through the
 // package exports map). This test pins the boundary so it can't silently drift:
 //   1. '.' runtime exports are EXACTLY the client surface — no engine/ingest internals leaked in.

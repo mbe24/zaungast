@@ -1,7 +1,7 @@
-// Smoke test for the libzaungast public high-level data facade (store-api.ts, grown in B3a). Builds
-// the fully-synthetic .ldb+.log fixture (same generator the G1 golden uses — CI-safe, PII-free) and
+// Smoke test for the libzaungast public high-level data facade (store-api.ts). Builds
+// the fully-synthetic .ldb+.log fixture (same generator the fixture golden uses — CI-safe, PII-free) and
 // drives every entry point + namespace once to prove the facade wires through to the query layer,
-// including the B3a additions (point lookups, stats/threadSummaries, nameFor/maxStart, the topics
+// including the facade additions (point lookups, stats/threadSummaries, nameFor/maxStart, the topics
 // envelope, tryOpen's honest arms, and the live handle's pinned `current()` reading).
 //
 // Run:
@@ -123,13 +123,13 @@ try {
     `${summaries.length}`,
   );
 
-  // §C: the read_messages `older:` keyset cursor (res.nextOlder) — the one real behavior delta from
-  // the B3 rewire, validated on real data but not in CI until now. Pins: (a) a full page mid-history
+  // The read_messages `older:` keyset cursor (res.nextOlder) — the one real behavior delta from
+  // the read-path rewire, validated on real data but not in CI until now. Pins: (a) a full page mid-history
   // offers a cursor whose next page continues with no overlap/gap and paging reconstructs the whole
   // history; (b) a page that fills exactly at the cache horizon still emits a cursor, and that cursor
   // yields an empty page (an acceptable dead cursor — no crash, no further cursor); (c) an `around:`
   // read is a centered window, not a paged read, so it emits no cursor.
-  console.log('\n=== messages.inConversation cursor paging (§C) ===');
+  console.log('\n=== messages.inConversation cursor paging ===');
   {
     // cursor paging is the FLAT-read behavior → pick the busiest flat conversation.
     const flat = store.conversations
@@ -140,7 +140,7 @@ try {
     const full = store.messages.inConversation(cid, { limit: 100000 });
     const N = full.ok ? full.rows.length : 0;
     ok(
-      `§C precondition: a flat conversation with ≥4 messages`,
+      `precondition: a flat conversation with ≥4 messages`,
       full.ok && N >= 4,
       `${flat?.kind} N=${N}`,
     );

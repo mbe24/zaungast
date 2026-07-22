@@ -45,7 +45,7 @@ export function loadBundledMappings(): Mapping[] {
 }
 
 // Raw JSON text of every bundled mapping — handed verbatim to the native engine, which does its own
-// fingerprint + selectMapping (seam A: the expensive read lives in Rust, so TS can't pre-select).
+// fingerprint + selectMapping (the native accelerator boundary: the expensive read lives in Rust, so TS can't pre-select).
 export function loadBundledMappingTexts(): string[] {
   return bundledMappingFiles().map((f) => fs.readFileSync(path.join(VERSIONS_DIR, f), 'utf8'));
 }

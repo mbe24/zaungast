@@ -4,7 +4,7 @@
 // Teams cache (no PII). Exits non-zero on any failure.
 //
 // This is a LIBRARY-internals test (it lives in libzaungast so it can reach the format primitives
-// directly). The MCP tool-surface / rendering is covered elsewhere: the byte-identical G2 golden
+// directly). The MCP tool-surface / rendering is covered elsewhere: the byte-identical MCP-output golden
 // (packages/zaungast/test/golden/mcp.ts) and the facade smoke test (test/facade.ts).
 //
 // Run: node --experimental-sqlite --import tsx test/fixture-verify.ts  (or `npm run test:fixture`)

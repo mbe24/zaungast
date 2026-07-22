@@ -1,4 +1,4 @@
-// Native copy-reuse (Axis B) RUNTIME test — the piece the pure-Rust harness can't reach: the actual
+// Native copy-reuse RUNTIME test — the piece the pure-Rust harness can't reach: the actual
 // compiled `.node` exercising the `External<LdbCache>` cache across FFI calls, `reuseRefresh` returning
 // the right outcome, and the Session's copy-reuse `swapped` branch. The Rust gates already prove the
 // data path byte-identical (diffreuse: loader == full; diffincr: apply == full; composed_tests:
@@ -59,7 +59,7 @@ const countsEq = (a: Counts, b: Counts) =>
   a.conversations === b.conversations && a.messages === b.messages && a.people === b.people;
 const kindOf = (r: RefreshResult | 'defer') => (r === 'defer' ? 'defer' : r.kind);
 
-console.log('\n=== native copy-reuse runtime (Axis B) ===');
+console.log('\n=== native copy-reuse runtime ===');
 const engineOrReason = createNativeEngine();
 const DIR = process.env.ZAUNGAST_TEST_DIR;
 if ('unavailable' in engineOrReason) {
@@ -97,11 +97,11 @@ if ('unavailable' in engineOrReason) {
           countsEq(res.next.meta.counts, truth.meta.counts),
           `${JSON.stringify(res.next.meta.counts)} vs ${JSON.stringify(truth.meta.counts)}`,
         );
-        // Second tick on the unchanged source: the External handle round-trips; the R3 no-op gate
+        // Second tick on the unchanged source: the External handle round-trips; the no-op-refresh gate
         // must short-circuit → skipped (accepting swapped here would tolerate a regressed no-op gate).
         const res2 = engine.reuseRefresh!(res.next, source);
         ok(
-          'second tick → skipped (R3 no-op, cache handle survived)',
+          'second tick → skipped (no-op gate, cache handle survived)',
           kindOf(res2) === 'skipped',
           kindOf(res2),
         );

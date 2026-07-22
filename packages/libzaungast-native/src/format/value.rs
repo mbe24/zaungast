@@ -47,7 +47,7 @@ pub type SsvResult = Result<Ssv, String>;
 struct Reader<'a> {
     buf: &'a [u8],
     pos: usize,
-    // R2: the receiver ref table holds each container's BYTE OFFSET (not a cloned value). A '^'
+    // Offset-based ref table: the receiver ref table holds each container's BYTE OFFSET (not a cloned value). A '^'
     // re-decodes from the offset rather than cloning a stored value — killing the per-record
     // clone-cascade that dominated allocation. The corpus is acyclic (a target is fully decoded before
     // it's referenced), so a re-decode always yields the equal value.
@@ -66,7 +66,7 @@ impl<'a> Reader<'a> {
             resolve_depth: 0,
         }
     }
-    // R2: reserve a container's receiver id on ENTRY, recording its byte offset. Skipped during a
+    // Offset-based ref table: reserve a container's receiver id on ENTRY, recording its byte offset. Skipped during a
     // back-ref re-decode (resolve_depth>0) so the id sequence matches the forward pass exactly.
     fn register(&mut self, tag_pos: usize) {
         if self.resolve_depth == 0 {
@@ -171,7 +171,7 @@ impl<'a> Reader<'a> {
     #[allow(clippy::match_same_arms)]
     fn value(&mut self) -> SsvResult {
         self.skip_padding();
-        let tag_pos = self.pos; // R2: the offset to re-decode this value from if it's a back-ref target
+        let tag_pos = self.pos; // the offset to re-decode this value from if it's a back-ref target
         let tag = *self.buf.get(self.pos).ok_or("value() past end")?;
         self.pos += 1;
         match tag {
@@ -226,7 +226,7 @@ impl<'a> Reader<'a> {
             0x27 => self.set(tag_pos),          // '\''
             0x52 => self.regexp(),              // 'R' (no receiver id)
             0x5e => {
-                // '^' object reference — R2: re-decode the target from its recorded byte offset (the ref
+                // '^' object reference — re-decode the target from its recorded byte offset (the ref
                 // table holds offsets, not cloned values). resolve_depth>0 makes that re-decode register
                 // no new ids (the id was assigned on the forward pass); the acyclic corpus guarantees
                 // the target is fully decoded before it's referenced. The depth cap fails a (absent)
@@ -605,7 +605,7 @@ pub fn deserialize(buf: &[u8], lenient: bool) -> SsvResult {
     match r.value() {
         Ok(v) => Ok(v),
         Err(e) => {
-            // lenient best-effort: recover the partially-decoded root. R2 stores offsets, not values, so
+            // lenient best-effort: recover the partially-decoded root. The ref table stores offsets, not values, so
             // re-decode the root from its offset (resolve_depth>0 ⇒ register no ids). Matches the old
             // behaviour (a completed root → Partial; a truncated root → Err). No production caller passes
             // lenient=true — kept for parity with the TS decoder's `__partial` path.

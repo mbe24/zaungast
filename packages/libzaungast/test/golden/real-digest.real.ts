@@ -1,4 +1,4 @@
-// G3 — real-data digest golden. High-coverage regression net over the REAL local Teams corpus,
+// Real-data digest golden. High-coverage regression net over the REAL local Teams corpus,
 // for the steps whose correctness only manifests at scale (view aliasing, the real fingerprint
 // hash + wrapper-less-sample quirk, scratch aliasing).
 //
@@ -6,7 +6,7 @@
 // sha256 of the canonicalized rows — never any message/person content. Hashes+counts are not PII.
 //
 // SKIP-IF-ABSENT: the real snapshot is local-only (gitignored `data/`), so on a machine without it
-// this test prints SKIP and exits 0. It gates locally, before merging A2/A5/A7.
+// this test prints SKIP and exits 0. It gates locally, before merging.
 //
 // Run:  node --experimental-sqlite --import tsx test/golden/real-digest.ts   [<leveldb-dir>]
 //       UPDATE_GOLDEN=1 node --experimental-sqlite --import tsx test/golden/real-digest.ts

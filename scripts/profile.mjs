@@ -30,7 +30,7 @@ import inspector from 'node:inspector';
 import { spawnSync } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 
-// Internals (ingest/Session — not on the public exports map post-B3) are reached via relative dist
+// Internals (ingest/Session — not on the public exports map) are reached via relative dist
 // paths: the same "in-repo tooling reaches its own internals directly" pattern the tests use. The
 // public data + format API comes through the narrow package entry points.
 import { ingest, applyIncremental } from '../packages/libzaungast/dist/ingest/ingest.js';

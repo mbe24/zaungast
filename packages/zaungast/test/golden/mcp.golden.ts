@@ -1,4 +1,4 @@
-// G2 — MCP rendered-output golden. Captures the exact token-economical text the tools produce
+// MCP rendered-output golden. Captures the exact token-economical text the tools produce
 // over the synthetic fixture, so the Phase-B `tools.ts` dissolve (data→library query API,
 // render→MCP) can be proven byte-identical. Fixture is FAKE data (safe to commit).
 //

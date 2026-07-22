@@ -76,13 +76,13 @@ console.log('=== exclude (words + handles) ===');
   );
 }
 
-console.log('=== rank_topics since/until + P4 ===');
+console.log('=== rank_topics since/until + scope errors ===');
 {
   const r = rankTopics(store, { since: '-14d', until: '-7d', n: 4 });
   ok('explicit range shows in envelope', /range .+\.\..+/.test(r));
   ok('bad since errors', /cannot parse since/.test(rankTopics(store, { since: 'last week' })));
   ok(
-    'P4: nonexistent conversation scope errors',
+    'nonexistent conversation scope errors',
     /no conversation matches/.test(rankTopics(store, { scope: 'conversation:zzzznope' })),
   );
 }

@@ -42,7 +42,7 @@ const MAPPING = `packages/libzaungast/src/schema/versions/${
 const LAYERS = {
   sstable: { bin: 'difftable', mode: 'perfile', harness: 'diff-sstable.mjs' },
   snapshot: { bin: 'diffsnap', mode: 'whole', harness: 'diff-snapshot.mjs' },
-  // Axis B copy-reuse: diffreuse self-asserts cold==warm==full (no false compaction) and emits the
+  // copy-reuse: diffreuse self-asserts cold==warm==full (no false compaction) and emits the
   // WARM cache-reusing report in diffsnap format, so the SAME oracle proves warm-reuse == TS-full.
   reuse: { bin: 'diffreuse', mode: 'whole', harness: 'diff-snapshot.mjs' },
   ssv: { bin: 'diffssv', mode: 'whole', harness: 'diff-ssv.mjs' },
@@ -66,7 +66,7 @@ const LAYERS = {
     harness: 'diff-store.mjs',
     extra: MAPPING,
     // binExtra: passed to the Rust bin ONLY (after `extra`), not to the TS harness. The store bin
-    // reads the DDL from the SAME single-source schema.sql the TS ingest uses (Topic 1 seam proof).
+    // reads the DDL from the SAME single-source schema.sql the TS ingest uses (single-source schema.sql proof).
     binExtra: ['packages/libzaungast/src/schema.sql'],
     nodeFlags: ['--experimental-sqlite'], // TS ingest uses node:sqlite
   },

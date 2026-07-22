@@ -18,8 +18,9 @@ pub struct SnapshotRecord {
     pub seq: u64,
     pub rtype: u8,
     // `Bytes` (refcounted views into the parsed `.ldb` blocks / WAL copies) so the dedup fold and the
-    // copy-reuse cache share value/key bytes instead of re-copying them every tick (★c). `Clone` is a
-    // refcount bump (no byte memcpy) — which is what makes caching the folded prefix cheap (★c2).
+    // copy-reuse cache share value/key bytes instead of re-copying them every tick (the zero-copy,
+    // Bytes-backed fold — no per-record value copy). `Clone` is a
+    // refcount bump (no byte memcpy) — which is what makes caching the folded prefix cheap.
     pub key: Bytes,
     pub value: Option<Bytes>,
 }
@@ -43,7 +44,7 @@ pub struct Snapshot {
 
 // ---- dedup: first-seen-ordered map (Vec preserves JS Map insertion order; in-place overwrite) ----
 // `Clone` is cheap now (Bytes-backed): a Vec + hashbrown-table memcpy + refcount bumps, no rehash and
-// no byte copies — so the copy-reuse fast path can clone a cached fold and layer only the WAL (★c2).
+// no byte copies — so the copy-reuse fast path can clone a cached fold and layer only the WAL.
 #[derive(Clone)]
 struct Dedup {
     order: Vec<SnapshotRecord>,
@@ -57,7 +58,7 @@ struct Dedup {
 impl Dedup {
     // `user_key`/`value` arrive as owned `Bytes` (cheap-clone refcounts, NOT byte copies): a new key
     // moves straight into the record + a refcount into the index; an overwrite moves the new value in.
-    // Zero value/key memcpy per record — the ★c win vs the old `to_vec()` per record.
+    // Zero value/key memcpy per record — the zero-copy (Bytes-backed) win vs the old `to_vec()` per record.
     fn consider(&mut self, user_key: Bytes, value: Option<Bytes>, seq: u64, rtype: u8) {
         if let Some(cap) = self.seq_cap {
             if seq > cap {
@@ -249,7 +250,7 @@ fn collect_snapshot(d: Dedup) -> Snapshot {
     let mut buckets: Vec<StoreBucket> = Vec::new();
     // Bucket index keyed by a (dbId, osId) TUPLE, not a `format!("{db}:{os}")` String — the old
     // string key allocated once PER DATA RECORD (~116k/tick). The store-name catalog map below stays
-    // String-keyed (built once per store-name row, rare). (★c)
+    // String-keyed (built once per store-name row, rare). (zero-copy, Bytes-backed fold)
     let mut bindex: HashMap<(u64, u64), usize> = HashMap::new();
     let mut max_seq = 0u64;
     let raw_count = d.raw;
@@ -350,7 +351,7 @@ pub fn load_snapshot_capped(dir: &str, seq_cap: u64) -> std::io::Result<Snapshot
     Ok(collect_snapshot(build_dedup_map(dir, Some(seq_cap))?))
 }
 
-// ---- Axis B: copy-reuse snapshot loader (★c2: cache the folded .ldb dedup PREFIX, re-fold only .log) ----
+// ---- copy-reuse snapshot loader (cached-folded-prefix fast path: cache the folded .ldb dedup PREFIX, re-fold only .log) ----
 
 /// The folded dedup state over a clean, sorted PREFIX of the current `.ldb` list — cached across
 /// refreshes so a tick re-folds only the (small) `.log` on top of a cheap clone, never re-hashing all
@@ -363,10 +364,10 @@ struct FoldedPrefix {
     covered: Vec<(String, u64)>,
 }
 
-/// Per-Session copy-reuse cache (Axis B / ★c2): the folded `.ldb` dedup prefix, carried across FFI
+/// Per-Session copy-reuse cache (the cached-folded-prefix fast path): the folded `.ldb` dedup prefix, carried across FFI
 /// calls on the native engine handle. A full rebuild starts fresh (`None`). Correctness rests on
 /// `.ldb` being write-once with never-recycled, monotonically-increasing file numbers (the invariant
-/// R3's signature also leans on): a covered `(name, size)` is a stable identity for the bytes; a
+/// the no-op-refresh source signature also leans on): a covered `(name, size)` is a stable identity for the bytes; a
 /// vanished covered name means a compaction (→ the caller defers to a full reparse).
 #[derive(Default)]
 pub struct LdbCache {
@@ -444,7 +445,7 @@ fn fold_all_ldb(dir: &str, ldb_now: &[(String, u64)]) -> Dedup {
     d
 }
 
-/// The `.ldb`-only fold for this tick (★c2), reusing/advancing the cached folded prefix when possible.
+/// The `.ldb`-only fold for this tick (cached-folded-prefix fast path), reusing/advancing the cached folded prefix when possible.
 /// Returns `(dedup, compacted)` — `dedup` holds only `.ldb` records (the caller folds `.log` on top of
 /// it, never on the persisted prefix). Three outcomes, mirroring `build_dedup_map`'s order exactly:
 /// - **compaction** (a covered name vanished): rebuild the prefix from the CURRENT set (cache it if
@@ -529,14 +530,14 @@ fn build_dedup_map_reuse(dir: &str, cache: &mut LdbCache) -> std::io::Result<(De
 }
 
 /// The `.ldb`-fold vs `collect_snapshot` wall-clock split (measure-and-drop) — the profiler uses it to
-/// separate what ★c2 speeds up (the fold) from `collect_snapshot`, which decodes/routes/buckets all
+/// separate what the cached-folded-prefix fast path speeds up (the fold) from `collect_snapshot`, which decodes/routes/buckets all
 /// records every tick regardless. Pure observation; the snapshot is identical either way.
 pub struct ReuseTimings {
     pub fold: Duration,
     pub collect: Duration,
 }
 
-/// Timed copy-reuse loader: the fold reuses the cached prefix (★c2), then `collect_snapshot` groups.
+/// Timed copy-reuse loader: the fold reuses the cached prefix (cached-folded-prefix fast path), then `collect_snapshot` groups.
 pub fn load_snapshot_reuse_timed(
     dir: &str,
     cache: &mut LdbCache,
@@ -550,7 +551,7 @@ pub fn load_snapshot_reuse_timed(
     Ok((snap, compacted, ReuseTimings { fold, collect }))
 }
 
-/// Copy-reuse snapshot loader (Axis B / ★c2): fold reusing the cached `.ldb` dedup prefix, re-folding
+/// Copy-reuse snapshot loader (cached-folded-prefix fast path): fold reusing the cached `.ldb` dedup prefix, re-folding
 /// only the `.log`, then group into a `Snapshot`. Returns `(snapshot, compacted)`; `compacted == true`
 /// means a covered `.ldb` vanished (a compaction) and the snapshot MUST NOT be trusted for a delta —
 /// the caller falls back to a full reparse (reconciling any elided deletion). Mirrors TS
@@ -560,7 +561,7 @@ pub fn load_snapshot_reuse(dir: &str, cache: &mut LdbCache) -> std::io::Result<(
     Ok((snap, compacted))
 }
 
-/// A cheap fingerprint of the leveldb SOURCE files (no read/decompression) — the R3 no-op gate for
+/// A cheap fingerprint of the leveldb SOURCE files (no read/decompression) — the no-op-refresh source-signature gate for
 /// incremental refresh. Sorted `(name, size)` over the `.ldb` + `.log` + `MANIFEST-*` files this reader
 /// consumes, plus `CURRENT`'s content. Unchanged ⇒ nothing landed: `.ldb` are write-once with
 /// never-recycled file numbers (same-name-different-content is impossible) and the `.log` is
@@ -626,7 +627,7 @@ fn bucket_crc(b: &StoreBucket) -> u32 {
     crc32c_final(c)
 }
 
-/// SSV-layer report: decode every record's VALUE and crc32c its canonical form per bucket (P2
+/// SSV-layer report: decode every record's VALUE and crc32c its canonical form per bucket (SSV
 /// differential). Per record: 0x01 + u32 len + canonical bytes on decode success, else 0x00 (a
 /// decode failure on one side but not the other → digest diverges). Matches harness/diff-ssv.mjs.
 pub fn snapshot_ssv_report(snap: &Snapshot) -> String {
@@ -776,7 +777,7 @@ mod reuse_tests {
         v.iter().map(|(n, s)| ((*n).to_string(), *s)).collect()
     }
 
-    // The ★c2 fast-path gate: `covered` must be a POSITIONAL prefix (same names, positions, sizes) of
+    // The cached-folded-prefix fast-path gate: `covered` must be a POSITIONAL prefix (same names, positions, sizes) of
     // the current sorted `.ldb` list — then the tail is safe to fold on top in order.
     #[test]
     fn positional_prefix_semantics() {
@@ -833,7 +834,7 @@ mod reuse_tests {
         ));
     }
 
-    // The ★c2 fast path — advancing a cached prefix with a NON-EMPTY tail (a new `.ldb` flushed since
+    // The cached-folded-prefix fast path — advancing a cached prefix with a NON-EMPTY tail (a new `.ldb` flushed since
     // the prefix was built) — must produce a snapshot byte-identical to a cold full fold. The
     // differential / composed tests only ever see an UNCHANGED dir (empty tail), so this is the sole
     // gate on the actual tail-fold-onto-prefix path. Env-gated on ZAUNGAST_TEST_DIR (needs real `.ldb`);

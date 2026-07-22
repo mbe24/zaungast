@@ -1,4 +1,4 @@
-// Differential harness — incremental layer (the seam-A three-way gate). The Rust `diffincr` emits two
+// Differential harness — incremental layer (the native-vs-TS three-way store gate). The Rust `diffincr` emits two
 // per-table reports: INCR (a partial store as of maxSeq/2, refreshed to full) and FULL (an independent
 // full build). This runs the TS FULL ingest as the third leg and asserts, per table:
 //     native-incremental  ==  native-full  ==  TS-full

@@ -307,7 +307,7 @@ function makeApis(
         exclude: opts.exclude,
         includeBots: opts.includeBots,
       });
-      if (!scoped.ok) return scoped; // { ok: false, reason } — surfaced verbatim (P4)
+      if (!scoped.ok) return scoped; // { ok: false, reason } — surfaced verbatim
       const extra = mergeStopwords(baseExtraStopwords, opts.extraStopwords);
       const phrases = buildPhraseExtractor(store, store.db, new Set(scoped.excludeWords), extra);
       const explicit = opts.sinceTs != null || opts.untilTs != null;

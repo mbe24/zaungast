@@ -6,7 +6,7 @@
 // This is schema/domain knowledge (candidate field names, db-name normalization, scoring), so it
 // belongs library-side beside the schema layer (fingerprint/resolver/sample) rather than in the
 // MCP tool. The structural field walk itself is `sampleStoreFields` (sample.ts); this adds the
-// normalized db name, candidate matching, scoring, and proposal assembly. (Q1)
+// normalized db name, candidate matching, scoring, and proposal assembly.
 import { fingerprint } from './fingerprint.js';
 import { sampleStoreFields } from './sample.js';
 import type { Snapshot } from './types.js';

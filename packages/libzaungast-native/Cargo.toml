@@ -13,7 +13,7 @@ crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 serde_json = "1"
-bytes = "1"      # cheap-clone refcounted buffers (Bytes) — zero-copy dedup fold (★c): value/key views
+bytes = "1"      # cheap-clone refcounted buffers (Bytes) — zero-copy (Bytes-backed) dedup fold: value/key views
 snap = "1"       # standard raw-block Snappy (byte-identical output; verified vs the TS reader)
 regex = "1"      # htmlToText tag/entity matching (mirrors the TS regex; ASCII classes)
 rusqlite = { version = "0.32", features = ["bundled"] }  # bundled SQLite (+FTS5) — the store writer
@@ -82,11 +82,11 @@ path = "src/bin/profile.rs"
 required-features = ["harness"]
 
 [[bin]]
-name = "diffnoop"        # R3 no-op gate: full-ingest then refresh unchanged dir → must short-circuit
+name = "diffnoop"        # no-op-refresh gate (source-signature): full-ingest then refresh unchanged dir → must short-circuit
 path = "src/bin/diffnoop.rs"
 required-features = ["harness"]
 
 [[bin]]
-name = "diffreuse"       # Axis B copy-reuse: cold==warm==full snapshot; emits warm report vs TS-full
+name = "diffreuse"       # copy-reuse: cold==warm==full snapshot; emits warm report vs TS-full
 path = "src/bin/diffreuse.rs"
 required-features = ["harness"]

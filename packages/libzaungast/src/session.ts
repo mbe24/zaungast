@@ -148,7 +148,7 @@ export class Session {
 
   // COPY-REUSE: mirror the live .ldb+.log set into the EXISTING snapshot dir — copy new .ldb,
   // copy all .log, and DELETE any snapshot .ldb/.log no longer in live. Mirroring exactly is the
-  // H1 safeguard: the reused dir can never retain a compaction-deleted .ldb (which would
+  // Compaction safeguard: the reused dir can never retain a compaction-deleted .ldb (which would
   // resurrect deleted data). Returns lossy=true if any copy was skipped.
   private snapshotReuse(liveDir: string, dir: string): boolean {
     assertUnderTmp(dir);

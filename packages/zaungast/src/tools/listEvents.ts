@@ -33,7 +33,7 @@ function renderAttendees(atts: Attendee[]): string {
 }
 
 // Privacy: elide every URL in an (opt-in, already-htmlToText'd) event body down to its bare
-// hostname — the full URL can carry tokens and is a prompt-injection surface (see spec §5).
+// hostname — the full URL can carry tokens and is a prompt-injection surface.
 function elideUrlsToHostnames(text: string): string {
   return text.replace(/https?:\/\/([^\s/]+)(\/[^\s]*)?/gi, (_m, host) => `[link: ${host}]`);
 }
@@ -128,7 +128,7 @@ export function listEvents(view: View, args: ListEventsArgs = {}): string {
   }
 
   // include_body: opt-in, narrow-result-only, and never for a confidential event (regardless of
-  // the arg) — see spec §5. Rendered as an extra indented line beneath the one matching event.
+  // the arg). Rendered as an extra indented line beneath the one matching event.
   let bodyBlock = '';
   if (args.include_body) {
     if (rows.length !== 1)

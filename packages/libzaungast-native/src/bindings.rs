@@ -35,7 +35,7 @@ pub struct IngestResult {
     pub fts_enabled: bool,
 }
 
-/// Full ingest (seam A): read `dir`, fingerprint + select among `mappings` (the bundled mapping
+/// Full ingest (the native ingest-to-file path): read `dir`, fingerprint + select among `mappings` (the bundled mapping
 /// JSON texts from the TS package), and write the ChatStore to `dest_path` (overwriting any prior
 /// file). `schema` is the single-source DDL string. Synchronous, matching the TS `ingest()` model.
 #[napi]
@@ -84,7 +84,7 @@ pub struct RefreshResult {
     pub earliest_ts: f64,
 }
 
-/// Incremental refresh (seam A): copy `prevPath` → `newPath`, apply the delta from `dir` up to the
+/// Incremental refresh (the native ingest-to-file path): copy `prevPath` → `newPath`, apply the delta from `dir` up to the
 /// current sequence, and rewrite the new file's in-file meta. The previous file is never mutated (TS
 /// may hold a read-only handle) — on success TS swaps to `newPath`. `mappings` are the bundled JSON
 /// texts (the same set as nativeIngest); the mapping is reused by mappingVersion from the prev file.
@@ -112,7 +112,7 @@ pub fn native_refresh(
     })
 }
 
-/// Create a fresh, empty copy-reuse cache (Axis B). The TS side calls this once per FULL ingest and
+/// Create a fresh, empty copy-reuse cache. The TS side calls this once per FULL ingest and
 /// carries the returned opaque handle on its `{ native }` state; every later `nativeReuseRefresh`
 /// receives it back, reusing cached immutable `.ldb` parses. Held per-Session (not a process global)
 /// and finalized when the handle is GC'd — so the parsed-`.ldb` RAM is bounded to one live store and
@@ -122,7 +122,7 @@ pub fn native_new_cache() -> External<crate::idb::LdbCache> {
     External::new(crate::idb::LdbCache::new())
 }
 
-/// Copy-reuse incremental refresh (Axis B): like `nativeRefresh`, but reuses the cached immutable
+/// Copy-reuse incremental refresh: like `nativeRefresh`, but reuses the cached immutable
 /// `.ldb` parses in `cache` and re-reads only the `.log`. `dir` is the Session's mirrored snapshot dir
 /// (kept in lock-step with live by `snapshotReuse`). `deferred=true` ⇒ a compaction was detected;
 /// nothing was written and the caller must fall back to `nativeRefresh` (the cacheless reparse, which

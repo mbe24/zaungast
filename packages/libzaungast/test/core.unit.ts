@@ -42,7 +42,7 @@ console.log('=== snappy ===');
   eq('overlapping copy decompresses', Snappy.uncompress(cp).toString(), 'abcabc');
 }
 {
-  // Overlap-copy fidelity fixtures (offset < len) — the byte-feed-forward semantics that the A1
+  // Overlap-copy fidelity fixtures (offset < len) — the byte-feed-forward semantics that the
   // chunked-copy optimization must preserve exactly. Covers offset 1..4 < len, a long single-byte
   // run (fill fast-path), a non-overlapping copy (offset >= len → memmove path), and a long literal.
   const dec = (b: number[]) => Snappy.uncompress(Buffer.from(b)).toString();
@@ -62,7 +62,7 @@ console.log('=== snappy ===');
   eq('long literal 130B', Snappy.uncompress(longLit).toString(), 'z'.repeat(130));
 }
 
-console.log('=== htmlToText (A8 characterization — pins the tag/entity/whitespace transforms) ===');
+console.log('=== htmlToText (characterization — pins the tag/entity/whitespace transforms) ===');
 {
   eq('br -> newline', htmlToText('a<br>b'), 'a\nb');
   eq('br self-closing -> newline', htmlToText('a<br/>b'), 'a\nb');

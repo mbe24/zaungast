@@ -373,7 +373,7 @@ export function readStringWithLength(buf: Buffer, off: number): [string, number]
 // deserialize() returns retains a view into the decompressed buffer (strings → toString copy,
 // ArrayBuffers → Buffer.from copy; audited), and each decoded value is consumed synchronously
 // before the next decodeValue call. NOT used for sstable block decompression (those buffers must
-// persist as value backing — A2). Bounded by the largest single value ever decompressed.
+// persist as value backing). Bounded by the largest single value ever decompressed.
 let ssvScratch: Buffer = Buffer.allocUnsafe(0);
 
 // Decode an IndexedDB object-store data VALUE into a JS object.

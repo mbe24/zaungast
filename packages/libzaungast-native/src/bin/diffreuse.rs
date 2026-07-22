@@ -1,4 +1,4 @@
-//! Differential-harness dumper (copy-reuse layer, Axis B). Proves the cache-reusing snapshot loader
+//! Differential-harness dumper (copy-reuse layer). Proves the cache-reusing snapshot loader
 //! (`load_snapshot_reuse`) is byte-identical to a full cold read — for BOTH a cold cache (the first
 //! tick, which parses + populates) and a warm cache (later ticks that REUSE the cached `.ldb`
 //! parses). If the warm report ever diverged from the full read, a cached parse would be serving

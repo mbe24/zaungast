@@ -1,4 +1,4 @@
-// libzaungast public API (B3: narrowed to the intended surface).
+// libzaungast public API (narrowed to the intended surface).
 //
 // The root entry is the high-level DATA API (audience #1): open a store, query its orthogonal
 // namespaces (conversations / messages / people / events / calls / topics). The decode/schema layer

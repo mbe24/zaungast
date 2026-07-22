@@ -1,4 +1,4 @@
-//! R3 no-op-refresh gate check (end-to-end): full-ingest to a temp file, then refresh the SAME,
+//! No-op-refresh gate check (source-signature, end-to-end): full-ingest to a temp file, then refresh the SAME,
 //! unchanged dir. The leveldb source-file signature must match what the ingest recorded, so
 //! `refresh_to_file` short-circuits (`skipped`) WITHOUT copying a new file or re-reading the snapshot.
 //! Proves the `refresh_to_file` no-op path — the store/incr differentials use `refresh_store`, which

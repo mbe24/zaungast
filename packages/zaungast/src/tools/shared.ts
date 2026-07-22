@@ -5,7 +5,7 @@ import type { StoreView, StoreMeta, ConvMessagesMiss } from 'libzaungast';
 
 // The pinned reading a tool renders: the six query
 // namespaces + the build's `meta`, plus `mayBeStale`. It's optional here so a STATIC store
-// (`openStore`, used by the G2 golden) can be passed directly, while the live MCP dispatch passes a
+// (`openStore`, used by the MCP-output golden) can be passed directly, while the live MCP dispatch passes a
 // full `StoreReading` (`live.current()`); a static store's absent flag reads as not-stale.
 export type View = StoreView & { readonly mayBeStale?: boolean };
 
