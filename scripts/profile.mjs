@@ -105,20 +105,15 @@ fs.mkdirSync(outDir, { recursive: true });
 
 // GC before each iteration (outside the timed region) so cross-iteration GC pauses don't land
 // inside random samples. Excludes GC from the timed window — slightly optimistic, noted in md.
-function bench(label, fn, iters = N) {
-  const s = [];
-  for (let i = 0; i < iters; i++) {
-    if (gc) gc();
-    const t = performance.now();
-    fn();
-    s.push(performance.now() - t);
-  }
-  s.sort((a, b) => a - b);
+// Summary stats over a pre-collected sample array (shared by bench() and the onPhase collector so the
+// percentile rule + rounding are identical). nearest-rank percentile (ceil), clamped; population stddev.
+function stats(samples, label) {
+  const s = [...samples].sort((a, b) => a - b);
+  const iters = s.length;
   const sum = s.reduce((a, b) => a + b, 0);
   const mean = sum / iters;
   const variance = s.reduce((a, b) => a + (b - mean) ** 2, 0) / iters;
   const r3 = (x) => +x.toFixed(3);
-  // nearest-rank percentile (ceil), clamped
   const pc = (q) => s[Math.min(s.length - 1, Math.max(0, Math.ceil(iters * q) - 1))];
   return {
     label,
@@ -134,6 +129,17 @@ function bench(label, fn, iters = N) {
     mean: r3(mean),
     stddev: r3(Math.sqrt(variance)),
   };
+}
+
+function bench(label, fn, iters = N) {
+  const s = [];
+  for (let i = 0; i < iters; i++) {
+    if (gc) gc();
+    const t = performance.now();
+    fn();
+    s.push(performance.now() - t);
+  }
+  return stats(s, label);
 }
 
 const results = { meta: {}, fullParse: {}, formatPhases: [], incremental: [], tools: [] };
@@ -205,6 +211,31 @@ results.formatPhases.push(bench('extractEntity(message) [targets passed]', () =>
 results.formatPhases.push(bench('extractEntity(conversation) [targets passed]', () => extractEntity(snap0, mapping, 'conversation', convTargets)));
 for (const ent of ['event', 'call', 'profile']) {
   results.formatPhases.push(bench(`extractEntity(${ent}) [targets recomputed, as prod]`, () => extractEntity(snap0, mapping, ent)));
+}
+
+// ---- 2b. store-build phase breakdown (extract/apply/recompute/fts) — the families that line up with
+// the native profiler's PhaseTimings. ingest() fires an opt-in onPhase hook per phase (dev only; a
+// no-op in production), so this measures the REAL build pipeline, not a re-implementation.
+// Two inherent attribution caveats vs native (NOT commit-for-commit comparable — the compare tool must
+// know): (1) profile/event/call row-SHAPING is timed here under `extract` (perf-1b keeps it inside
+// extractForFullIngest so the snapshot drops early), but native shapes those inside its `apply`;
+// (2) native's R1 write-tuning wraps apply+recompute+fts in ONE transaction with the COMMIT inside its
+// `fts` timer, whereas TS commits after `apply` and runs recompute/fts in autocommit — so `apply` and
+// `fts` differ by where the commit cost lands. Both are sub-ms on in-memory builds; `extract`/`recompute`
+// are clean. The heavy message/conversation rows transform at insert (inside `apply`) on both sides.
+{
+  const samples = { extract: [], apply: [], recompute: [], fts: [] };
+  for (let i = 0; i < N; i++) {
+    if (gc) gc();
+    const r = ingest(DIR, { onPhase: (phase, ms) => samples[phase].push(ms) });
+    r.store.close();
+  }
+  results.storeBuild = {
+    extract: stats(samples.extract, 'storeBuild.extract'),
+    apply: stats(samples.apply, 'storeBuild.apply'),
+    recompute: stats(samples.recompute, 'storeBuild.recompute'),
+    fts: stats(samples.fts, 'storeBuild.fts'),
+  };
 }
 
 // ---- 3. incremental refresh ----
@@ -293,6 +324,8 @@ console.log(`\nfull parse: cold ${results.fullParse.coldMs}ms · warm median ${r
 console.log(`throughput: ${results.meta.throughput.entriesPerSec} entries/s · ${results.meta.throughput.mbPerSec} MB/s`);
 console.log('\nformat phases:');
 results.formatPhases.forEach((r) => console.log(row(r)));
+console.log('\nstore-build phases (~= native PhaseTimings; apply/fts not commit-for-commit — see 2b):');
+for (const p of ['extract', 'apply', 'recompute', 'fts']) console.log(row(results.storeBuild[p]));
 console.log('\nincremental:');
 results.incremental.forEach((r) =>
   r.kind === 'no-op'

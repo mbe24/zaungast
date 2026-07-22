@@ -9,6 +9,7 @@ import {
 import type { SnapshotRecord, Snapshot } from '../format/types.js';
 import { ChatStore, type StoreMeta } from './store.js';
 import { htmlToText, isSystemMessage, mentionedMris, hasAttachment } from '../util/text.js';
+import { performance } from 'node:perf_hooks';
 
 export function convKind(id = ''): string {
   if (id.includes('@unq.gbl.spaces')) return '1:1';
@@ -331,6 +332,12 @@ interface FullExtract {
   callRows: ReturnType<typeof buildCallRows>;
 }
 
+// Opt-in profiling hook (dev only — see scripts/profile.mjs). Fires once per store-build phase with
+// its wall-clock in ms. PURE OBSERVATION: it never changes control flow or output and is a no-op in
+// production (a `performance.now()` pair runs only when a hook is supplied). Mirrors the native
+// `build_store_timed` measure-and-discard so both engines report the same phase breakdown.
+type PhaseHook = (phase: 'extract' | 'apply' | 'recompute' | 'fts', ms: number) => void;
+
 // Load the snapshot and extract EVERY entity's rows, then return — so the Snapshot (the ~56MB
 // whole-file buffers + the full decoded record graph, both held via snap.buckets' key/value
 // slices) becomes unreachable as this frame unwinds, BEFORE ingest() builds the SQLite store.
@@ -338,7 +345,10 @@ interface FullExtract {
 // slices, so nothing returned here pins the snapshot. This keeps the decode-graph peak and the
 // growing-store peak from coexisting → lower peak RSS (perf 1b). Byte-identical: extraction order
 // doesn't affect any inserted value, selfMri, or the fingerprint (computed here, unchanged).
-function extractForFullIngest(dir: string, opts: { seqCap?: number }): FullExtract {
+function extractForFullIngest(
+  dir: string,
+  opts: { seqCap?: number; onPhase?: PhaseHook },
+): FullExtract {
   const snap = loadSnapshot(dir, { seqCap: opts.seqCap });
   const { maxSeq, lossy } = snap;
   const fp = fingerprint(snap);
@@ -358,6 +368,7 @@ function extractForFullIngest(dir: string, opts: { seqCap?: number }): FullExtra
       eventRows: [],
       callRows: [],
     };
+  const tExtract = opts.onPhase ? performance.now() : 0;
   const msgTargets: Set<string> = entityTargets(snap, mapping, 'message');
   const convTargets: Set<string> = entityTargets(snap, mapping, 'conversation');
   const msgRows = extractEntity(snap, mapping, 'message', msgTargets).records;
@@ -365,6 +376,8 @@ function extractForFullIngest(dir: string, opts: { seqCap?: number }): FullExtra
   const profileRows = buildProfileRows(snap, mapping);
   const eventRows = buildEventRows(snap, mapping);
   const callRows = buildCallRows(snap, mapping);
+  // Matches native storeBuild.extract (the five extract_rows) — selfMri vote is timed OUT, as native does.
+  opts.onPhase?.('extract', performance.now() - tExtract);
   const selfMri = voteSelfMri(msgRows);
   return {
     fp,
@@ -402,7 +415,7 @@ export function openStoreFile(
 
 // FULL rebuild from a fresh snapshot dir. `seqCap` (tests only) builds a PARTIAL store as of
 // an earlier sequence, so a following applyIncremental can be proven to reach a full rebuild.
-export function ingest(dir: string, opts: { seqCap?: number } = {}): Ingested {
+export function ingest(dir: string, opts: { seqCap?: number; onPhase?: PhaseHook } = {}): Ingested {
   // Extract every entity's rows first; the helper's frame drops the Snapshot before we build the
   // store below, so the two memory peaks never coexist (perf 1b).
   const ex = extractForFullIngest(dir, opts);
@@ -429,6 +442,7 @@ export function ingest(dir: string, opts: { seqCap?: number } = {}): Ingested {
   }
 
   const store = new ChatStore();
+  const tApply = opts.onPhase ? performance.now() : 0;
   store.db.exec('BEGIN');
   applyConversationMeta(store, ex.convRows);
   applyMessages(store, ex.msgRows, ex.selfMri);
@@ -436,8 +450,13 @@ export function ingest(dir: string, opts: { seqCap?: number } = {}): Ingested {
   store.replaceEvents(ex.eventRows);
   store.replaceCalls(ex.callRows);
   store.db.exec('COMMIT');
+  opts.onPhase?.('apply', performance.now() - tApply);
+  const tRecompute = opts.onPhase ? performance.now() : 0;
   store.recomputeDerived(ex.selfMri);
+  opts.onPhase?.('recompute', performance.now() - tRecompute);
+  const tFts = opts.onPhase ? performance.now() : 0;
   store.refreshFts(null);
+  opts.onPhase?.('fts', performance.now() - tFts);
 
   const meta = finalMeta(store, ex.fp, ex.mapping, 'full', Date.now(), ex.lossy, ex.selfMri);
   return {
