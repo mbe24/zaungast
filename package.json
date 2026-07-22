@@ -39,7 +39,9 @@
     "test:golden:real": "node scripts/run-tests.mjs real",
     "assets": "node scripts/render-assets.mjs",
     "profile": "node --experimental-sqlite --expose-gc scripts/profile.mjs",
-    "profile:native": "node scripts/profile-rust.mjs"
+    "profile:native": "node scripts/profile-rust.mjs",
+    "profile:compare": "node scripts/profile-compare.mjs",
+    "test:schema": "node scripts/test-timings-v1.mjs"
   },
   "engines": {
     "node": ">=22.5.0"

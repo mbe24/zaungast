@@ -39,6 +39,9 @@ jobs:
       - name: Dependency-direction guard (libzaungast must not import the MCP server)
         run: npm run check:deps
 
+      - name: Timings schema self-test (TS half of the shared percentile vector)
+        run: npm run test:schema
+
       - name: Build
         run: npm run build
 
@@ -92,6 +95,8 @@ jobs:
         env:
           ZAUNGAST_NATIVE_RUNNER: local # cargo builds natively on the CI runner; no Docker fallback
 
-      - name: Rust unit tests (pure; the ZAUNGAST_TEST_DIR-gated parity tests skip without a cache)
+      - name: Rust unit tests + profiler percentile parity (pure; ZAUNGAST_TEST_DIR-gated tests skip)
         working-directory: packages/libzaungast-native
-        run: cargo test --release --lib
+        # --bin profile also runs the shared percentile vector test (native half); the harness feature
+        # is required to compile that bin. The env-gated reuse/refresh parity tests still skip w/o a cache.
+        run: cargo test --release --features harness --lib --bin profile

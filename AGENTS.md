@@ -41,10 +41,20 @@ after any change (especially the data layer).
 
 ## Profiling
 
-Two dev harnesses (NOT in CI):
+Dev harnesses (NOT in CI). Both profilers emit the **v1 timings schema** (`scripts/lib/timings-v1.mjs`
+is the spec of record) — shared canonical `metrics` + engine-specific `engineExtra` — so runs are
+directly comparable:
 
 - `npm run profile -- <leveldb-dir> [--heavy]` (TS)
 - `npm run profile:native -- <leveldb-dir> [--heavy]` (native Rust; WSL2/Linux only)
+- `npm run profile:compare -- <former.json> <current.json>` — diffs two runs; mode is inferred from
+  `engine` (differ → cross-engine parity table; match → former→current regression with drift flags).
+  Cross-engine parity requires both runs on the **same platform** (both WSL2); `--allow-cross-runner`
+  downgrades that to a warning.
 
-Being outside CI they drift silently — when a change reshapes profiled code (tool rename, engine
-restructure), recheck they still run and measure the right thing.
+The shared percentile definition (nearest-rank ceil-clamped + population stddev) is pinned by a test
+vector on both sides — `npm run test:schema` (TS, gated in CI) and the `percentile_vector_matches_ts`
+test in `src/bin/profile.rs` (native, gated via `cargo test --features harness --bin profile`).
+
+Being outside CI the profilers themselves drift silently — when a change reshapes profiled code (tool
+rename, engine restructure), recheck they still run and measure the right thing.

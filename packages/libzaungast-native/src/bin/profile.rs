@@ -654,3 +654,29 @@ fn main() {
     );
     eprintln!("\nartifacts in {out_dir}: timings.json (v1)");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{metric_json, stat};
+
+    // Shared percentile test vector — the SAME numbers as scripts/test-timings-v1.mjs's TS assertion.
+    // Pins the nearest-rank (ceil, clamped) percentile + population-stddev definitions so the native
+    // `stat()` and the TS `metric()` can't silently drift apart (they're compared field-for-field by
+    // the parity tool). Run: `cargo test --features harness --bin profile`.
+    #[test]
+    fn percentile_vector_matches_ts() {
+        let s = stat(vec![10., 20., 30., 40., 50., 60., 70., 80., 90., 100.]);
+        assert_eq!((s.n, s.min, s.max), (10, 10.0, 100.0));
+        assert_eq!(
+            (s.p50, s.p75, s.p90, s.p95, s.p99),
+            (50.0, 80.0, 90.0, 100.0, 100.0)
+        );
+        assert!((s.mean - 55.0).abs() < 1e-9);
+        assert!((s.stddev - 825f64.sqrt()).abs() < 1e-9); // population variance = 825
+                                                          // n=1 collapses to a bare `{ unit, n:1, value }` — the discriminator the TS side mirrors.
+        assert_eq!(
+            metric_json("ms", &stat(vec![42.0])),
+            serde_json::json!({ "unit": "ms", "n": 1, "value": 42.0 })
+        );
+    }
+}
