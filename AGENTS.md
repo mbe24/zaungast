@@ -32,10 +32,12 @@ after any change (especially the data layer).
 - **Style/lint:** `npm run check:native` — wraps `cargo fmt` + pedantic `clippy`, auto-falling back to
   Docker when the host can't build natively.
 - **Behavior:** the native engine must stay byte-identical to the TS reference. Run the byte-differential
-  harness (`packages/libzaungast-native/harness/run.mjs`, run bare for its layer list); every layer must
-  report `0 differ`. `store` + `incr` are the minimum — for a multi-module change, a refactor/rename, or
-  when unsure which layer is hit, run **every** layer plus the Rust unit tests. Layers map to the
-  same-named module under `format/`/`store/`.
+  via `npm run diff -- <dir|date> [--layer <name>|all]` (wraps `harness/run.mjs`; resolves the leveldb
+  dir, default layers `store,incr`, `all` runs every layer); every layer must report `0 differ`.
+  `store` + `incr` are the minimum — for a multi-module change, a refactor/rename, or when unsure which
+  layer is hit, run `--layer all` plus the Rust unit tests (`npm run test:native`; pass a `<dir|date>`
+  to also run the `ZAUNGAST_TEST_DIR`-gated parity tests). Layers map to the same-named module under
+  `format/`/`store/`. `npm run verify:native -- <dir|date>` chains check:native + tests + `store,incr`.
 
 ## Profiling
 

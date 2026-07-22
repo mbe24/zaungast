@@ -20,12 +20,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
+import {
+  CRATE,
+  IMAGE,
+  REPO,
+  dockerRunArgs,
+  runWithFallback,
+  toContainerPath,
+} from '../../../scripts/native-runner.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url)); // .../harness
-const CRATE = path.resolve(HERE, '..'); // .../libzaungast-native
-const REPO = path.resolve(CRATE, '..', '..'); // repo root
-const RUNNER = (process.env.ZAUNGAST_NATIVE_RUNNER || 'auto').toLowerCase();
-const IMAGE = process.env.ZAUNGAST_NATIVE_IMAGE || 'rust:1-slim-bookworm';
 
 // The mapping the diff bins compare against — read from the single-source registry
 // (schema/mappings.json), NOT hardcoded here, so a rename/version bump touches only the registry.
@@ -81,25 +85,26 @@ const layerName = layerIdx > 0 ? process.argv[layerIdx + 1] : 'sstable';
 const L = LAYERS[layerName];
 const dirArg = args[0];
 if (!L || !dirArg) {
-  console.error('usage: node harness/run.mjs <leveldb-dir> [--layer sstable|snapshot]   [env ZAUNGAST_NATIVE_RUNNER=auto|local|docker]');
+  console.error(
+    'usage: node harness/run.mjs <leveldb-dir> [--layer sstable|snapshot|reuse|ssv|fp|extract|htmltext|store|incr]   [env ZAUNGAST_NATIVE_RUNNER=auto|local|docker]\n' +
+      '  (prefer `npm run diff -- <dir|date> [--layer <name>|all]` — resolves the leveldb dir and runs multiple layers)',
+  );
   process.exit(2);
 }
 const dataAbs = path.resolve(dirArg);
 const exeName = (b) => (process.platform === 'win32' ? `${b}.exe` : b);
 
-// docker mode: build + run the layer's bin inside a Linux container; repo mounted read-only, build
-// happens container-side. Returns the digest text (per-file lines, or the whole-dir report).
+// docker mode: build + run the layer's bin inside a Linux container. Mount convention + the registry
+// and target caches come from native-runner (shared with check:native + native-test); the target
+// volume means the build is NOT recompiled from scratch each layer. Returns the digest text.
 function dockerDigests() {
-  const rel = path.relative(REPO, dataAbs).split(path.sep).join('/');
-  const containerData = `/work/${rel}`;
+  const containerData = toContainerPath(dataAbs);
   const script = '/work/packages/libzaungast-native/harness/incontainer.sh';
   console.error(`[runner=docker layer=${layerName}] image=${IMAGE}  data=${containerData}`);
   const extra = [...(L.extra ? [L.extra] : []), ...(L.binExtra || [])].map((p) => `/work/${p}`);
-  // a named volume caches the cargo registry so crate deps (serde_json, snap, …) compile once
   return execFileSync(
     'docker',
-    ['run', '--rm', '-v', `${REPO}:/work:ro`, '-v', 'zaungast-native-cargo:/usr/local/cargo/registry',
-      IMAGE, 'bash', script, containerData, L.bin, L.mode, ...extra],
+    [...dockerRunArgs(), IMAGE, 'bash', script, containerData, L.bin, L.mode, ...extra],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], maxBuffer: 256 * 1024 * 1024 },
   );
 }
@@ -111,44 +116,19 @@ function localDigests() {
   execFileSync('cargo', ['build', '--release', '--features', 'harness'], { cwd: CRATE, stdio: ['ignore', 'inherit', 'inherit'] });
   if (L.mode === 'whole') {
     const extra = [...(L.extra ? [L.extra] : []), ...(L.binExtra || [])].map((p) => path.resolve(REPO, p));
-    return execFileSync(exe, [dataAbs, ...extra], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 256 * 1024 * 1024 });
+    return execFileSync(exe, [dataAbs, ...extra], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], maxBuffer: 256 * 1024 * 1024 });
   }
   const ldbs = fs.readdirSync(dataAbs).filter((f) => f.endsWith('.ldb')).sort();
   let out = '';
   for (const f of ldbs) {
-    const line = execFileSync(exe, [path.join(dataAbs, f)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const line = execFileSync(exe, [path.join(dataAbs, f)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }).trim();
     out += `${f}\t${line}\n`;
   }
   return out;
 }
 
-function dockerAvailable() {
-  const r = spawnSync('docker', ['version', '--format', '{{.Server.Version}}'], { encoding: 'utf8' });
-  return r.status === 0 && (r.stdout || '').trim().length > 0;
-}
-
-let digests;
-if (RUNNER === 'docker') {
-  digests = dockerDigests();
-} else if (RUNNER === 'local') {
-  digests = localDigests();
-} else {
-  // auto: prefer local; fall back to docker if local execution is denied and docker is present.
-  try {
-    digests = localDigests();
-  } catch (e) {
-    if (dockerAvailable()) {
-      console.error(`[runner=auto] local run failed (${e.code || e.message}); falling back to docker`);
-      digests = dockerDigests();
-    } else {
-      console.error(
-        `[runner=auto] local run failed and Docker is not available:\n  ${e.message}\n` +
-          `  → run on an unrestricted host/CI, or install Docker and set ZAUNGAST_NATIVE_RUNNER=docker.`,
-      );
-      process.exit(1);
-    }
-  }
-}
+// Runner selection (local / docker / auto-with-fallback) is shared with check:native + native-test.
+const digests = runWithFallback(localDigests, dockerDigests, { label: `layer=${layerName}` });
 
 const tsv = path.join(os.tmpdir(), `zaungast-native-${layerName}-${process.pid}.tsv`);
 fs.writeFileSync(tsv, digests);
