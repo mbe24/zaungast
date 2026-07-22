@@ -38,7 +38,8 @@ pub struct RefreshState {
     pub conv_targets: Vec<String>, // sorted
     /// Per-store change signatures (entity → `entity_sig`) as of this state, for the unchanged-store
     /// whole-replace skip: a store whose signature is unchanged next tick is byte-identical and its
-    /// replace is skipped. Keyed by entity (profile/event/call/conversation).
+    /// replace is skipped. Keyed by entity — profile/event/call only (each a pure function of its own
+    /// records; conversations are coupled to message state and always reconciled, see `refresh_store`).
     pub store_sigs: BTreeMap<String, String>,
 }
 
@@ -83,9 +84,10 @@ fn entity_sig(snap: &Snapshot, mapping: &Value, entity: &str) -> String {
         .join(",")
 }
 
-/// Signatures for the skippable stores (profiles/events/calls/conversations). Cheap (no decode).
+/// Signatures for the signature-skippable stores (profiles/events/calls — each a pure function of its
+/// own records; conversations are excluded, see `refresh_store`). Cheap (no decode).
 pub(crate) fn store_sigs(snap: &Snapshot, mapping: &Value) -> BTreeMap<String, String> {
-    ["profile", "event", "call", "conversation"]
+    ["profile", "event", "call"]
         .into_iter()
         .map(|e| (e.to_string(), entity_sig(snap, mapping, e)))
         .collect()
@@ -203,11 +205,7 @@ pub fn refresh_store(
     let self_mri = state.self_mri.as_deref();
     conn.execute_batch("BEGIN").unwrap();
     let mut fts_ids: HashSet<String> = HashSet::new();
-    // Whether any WHOLE chain disappeared this tick — the only way (besides a conv-store change) a
-    // conversation can become newly-orphaned, so it gates the conversation-reconcile skip below.
-    let missing = delete_messages_for_missing_chains(conn, &live);
-    let missing_happened = !missing.is_empty();
-    for id in missing {
+    for id in delete_messages_for_missing_chains(conn, &live) {
         fts_ids.insert(id);
     }
     for ck in &changed_chains {
@@ -219,9 +217,17 @@ pub fn refresh_store(
     for id in apply_messages(conn, &new_rows, self_mri) {
         fts_ids.insert(id);
     }
-    // Unchanged-store skip: a mapped small store whose signature matches the prior state's is
-    // byte-identical (see `entity_sig`), so its whole-replace is skipped — the table is already
-    // correct. On the common message-only tick this skips re-decoding + rewriting profiles/events/calls.
+    // Unchanged-store skip: a mapped store that is a PURE FUNCTION of its own records — profiles,
+    // events, calls — whose signature matches the prior state's is byte-identical (see `entity_sig`),
+    // so its whole-replace is skipped; the table is already correct. On the common message-only tick
+    // this skips re-decoding + rewriting all three.
+    //
+    // Conversations are deliberately NOT signature-skippable: their rows are dropped CONDITIONALLY on
+    // message state (the orphan rule inside `reconcile_conversations`), so a signature over the
+    // conversation store alone under-approximates change — a still-live chain edited down to zero
+    // messages orphans a message-only conversation with no conversation-store change at all. So
+    // conversations are always reconciled; it's cheap, and it's byte-for-byte the pre-skip behaviour,
+    // already proven == a full rebuild (see `refresh_drops_conversation_orphaned_by_emptied_chain`).
     let unchanged = |entity: &str| {
         state.store_sigs.get(entity).map(String::as_str)
             == Some(entity_sig(snap, mapping, entity).as_str())
@@ -242,16 +248,7 @@ pub fn refresh_store(
     } else {
         replace_calls(conn, &extract_rows(snap, mapping, "call"));
     }
-    // Conversation reconcile (reset meta cols → re-apply from the conv store → drop orphans not
-    // referenced by messages). Skip it ONLY when the conversation store is unchanged AND no whole chain
-    // was deleted this tick — the two (and only) ways a conversation can newly-orphan or change meta.
-    // When skipped, recompute_derived (below) still refreshes message-driven aggregates + materializes
-    // any message-only conversation, so the store stays == a full rebuild.
-    if unchanged("conversation") && !missing_happened {
-        skipped_stores += 1;
-    } else {
-        reconcile_conversations(conn, snap, mapping, &mut handles);
-    }
+    reconcile_conversations(conn, snap, mapping, &mut handles);
     conn.execute_batch("COMMIT").unwrap();
 
     recompute_derived(conn, self_mri, &mut handles);
@@ -266,7 +263,8 @@ pub fn refresh_store(
 
 // Reconcile the conversation store: reset the live-meta cols, re-apply meta from the conversation
 // store, and drop orphans (conversations neither in the live conv set nor referenced by any message).
-// Run only when the conversation store changed or a whole chain was deleted (see refresh_store).
+// Run every tick (see refresh_store): the live conversation set can change via message state alone
+// (a chain emptied of messages orphans a message-only conversation), not only via a conv-store change.
 fn reconcile_conversations(
     conn: &Connection,
     snap: &Snapshot,
@@ -677,11 +675,15 @@ mod composed_tests {
     //! a cold AND a warm cache. Self-oracle (== a native full rebuild); no new TS oracle needed.
     use super::{compute_state, refresh_store, reuse_refresh_to_file, write_meta};
     use crate::fingerprint::fingerprint;
-    use crate::idb::{load_snapshot, load_snapshot_capped, LdbCache};
+    use crate::idb::{
+        load_snapshot, load_snapshot_capped, LdbCache, Snapshot, SnapshotRecord, StoreBucket,
+    };
     use crate::resolver::{entity_targets_for, select_mapping, store_set_from_fp};
     use crate::store::{build_store, store_report};
+    use bytes::Bytes;
     use rusqlite::{params, Connection};
     use serde_json::Value;
+    use std::collections::HashMap;
     use std::path::PathBuf;
 
     fn crate_rel(p: &str) -> PathBuf {
@@ -920,11 +922,11 @@ mod composed_tests {
         }
     }
 
-    // The unchanged-store skip (★d): with a cap ABOVE every profile/event/call/conversation bucket
-    // seq (so those stores are identical in the capped prev and the full snapshot), a capped→full
-    // refresh must SKIP all four small stores AND still produce a store byte-identical to a full
-    // rebuild. The load-bearing gate on the skip PATH — the differential/composed tests use
-    // cap=maxSeq/2, which exercises the whole-replace path, not the skip.
+    // The unchanged-store skip: with a cap ABOVE every profile/event/call bucket seq (so those stores
+    // are identical in the capped prev and the full snapshot), a capped→full refresh must SKIP all
+    // three signature-skippable stores AND still produce a store byte-identical to a full rebuild. The
+    // load-bearing gate on the skip PATH — the differential/composed tests use cap=maxSeq/2, which
+    // exercises the whole-replace path, not the skip.
     #[test]
     fn refresh_skips_unchanged_stores() {
         let Ok(dir) = std::env::var("ZAUNGAST_TEST_DIR") else {
@@ -970,13 +972,170 @@ mod composed_tests {
             "the delta applied (not rebuild/skip)"
         );
         assert_eq!(
-            outcome.skipped_stores, 4,
-            "all four small stores unchanged at this cap → skipped"
+            outcome.skipped_stores, 3,
+            "all three signature-skippable stores (profile/event/call) unchanged at this cap → skipped"
         );
         assert_eq!(
             store_report(&prev),
             store_report(&build_store(&full, mapping, &schema)),
             "skip-path refresh == full rebuild"
+        );
+    }
+
+    // ---- minimal structured-clone (SSV) writer — the inverse of the tag subset `value.rs`'s Reader
+    // decodes, just enough to synthesize replychain records (object / one-byte string / int32). Its
+    // correctness is self-checking: the crate's own SSV reader decodes what it writes, so a wrong byte
+    // fails the test setup loudly rather than drifting silently. Mirrors test/fixture/encode.ts. ----
+    fn varint(mut n: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        while n >= 0x80 {
+            out.push((n as u8 & 0x7f) | 0x80);
+            n >>= 7;
+        }
+        out.push(n as u8);
+        out
+    }
+    fn ssv_str(s: &str) -> Vec<u8> {
+        // one-byte (Latin1) string: tag 0x22 + varint(len) + bytes. All fixture strings are ASCII.
+        let mut out = vec![0x22];
+        out.extend(varint(s.len() as u64));
+        out.extend(s.as_bytes());
+        out
+    }
+    fn ssv_i32(n: i32) -> Vec<u8> {
+        // int32: tag 0x49 + zigzag varint.
+        let z = if n >= 0 {
+            (n as i64 as u64) * 2
+        } else {
+            (-(n as i64) as u64) * 2 - 1
+        };
+        let mut out = vec![0x49];
+        out.extend(varint(z));
+        out
+    }
+    fn ssv_obj(entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
+        // object: 'o'(0x6f) + (key-string ++ value)* + '{'(0x7b) + varint(count).
+        let mut out = vec![0x6f];
+        for (k, v) in entries {
+            out.extend(ssv_str(k));
+            out.extend(v.clone());
+        }
+        out.push(0x7b);
+        out.extend(varint(entries.len() as u64));
+        out
+    }
+    fn idb_value(obj: Vec<u8>) -> Vec<u8> {
+        // IDB value: varint(value-version=1) ++ SSV envelope (0xFF 0x0F) ++ object.
+        let mut out = varint(1);
+        out.push(0xff);
+        out.push(0x0f);
+        out.extend(obj);
+        out
+    }
+
+    // A single-record replychain snapshot for one message-only conversation "c1": the chain carries
+    // one message when `empty` is false, and zero messages (edited to `{}`) when true. No
+    // conversation-manager db exists, so `c1` is a message-only conversation (materialized purely from
+    // its messages). db/store catalog matches the bundled mapping's `*replychain-manager*`/`replychains`.
+    fn exploit_snapshot(empty: bool) -> Snapshot {
+        let seq = if empty { 2 } else { 1 };
+        let message_map = if empty {
+            ssv_obj(&[])
+        } else {
+            let msg = ssv_obj(&[
+                ("id", ssv_str("100")),
+                ("type", ssv_str("Message")),
+                ("conversationId", ssv_str("c1")),
+                ("parentMessageId", ssv_str("100")),
+                ("version", ssv_i32(1)),
+                ("creator", ssv_str("8:orgid:aaaa")),
+                ("imDisplayName", ssv_str("User A")),
+                ("content", ssv_str("hello")),
+            ]);
+            ssv_obj(&[("100", msg)])
+        };
+        let value = idb_value(ssv_obj(&[
+            ("id", ssv_str("c1")),
+            ("conversationId", ssv_str("c1")),
+            ("messageMap", message_map),
+        ]));
+        // The user-key is opaque here — only sha256'd into `chain_key` — but MUST be identical across
+        // ticks so the chain is recognised as the same (live, edited) chain, not a delete + a new one.
+        let rec = SnapshotRecord {
+            seq,
+            rtype: 1,
+            key: Bytes::from_static(b"\x01\x02c1"),
+            value: Some(Bytes::from(value)),
+        };
+        let bucket = StoreBucket {
+            db_id: 2,
+            os_id: 1,
+            db_name: Some("teams-replychain-manager".to_string()),
+            store_name: Some("replychains".to_string()),
+            max_seq: seq,
+            records: vec![rec],
+        };
+        let mut db_names = HashMap::new();
+        db_names.insert(2u64, "teams-replychain-manager".to_string());
+        let mut store_names = HashMap::new();
+        store_names.insert("2:1".to_string(), "replychains".to_string());
+        Snapshot {
+            buckets: vec![bucket],
+            db_names,
+            store_names,
+            max_seq: seq,
+            raw_count: 1,
+            unique_count: 1,
+            lossy: false,
+        }
+    }
+
+    // A message-only conversation (no conversation-store record) whose replychain is edited down to
+    // ZERO messages while the chain stays LIVE (still present, just emptied) becomes orphaned: a full
+    // rebuild of the emptied snapshot contains no such conversation. The incremental refresh MUST reach
+    // the same store — drop the orphan, not leave it behind. This is the case the per-store signature
+    // skip must NOT swallow: no whole chain went missing (`missing_happened == false`) and the
+    // conversation store's signature is unchanged, yet the conversation set changed via message state.
+    // Fully synthetic (a hand-built Snapshot + the minimal SSV writer above) so it runs on plain
+    // `cargo test` — no ZAUNGAST_TEST_DIR, and real captures can't exhibit this dataset-latent case.
+    #[test]
+    fn refresh_drops_conversation_orphaned_by_emptied_chain() {
+        let (schema, mappings_json) = schema_and_mappings();
+        // Use the mapping directly (bypass select_mapping — a synthetic dir has no `conversations`
+        // store, so store-presence selection would reject it; per-entity glob resolution is unaffected).
+        let mapping: Value = serde_json::from_str(&mappings_json[0]).expect("parse mapping");
+
+        // Prev tick: the chain carries one message ⇒ a message-only conversation `c1` is materialized.
+        let before = exploit_snapshot(false);
+        let prev = build_store(&before, &mapping, &schema);
+        let conv_before: i64 = prev
+            .query_row("select count(*) from conversations", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            conv_before, 1,
+            "prev materialized the message-only conversation c1"
+        );
+        let state = compute_state(&before, &mapping);
+
+        // Refresh tick: same live chain, `messageMap` now empty ⇒ `c1` is orphaned.
+        let after = exploit_snapshot(true);
+        let outcome = refresh_store(&prev, &after, &mapping, &state);
+        assert!(
+            !outcome.need_full_rebuild && !outcome.skipped,
+            "the delta applied (not rebuild/skip)"
+        );
+
+        let conv_after: i64 = prev
+            .query_row("select count(*) from conversations", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            conv_after, 0,
+            "the conversation orphaned by the emptied chain must be dropped (== full rebuild)"
+        );
+        assert_eq!(
+            store_report(&prev),
+            store_report(&build_store(&after, &mapping, &schema)),
+            "emptied-chain orphan: incremental refresh == full rebuild"
         );
     }
 }
