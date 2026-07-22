@@ -9,7 +9,7 @@
 //
 // Stats are RAW (full precision) here — the consumer (console / compare tool) rounds for display. The
 // percentile + stddev DEFINITIONS below are the contract the native side must match; a shared test
-// vector will pin them (landed with the native profiler in step 2b) so the two can't drift.
+// vector will pin them (added alongside the compare tool) so the two implementations can't drift.
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 
