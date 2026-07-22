@@ -36,6 +36,9 @@ jobs:
       - name: Native triples consistency (native.yml ⊆ napi.triples)
         run: npm run check:native-triples
 
+      - name: Dependency-direction guard (libzaungast must not import the MCP server)
+        run: npm run check:deps
+
       - name: Build
         run: npm run build
 
@@ -59,3 +62,36 @@ jobs:
         # golden pins the fixture's schema fingerprint, so a change to the fingerprint algorithm
         # flips the hash and fails here — the drift signal that silently rotted a stale
         # knownFingerprint before. PII-free (synthetic); test:golden:real stays local (real cache).
+
+  rust:
+    name: Rust (fmt · clippy · unit)
+    runs-on: ubuntu-latest
+    # CI is an unconstrained Linux box, so cargo runs natively here (unlike the maintainer's host,
+    # which blocks native build/exec and falls back to Docker). This is the gate that was missing:
+    # a Rust regression / clippy violation / broken unit test used to merge — and release — green,
+    # because cargo lived only in the manual native.yml. This runs on every push/PR to main.
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          # check:native is a node script (no deps) — used here so the fmt+clippy invocation has a
+          # single source of truth shared with local dev, rather than duplicated in YAML.
+          node-version: "22"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/libzaungast-native
+
+      - name: Rust fmt + clippy (pedantic) — same gate as local `npm run check:native`
+        run: npm run check:native
+        env:
+          ZAUNGAST_NATIVE_RUNNER: local # cargo builds natively on the CI runner; no Docker fallback
+
+      - name: Rust unit tests (pure; the ZAUNGAST_TEST_DIR-gated parity tests skip without a cache)
+        working-directory: packages/libzaungast-native
+        run: cargo test --release --lib
