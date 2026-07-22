@@ -5,11 +5,18 @@ name: Native engine
 # selection (ZAUNGAST_ENGINE=native → createNativeEngine → the .node), so the native path is proven
 # byte-equal to the JS-generated goldens on every supported platform. This is the ONLY gate that
 # exercises the napi FFI + the generated addon loader end-to-end (the byte-differential harness runs
-# the standalone Rust bins, which bypass both). Matrix = the 5 targets we build prebuilts for.
+# the standalone Rust bins, which bypass both). The build+verify sequence lives in the shared composite
+# action (.github/actions/build-native) so this, native-gate.yml, and release.yml stay in lockstep.
+#
+# Matrix = the four triples we ship prebuilts for. x86_64-apple-darwin is NOT here: there are no free
+# Intel-mac runners and Intel-mac installs fall back to the JS engine, so it stays a local-only build
+# (present in napi.triples for `napi build` on a developer's Intel Mac). check:native-triples asserts
+# this matrix ⊆ napi.triples, which permits that extra.
 
 # Manual-only: the native accelerator is optional/opt-in and can't be validated on the maintainer's
 # machine (endpoint policy blocks native builds), so this doesn't gate normal pushes/PRs. Run it by
-# hand from the Actions tab when you want to build the .node + check the dual-engine golden.
+# hand from the Actions tab when you want to build the .node + check the dual-engine golden. (The
+# lighter auto gate on PRs that touch native code is native-gate.yml, behind the NATIVE_CI variable.)
 on:
   workflow_dispatch:
 
@@ -31,59 +38,4 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
-
-      - uses: actions/setup-node@v5
-        with:
-          # node:sqlite (the ChatStore) needs Node >= 22.5.
-          node-version: "22"
-          cache: "npm"
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: packages/libzaungast-native
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: macOS deployment target
-        if: runner.os == 'macOS'
-        run: echo "MACOSX_DEPLOYMENT_TARGET=11.0" >> "$GITHUB_ENV"
-
-      - name: Rust unit tests (incl. the ISO-8601 / Date.parse parity golden)
-        working-directory: packages/libzaungast-native
-        run: cargo test --release --lib
-
-      - name: Build TS
-        run: npm run build
-
-      - name: Build native addon (.node) + TS shim + generated loader
-        working-directory: packages/libzaungast-native
-        run: npm run build
-        # napi build emits libzaungast-native.<triple>.node + the generated CJS loader (index.cjs) +
-        # the shim's dist/. As a workspace member the package is symlinked into node_modules, so
-        # createNativeEngine() loads index.cjs → the colocated .node.
-
-      - name: Sanity — native engine constructs (loader + FFI + conformance)
-        # Import the SHIM (dist build) and construct the engine: this loads index.cjs → the .node and
-        # runs the conformance handshake. { unavailable } here means the loader/FFI/handshake failed.
-        run: node --experimental-sqlite --input-type=module -e "const { createNativeEngine } = await import('libzaungast-native'); const e = createNativeEngine(); if ('unavailable' in e) { console.error('native unavailable:', e.unavailable); process.exit(1); } console.log('native engine ready (full + refresh)');"
-
-      - name: Fixture suite — JS engine (baseline)
-        run: npm run test:fixture
-        env:
-          ZAUNGAST_ENGINE: js
-
-      - name: Fixture suite — NATIVE engine (must equal JS)
-        run: npm run test:fixture
-        env:
-          ZAUNGAST_ENGINE: native
-
-      - name: Golden suite — NATIVE engine (must equal JS-generated goldens)
-        run: npm run test:golden
-        env:
-          ZAUNGAST_ENGINE: native
-        # zaungast's selectEngine() honors ZAUNGAST_ENGINE and INJECTS createNativeEngine() into the
-        # fixture/golden opens, so this exercises the native full-ingest path (loader + FFI) against the
-        # committed goldens. Incremental (seqCap) tests aren't in these suites — native full only.
+      - uses: ./.github/actions/build-native

@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
+      - 'v*'
 
 jobs:
   verify-ci:
@@ -25,12 +25,26 @@ jobs:
 
       - name: Ensure published package versions match release tag
         shell: bash
-        # Gate the packages that are ACTUALLY published (libzaungast + zaungast), not the private
-        # monorepo root — a tag vX.Y.Z must mean both are at X.Y.Z.
+        env:
+          SHIP_NATIVE: ${{ vars.SHIP_NATIVE }}
+        # Gate the packages that are ACTUALLY published (libzaungast + zaungast), not the
+        # monorepo root — a tag vX.Y.Z must mean both are at X.Y.Z. When native shipping is on
+        # (SHIP_NATIVE=true) libzaungast-native ships in version lockstep, so it must match too.
         run: |
           set -euo pipefail
           tag_version="${GITHUB_REF_NAME#v}"
-          for pkg in libzaungast zaungast; do
+          pkgs=(libzaungast zaungast)
+          # Only the exact string 'true' opts in; 'false'/unset opt out; anything else (TRUE, 1, yes)
+          # is a misconfigured variable we fail on rather than silently treat as off.
+          case "${SHIP_NATIVE:-false}" in
+            true) pkgs+=(libzaungast-native) ;;
+            false | "") ;;
+            *)
+              echo "Ambiguous SHIP_NATIVE value '${SHIP_NATIVE}': expected 'true' or 'false'."
+              exit 1
+              ;;
+          esac
+          for pkg in "${pkgs[@]}"; do
             v="$(node -p "require('./packages/${pkg}/package.json').version")"
             if [[ "${v}" != "${tag_version}" ]]; then
               echo "Version mismatch: tag ${tag_version} vs packages/${pkg} ${v}."
@@ -83,8 +97,8 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: "22"
-          cache: "npm"
+          node-version: '22'
+          cache: 'npm'
       - name: Install dependencies
         run: npm ci
       - name: Build once (libzaungast then zaungast)
@@ -116,8 +130,8 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: "22"
-          registry-url: "https://registry.npmjs.org"
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
       - uses: actions/download-artifact@v4
         with:
           name: dist-artifacts
@@ -150,8 +164,8 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: "22"
-          registry-url: "https://registry.npmjs.org"
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
       - uses: actions/download-artifact@v4
         with:
           name: dist-artifacts
@@ -170,6 +184,144 @@ jobs:
           ver="$(node -p "require('./package.json').version")"
           if npm view "zaungast@${ver}" version >/dev/null 2>&1; then
             echo "zaungast@${ver} already published — skipping."
+          else
+            npm publish --provenance --access public
+          fi
+
+  # ── Native prebuilts (DORMANT) ─────────────────────────────────────────────────────────────────
+  # The two jobs below ship the optional Rust accelerator as napi prebuilt packages (a main package
+  # whose optionalDependencies point at one small package per platform, each carrying a prebuilt
+  # .node). They are fully wired but DORMANT: both run only when the repository variable
+  # SHIP_NATIVE == 'true'. Until then they are skipped (green, not failed).
+  #
+  # The JS release above is entirely independent — its jobs never `needs:` a native job, so a skipped
+  # (or failed) native leg can neither block nor trigger the libzaungast/zaungast publish. Native hangs
+  # off verify-ci; publish depends additionally on publish-libzaungast (so a consumer resolving the new
+  # main package finds its libzaungast peer already live).
+  #
+  # To ship native: (1) get all legs green on native.yml (manual), (2) set repo variable
+  # SHIP_NATIVE=true (Settings → Secrets and variables → Actions → Variables), (3) tag as usual. That
+  # single variable is the only switch — versions are already in lockstep and verify-ci checks them.
+  build-native-prebuilts:
+    name: Build native prebuilt (${{ matrix.target }} on ${{ matrix.os }})
+    needs: verify-ci
+    if: ${{ vars.SHIP_NATIVE == 'true' }}
+    strategy:
+      fail-fast: false
+      # KEEP IN LOCKSTEP with native.yml's matrix — check:native-triples asserts the two are identical
+      # and that EXPECTED_PREBUILTS below equals this leg count.
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      # Build + prove byte-equal on this platform with the SAME composite action native.yml uses, then
+      # keep the .node it produced — a shipped prebuilt is exactly what the manual matrix already proved.
+      - uses: ./.github/actions/build-native
+      - name: Stage the prebuilt addon
+        shell: bash
+        working-directory: packages/libzaungast-native
+        run: |
+          set -euo pipefail
+          mkdir -p prebuilds
+          # napi build emitted libzaungast-native.<triple>.node in the package root; stage exactly one.
+          count="$(ls -1 ./*.node 2>/dev/null | wc -l)"
+          if [[ "${count}" -ne 1 ]]; then
+            echo "Expected exactly one .node after build, found ${count}:"
+            ls -l ./*.node || true
+            exit 1
+          fi
+          cp ./*.node prebuilds/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-prebuilt-${{ matrix.target }}
+          path: packages/libzaungast-native/prebuilds/*.node
+          retention-days: 7
+          if-no-files-found: error
+
+  publish-libzaungast-native:
+    name: Publish libzaungast-native (main + per-platform prebuilts)
+    needs: [build-native-prebuilts, publish-libzaungast]
+    if: ${{ vars.SHIP_NATIVE == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC for npm --provenance
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/libzaungast-native
+      - name: Install dependencies
+        run: npm ci
+      # The main tarball ships dist/ + index.cjs + index.d.ts — all generated (gitignored), none present
+      # after a bare checkout — so build them HERE. libzaungast first (the shim's tsc needs its types),
+      # then the native package: napi build emits the generated CJS loader (index.cjs) + its .d.ts, and
+      # tsc emits the shim's dist/. The locally-built .node is excluded from `files` (prebuilts ship in
+      # the per-platform packages), so this build produces the loader + shim, not a shipped binary.
+      - name: Build main-package content (loader + shim)
+        run: |
+          set -euo pipefail
+          npm run build
+          npm run build --workspace libzaungast-native
+      # Gather every leg's prebuilt into the package's ./artifacts dir (napi's default input location).
+      - uses: actions/download-artifact@v4
+        with:
+          path: packages/libzaungast-native/artifacts
+          pattern: native-prebuilt-*
+          merge-multiple: true
+      - name: Assemble per-platform packages + wire optionalDependencies
+        working-directory: packages/libzaungast-native
+        env:
+          # = number of build-native-prebuilts matrix legs; the wiring script fails if fewer prebuilts
+          # arrive. check:native-triples asserts this equals the matrix leg count.
+          EXPECTED_PREBUILTS: '4'
+        run: |
+          set -euo pipefail
+          # Generate the stub package.json for every napi.triple, then drop each triple's prebuilt into
+          # its stub dir. The stubs are generated here and never committed, so package-lock.json stays
+          # unchanged and `npm ci` never tries to resolve an unpublished platform package.
+          npx --no-install napi create-npm-dir -t .
+          npx --no-install napi artifacts -d artifacts
+          # Wire main.optionalDependencies from the stubs that got a prebuilt; drop the rest (Intel-mac).
+          node ../../scripts/native-wire-optional-deps.mjs
+      - name: Publish per-platform packages, then the main package (idempotent, with provenance)
+        working-directory: packages/libzaungast-native
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # Satisfies the package's prepublishOnly guard — set ONLY by this gated step, so a manual or
+          # workspace-wide `npm publish` still refuses to publish native by accident.
+          ZAUNGAST_SHIP_NATIVE: '1'
+        run: |
+          set -euo pipefail
+          # Platform packages FIRST: the main package's optionalDependencies must be resolvable the
+          # instant it goes live. Same idempotent skip-if-already-published as the JS packages.
+          for d in npm/*/; do
+            name="$(node -p "require('./${d}package.json').name")"
+            ver="$(node -p "require('./${d}package.json').version")"
+            if npm view "${name}@${ver}" version >/dev/null 2>&1; then
+              echo "${name}@${ver} already published — skipping."
+            else
+              (cd "${d}" && npm publish --provenance --access public)
+            fi
+          done
+          # Then the main package (carries the generated index.cjs loader + wired optionalDependencies).
+          ver="$(node -p "require('./package.json').version")"
+          if npm view "libzaungast-native@${ver}" version >/dev/null 2>&1; then
+            echo "libzaungast-native@${ver} already published — skipping."
           else
             npm publish --provenance --access public
           fi

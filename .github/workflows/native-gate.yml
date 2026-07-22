@@ -1,0 +1,33 @@
+name: Native gate
+
+# Lightweight AUTO gate for the native accelerator: one Linux leg of the shared build+verify composite
+# action, on PRs that touch native code (and weekly, to catch toolchain/dependency drift). native.yml
+# stays the full manual cross-platform matrix; this is the fast "did a native-affecting change stay
+# byte-equal to JS" check you'd want on a PR.
+#
+# DORMANT until opted in. The job runs only when the repository variable NATIVE_CI is 'true' (or when
+# dispatched by hand). Until then the workflow is listed but every run is skipped — not failed — so it
+# never blocks a merge. To turn it on: set repo variable NATIVE_CI=true (Settings → Secrets and
+# variables → Actions → Variables). That is the ONLY switch; nothing else changes.
+
+on:
+  pull_request:
+    paths:
+      - 'packages/libzaungast-native/**'
+      - '.github/actions/build-native/**'
+      - '.github/workflows/native-gate.yml'
+      - '.github/workflows/native.yml'
+  schedule:
+    # Mondays 05:17 UTC — off the hour to avoid the cron rush; catches Rust/toolchain drift weekly.
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+jobs:
+  build-and-verify:
+    name: Build addon + dual-engine golden (linux-x64)
+    # Skipped (green, not failed) unless opted in via the NATIVE_CI variable; always runs on manual dispatch.
+    if: ${{ vars.NATIVE_CI == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/build-native

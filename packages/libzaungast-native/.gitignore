@@ -6,3 +6,9 @@ dist
 # loader + the addon's type surface. Not committed — a fresh checkout has no native engine until built.
 index.cjs
 index.d.ts
+# napi publish scaffolding, generated in CI only (napi create-npm-dir / napi artifacts): the
+# per-platform stub packages + the downloaded prebuilts. Never committed — the release job wires
+# optionalDependencies from these on the fly, so package-lock.json stays free of unpublished packages.
+/npm
+/artifacts
+/prebuilds
