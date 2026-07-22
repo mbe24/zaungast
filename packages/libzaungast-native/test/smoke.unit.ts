@@ -8,42 +8,24 @@
 // trips it at runtime even if types slipped), while the byte-differential harness proves the Rust
 // output itself. The native ingest RESULT (full/refresh against a real cache) is validated separately
 // on a host that can build + execute the .node.
-//
-// Run:
-//   node --conditions=development --experimental-sqlite --import tsx packages/libzaungast-native/test/smoke.ts
+import { test, expect } from 'vitest';
 import { createNativeEngine } from 'libzaungast-native';
 
-let pass = 0,
-  fail = 0;
-const ok = (name: string, cond: boolean, detail = ''): void => {
-  if (cond) {
-    pass++;
-    console.log(`  PASS ${name}`);
+test('native shim smoke (createNativeEngine)', () => {
+  const engine = createNativeEngine();
+  if ('unavailable' in engine) {
+    expect(
+      typeof engine.unavailable === 'string' && engine.unavailable.length > 0,
+      JSON.stringify(engine),
+    ).toBe(true);
   } else {
-    fail++;
-    console.log(`  FAIL ${name}${detail ? ` — ${detail}` : ''}`);
+    expect(
+      typeof engine.full === 'function' && typeof engine.refresh === 'function',
+      `keys=${Object.keys(engine).join(',')}`,
+    ).toBe(true);
+    expect(
+      'reuseRefresh' in engine && typeof engine.reuseRefresh === 'function',
+      'native engine offers the copy-reuse fast path (reuseRefresh present)',
+    ).toBe(true);
   }
-};
-
-console.log('\n=== native shim smoke (createNativeEngine) ===');
-const engine = createNativeEngine();
-if ('unavailable' in engine) {
-  ok(
-    'addon absent → clean { unavailable } reason (no throw)',
-    typeof engine.unavailable === 'string' && engine.unavailable.length > 0,
-    JSON.stringify(engine),
-  );
-} else {
-  ok(
-    'addon present → engine exposes full() + refresh()',
-    typeof engine.full === 'function' && typeof engine.refresh === 'function',
-    `keys=${Object.keys(engine).join(',')}`,
-  );
-  ok(
-    'native engine offers the copy-reuse fast path (reuseRefresh present)',
-    'reuseRefresh' in engine && typeof engine.reuseRefresh === 'function',
-  );
-}
-
-console.log(`\n==== ${pass} passed, ${fail} failed ====`);
-process.exit(fail ? 1 : 0);
+});

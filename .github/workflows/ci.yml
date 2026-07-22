@@ -39,6 +39,11 @@ jobs:
       - name: Dependency-direction guard (libzaungast must not import the MCP server)
         run: npm run check:deps
 
+      - name: Test-naming guard (every test file carries a role suffix vitest will run)
+        run: npm run check:test-naming
+        # vitest discovers tests by include-glob, so a mis-suffixed file would be silently skipped.
+        # This asserts every packages/*/test/**/*.ts is classified (.unit/.fixture/.golden/.int/.real).
+
       - name: Timings schema self-test (TS half of the shared percentile vector)
         run: npm run test:schema
 
@@ -55,9 +60,10 @@ jobs:
 
       - name: Integration suite (synthetic fixture)
         run: npm run test:integration:ci
-        # Generates a synthetic .ldb+.log cache and runs the mutation/equivalence harnesses
-        # (incremental refresh == full rebuild, compaction, tombstones) against it — the same
-        # suites that otherwise need a real local cache (npm run test:integration).
+        # The vitest `int` project. With no ZAUNGAST_TEST_DIR, the synthetic-capable suites
+        # (incremental/reuse == full rebuild, compaction, tombstones; feedback e2e) generate their own
+        # .ldb+.log fixture and run; the real-cache-only suites self-skip (green). Locally,
+        # `npm run test:integration` with ZAUNGAST_TEST_DIR set runs them all against a real cache.
 
       - name: Golden tests (synthetic fixture)
         run: npm run test:golden

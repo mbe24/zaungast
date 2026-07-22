@@ -1,7 +1,10 @@
+import { test, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveLevelDbDir } from '../../../scripts/native-runner.mjs';
+import { generateFixtureWithTables } from './fixture/generate.js';
 import { ingest, applyIncremental, type IngestState } from '../src/ingest/ingest.js';
 import { ChatStore } from '../src/ingest/store.js';
 import {
@@ -51,22 +54,21 @@ function craftDeletionLog(userKey: Buffer, seq: number): Buffer {
   return Buffer.concat([crc, len, type, batch]);
 }
 
-const DIR = process.argv[2] ?? process.env.ZAUNGAST_TEST_DIR;
-if (!DIR) {
-  console.error('Set ZAUNGAST_TEST_DIR or pass a leveldb dir as argv[2]');
-  process.exit(1);
-}
-let pass = 0,
-  fail = 0;
-const ok = (name: string, cond: boolean, detail = '') => {
-  if (cond) {
-    pass++;
-    console.log(`  PASS ${name}`);
+let dir: string;
+let synthetic = false;
+beforeAll(() => {
+  const real = resolveLevelDbDir(process.env.ZAUNGAST_TEST_DIR);
+  if (real) {
+    dir = real;
   } else {
-    fail++;
-    console.log(`  FAIL ${name} ${detail}`);
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zaungast-incr-'));
+    generateFixtureWithTables(dir);
+    synthetic = true;
   }
-};
+});
+afterAll(() => {
+  if (synthetic) fs.rmSync(dir, { recursive: true, force: true });
+});
 
 // canonical dump of all derived state, handles excluded (handle assignment order can differ)
 function dump(store: ChatStore): string {
@@ -141,60 +143,57 @@ function copyDir(src: string): string {
   return dst;
 }
 
-console.log('\n=== A. spine: partial(seqCap) + incremental == full rebuild ===');
-{
-  const cap = midSeq(DIR);
-  const partial = ingest(DIR, { seqCap: cap });
+test('A. spine: partial(seqCap) + incremental == full rebuild', () => {
+  const cap = midSeq(dir);
+  const partial = ingest(dir, { seqCap: cap });
   const nBefore = (partial.store.db.prepare('select count(*) n from messages').get() as any).n;
-  const r = applyIncremental(partial.store, partial.state as IngestState, DIR);
-  const full = ingest(DIR);
+  const r = applyIncremental(partial.store, partial.state as IngestState, dir);
+  const full = ingest(dir);
   const nAfter = (partial.store.db.prepare('select count(*) n from messages').get() as any).n;
-  console.log(
-    `  partial had ${nBefore} msgs (cap seq ${cap}), incremental → ${nAfter}, full → ${(full.store.db.prepare('select count(*) n from messages').get() as any).n}`,
-  );
-  ok('incremental brought new messages in', nAfter > nBefore);
-  ok('no schema-change fallback', r.needFullRebuild === false);
-  ok('incremental store == full rebuild', dump(partial.store) === dump(full.store));
-  ok('FTS consistent (incremental)', ftsConsistent(partial.store));
-  ok('FTS consistent (full)', ftsConsistent(full.store));
-  ok('FTS content == full rebuild (delta refresh)', ftsDump(partial.store) === ftsDump(full.store));
+  expect(
+    nAfter > nBefore,
+    `partial had ${nBefore} msgs (cap seq ${cap}), incremental → ${nAfter}`,
+  ).toBe(true);
+  expect(r.needFullRebuild === false, 'no schema-change fallback').toBe(true);
+  expect(dump(partial.store) === dump(full.store), 'incremental store == full rebuild').toBe(true);
+  expect(ftsConsistent(partial.store), 'FTS consistent (incremental)').toBe(true);
+  expect(ftsConsistent(full.store), 'FTS consistent (full)').toBe(true);
+  expect(
+    ftsDump(partial.store) === ftsDump(full.store),
+    'FTS content == full rebuild (delta refresh)',
+  ).toBe(true);
   partial.store.close();
   full.store.close();
-}
+});
 
-console.log('\n=== B. no-op incremental on unchanged dir ===');
-{
-  const s = ingest(DIR);
+test('B. no-op incremental on unchanged dir', () => {
+  const s = ingest(dir);
   const before = dump(s.store);
-  applyIncremental(s.store, s.state as IngestState, DIR);
-  ok('no-op incremental leaves store identical', dump(s.store) === before);
+  applyIncremental(s.store, s.state as IngestState, dir);
+  expect(dump(s.store) === before, 'no-op incremental leaves store identical').toBe(true);
   s.store.close();
-}
+});
 
-console.log('\n=== C. idempotency: incremental twice ===');
-{
-  const cap = midSeq(DIR);
-  const p = ingest(DIR, { seqCap: cap });
-  applyIncremental(p.store, p.state as IngestState, DIR);
-  (p.state as IngestState).maxSeq = loadEntries(DIR).maxSeq;
+test('C. idempotency: incremental twice', () => {
+  const cap = midSeq(dir);
+  const p = ingest(dir, { seqCap: cap });
+  applyIncremental(p.store, p.state as IngestState, dir);
+  (p.state as IngestState).maxSeq = loadEntries(dir).maxSeq;
   const after1 = dump(p.store);
-  applyIncremental(p.store, p.state as IngestState, DIR);
-  ok('second incremental is a no-op', dump(p.store) === after1);
+  applyIncremental(p.store, p.state as IngestState, dir);
+  expect(dump(p.store) === after1, 'second incremental is a no-op').toBe(true);
   p.store.close();
-}
+});
 
-console.log(
-  '\n=== D. deletion sweep: tombstone chains of size 1 / mid / max → count drops by EXACTLY N, == full ===',
-);
-{
-  const snap = loadSnapshot(DIR);
+test('D. deletion sweep: tombstone chains of size 1 / mid / max → count drops by EXACTLY N, == full', () => {
+  const snap = loadSnapshot(dir);
   const maxSeq = snap.maxSeq;
   const targets = entityTargets(snap, getMapping(snap), 'message');
   // Discover each message-store DATA record's chain size (rows it owns) from one ingest, so the
   // sweep adapts to whatever capture is pointed at it. chain_key is hex-encoded in the store, so
   // match on e.key.toString('hex'). Buckets already hold only indexId===1 records, so no key
   // re-decode / indexId re-check is needed here (matches the old decodePrefix-filtered scan).
-  const disc = ingest(DIR);
+  const disc = ingest(dir);
   const owns = disc.store.db.prepare('select count(*) n from messages where chain_key=?');
   const cands: { key: Buffer; n: number }[] = [];
   for (const sk of targets) {
@@ -215,40 +214,36 @@ console.log(
     ['mid', multi[Math.floor(multi.length / 2)] ?? cands[cands.length - 1]],
     ['max', cands[cands.length - 1]],
   ];
-  console.log(
-    `  ${cands.length} chains; deleting sizes → 1:${picks[0][1].n} mid:${picks[1][1].n} max:${picks[2][1].n}`,
-  );
   for (const [label, v] of picks) {
-    const modified = copyDir(DIR);
+    const modified = copyDir(dir);
     fs.writeFileSync(path.join(modified, 'zzz999.log'), craftDeletionLog(v.key, maxSeq + 1000));
-    const partial = ingest(DIR);
+    const partial = ingest(dir);
     const before = (partial.store.db.prepare('select count(*) n from messages').get() as any).n;
     applyIncremental(partial.store, partial.state as IngestState, modified);
     const after = (partial.store.db.prepare('select count(*) n from messages').get() as any).n;
     const full = ingest(modified);
-    ok(
-      `[${label}] tombstoned a chain owning ${v.n} → count drops by exactly ${v.n} (${before}→${after})`,
+    expect(
       before - after === v.n,
-    );
-    ok(
-      `[${label}] incremental == full rebuild of modified`,
+      `[${label}] tombstoned a chain owning ${v.n} → count drops by exactly ${v.n} (${before}→${after})`,
+    ).toBe(true);
+    expect(
       dump(partial.store) === dump(full.store),
-    );
-    ok(`[${label}] FTS consistent after deletion`, ftsConsistent(partial.store));
-    ok(
-      `[${label}] FTS content == full rebuild after deletion`,
+      `[${label}] incremental == full rebuild of modified`,
+    ).toBe(true);
+    expect(ftsConsistent(partial.store), `[${label}] FTS consistent after deletion`).toBe(true);
+    expect(
       ftsDump(partial.store) === ftsDump(full.store),
-    );
+      `[${label}] FTS content == full rebuild after deletion`,
+    ).toBe(true);
     partial.store.close();
     full.store.close();
     fs.rmSync(modified, { recursive: true, force: true });
   }
-}
+});
 
-console.log('\n=== E. Session end-to-end: warm full → mutate → incremental refresh ===');
-{
+test('E. Session end-to-end: warm full → mutate → incremental refresh', async () => {
   const { Session } = await import('../src/session.js');
-  const copy = copyDir(DIR);
+  const copy = copyDir(dir);
   const s = new (Session as any)({
     overrideDir: copy,
     minDebounceMs: 0,
@@ -256,7 +251,10 @@ console.log('\n=== E. Session end-to-end: warm full → mutate → incremental r
     incrementalMode: 'reparse',
   });
   const m0 = s.refreshNow(true); // full
-  ok('warm-up is a full ingest with data', m0.refreshMode === 'full' && m0.counts.messages > 0);
+  expect(
+    m0.refreshMode === 'full' && m0.counts.messages > 0,
+    'warm-up is a full ingest with data',
+  ).toBe(true);
   const before = m0.counts.messages;
   // mutate: tombstone a chain
   const snap = loadSnapshot(copy);
@@ -265,16 +263,17 @@ console.log('\n=== E. Session end-to-end: warm full → mutate → incremental r
     craftDeletionLog(msgStoreKey(snap)!, snap.maxSeq + 1000),
   );
   const m1 = s.refreshNow(false); // incremental
-  ok('refresh after mutation is incremental', m1.refreshMode === 'incremental');
-  ok('incremental via Session dropped the tombstoned chain', m1.counts.messages < before);
+  expect(m1.refreshMode === 'incremental', 'refresh after mutation is incremental').toBe(true);
+  expect(m1.counts.messages < before, 'incremental via Session dropped the tombstoned chain').toBe(
+    true,
+  );
   s.dispose();
   fs.rmSync(copy, { recursive: true, force: true });
-}
+});
 
-console.log('\n=== F. backstop: full every maxIncrementals refreshes ===');
-{
+test('F. backstop: full every maxIncrementals refreshes', async () => {
   const { Session } = await import('../src/session.js');
-  const copy = copyDir(DIR);
+  const copy = copyDir(dir);
   const s = new (Session as any)({
     overrideDir: copy,
     minDebounceMs: 0,
@@ -284,20 +283,16 @@ console.log('\n=== F. backstop: full every maxIncrementals refreshes ===');
   s.refreshNow(true); // full
   const modes: string[] = [];
   for (let i = 0; i < 4; i++) modes.push(s.refreshNow(false).refreshMode);
-  console.log(`  modes after full: ${modes.join(', ')}`);
-  ok(
-    'backstop forces a full at the Nth incremental',
+  expect(
     modes[0] === 'incremental' && modes[1] === 'incremental' && modes[2] === 'full',
-  );
+    `backstop forces a full at the Nth incremental (modes: ${modes.join(', ')})`,
+  ).toBe(true);
   s.dispose();
   fs.rmSync(copy, { recursive: true, force: true });
-}
+});
 
-console.log(
-  '\n=== G. multi-step: two effectful incrementals (add then delete) == full of final ===',
-);
-{
-  const copy = copyDir(DIR);
+test('G. multi-step: two effectful incrementals (add then delete) == full of final', () => {
+  const copy = copyDir(dir);
   const cap = midSeq(copy);
   const s = ingest(copy, { seqCap: cap });
   applyIncremental(s.store, s.state as IngestState, copy);
@@ -312,16 +307,15 @@ console.log(
   (s.state as IngestState).maxSeq = loadEntries(copy).maxSeq;
   const n2 = (s.store.db.prepare('select count(*) n from messages').get() as any).n;
   const full = ingest(copy);
-  ok('step1 caught up, step2 deleted', n1 > 0 && n2 < n1);
-  ok('two-step incremental == full of final', dump(s.store) === dump(full.store));
+  expect(n1 > 0 && n2 < n1, 'step1 caught up, step2 deleted').toBe(true);
+  expect(dump(s.store) === dump(full.store), 'two-step incremental == full of final').toBe(true);
   s.store.close();
   full.store.close();
   fs.rmSync(copy, { recursive: true, force: true });
-}
+});
 
-console.log('\n=== H. lossy load MUST NOT mass-delete (Hole 1 regression) ===');
-{
-  const corrupt = copyDir(DIR);
+test('H. lossy load MUST NOT mass-delete (Hole 1 regression)', () => {
+  const corrupt = copyDir(dir);
   const ldb = fs
     .readdirSync(corrupt)
     .filter((f) => f.endsWith('.ldb'))
@@ -329,18 +323,17 @@ console.log('\n=== H. lossy load MUST NOT mass-delete (Hole 1 regression) ===');
   const p = path.join(corrupt, ldb);
   const buf = fs.readFileSync(p);
   fs.writeFileSync(p, buf.subarray(0, Math.floor(buf.length / 2))); // truncate → bad footer/index
-  const s = ingest(DIR); // full, all messages
+  const s = ingest(dir); // full, all messages
   const before = (s.store.db.prepare('select count(*) n from messages').get() as any).n;
   const r = applyIncremental(s.store, s.state as IngestState, corrupt); // lossy target
   const after = (s.store.db.prepare('select count(*) n from messages').get() as any).n;
-  ok('lossy load returns skipped', r.skipped === true);
-  ok('store NOT mass-deleted on lossy load', after === before);
+  expect(r.skipped === true, 'lossy load returns skipped').toBe(true);
+  expect(after === before, 'store NOT mass-deleted on lossy load').toBe(true);
   s.store.close();
   fs.rmSync(corrupt, { recursive: true, force: true });
-}
+});
 
-console.log('\n=== I. store-level: edit + soft-delete update flags and FTS (Hole 3) ===');
-{
+test('I. store-level: edit + soft-delete update flags and FTS (Hole 3)', () => {
   const st = new ChatStore();
   const base = {
     convId: 'c',
@@ -355,76 +348,72 @@ console.log('\n=== I. store-level: edit + soft-delete update flags and FTS (Hole
   };
   st.insertMessage({ ...base, id: '1', version: 1, isSystem: 0, content: 'hello world' });
   st.refreshFts(null);
-  ok(
-    'v1 findable in FTS',
+  expect(
     (
       st.db
         .prepare("select count(*) n from messages_fts where messages_fts match 'hello'")
         .get() as any
     ).n === 1,
-  );
+    'v1 findable in FTS',
+  ).toBe(true);
   // edit: new content, same id, higher version
   st.insertMessage({ ...base, id: '1', version: 2, isSystem: 0, content: 'edited text' });
   st.refreshFts(null);
-  ok(
-    'edit: old token gone',
+  expect(
     (
       st.db
         .prepare("select count(*) n from messages_fts where messages_fts match 'hello'")
         .get() as any
     ).n === 0,
-  );
-  ok(
-    'edit: new token found',
+    'edit: old token gone',
+  ).toBe(true);
+  expect(
     (
       st.db
         .prepare("select count(*) n from messages_fts where messages_fts match 'edited'")
         .get() as any
     ).n === 1,
-  );
+    'edit: new token found',
+  ).toBe(true);
   // soft-delete: content cleared, is_system flips (SET must update is_system)
   st.insertMessage({ ...base, id: '1', version: 3, isSystem: 1, content: '' });
   st.refreshFts(null);
-  ok(
-    'soft-delete: is_system updated on conflict',
+  expect(
     (st.db.prepare('select is_system from messages where id=?').get('1') as any).is_system === 1,
-  );
-  ok(
-    'soft-delete: dropped from FTS',
+    'soft-delete: is_system updated on conflict',
+  ).toBe(true);
+  expect(
     (
       st.db
         .prepare("select count(*) n from messages_fts where messages_fts match 'edited'")
         .get() as any
     ).n === 0,
-  );
+    'soft-delete: dropped from FTS',
+  ).toBe(true);
   st.close();
-}
+});
 
-console.log(
-  '\n=== J. tripwire: mapped-store target change → full rebuild; irrelevant churn → not ===',
-);
-{
-  const s = ingest(DIR);
-  const rNeg = applyIncremental(s.store, s.state as IngestState, DIR);
-  ok('irrelevant dynamic-store churn does NOT trip', rNeg.needFullRebuild === false);
+test('J. tripwire: mapped-store target change → full rebuild; irrelevant churn → not', () => {
+  const s = ingest(dir);
+  const rNeg = applyIncremental(s.store, s.state as IngestState, dir);
+  expect(rNeg.needFullRebuild === false, 'irrelevant dynamic-store churn does NOT trip').toBe(true);
   (s.state as IngestState).msgTargets = new Set([
     ...(s.state as IngestState).msgTargets,
     '99999:1',
   ]); // simulate our store having moved
-  const rPos = applyIncremental(s.store, s.state as IngestState, DIR);
-  ok('changed mapped targets trip a full rebuild', rPos.needFullRebuild === true);
+  const rPos = applyIncremental(s.store, s.state as IngestState, dir);
+  expect(rPos.needFullRebuild === true, 'changed mapped targets trip a full rebuild').toBe(true);
   s.store.close();
-}
+});
 
-console.log('\n=== K. Session cold-start lossy full is flagged and self-heals ===');
-{
+test('K. Session cold-start lossy full is flagged and self-heals', async () => {
   const { Session } = await import('../src/session.js');
-  const corrupt = copyDir(DIR);
+  const corrupt = copyDir(dir);
   const ldb = fs
     .readdirSync(corrupt)
     .filter((f) => f.endsWith('.ldb'))
     .sort()[0];
-  const good = fs.readFileSync(path.join(DIR, ldb));
+  const good = fs.readFileSync(path.join(dir, ldb));
   fs.writeFileSync(path.join(corrupt, ldb), good.subarray(0, Math.floor(good.length / 2))); // truncate → lossy
   const s = new (Session as any)({
     overrideDir: corrupt,
@@ -432,19 +421,18 @@ console.log('\n=== K. Session cold-start lossy full is flagged and self-heals ==
     incrementalMode: 'reparse',
   });
   const m1 = s.refreshNow(true);
-  ok('cold-start lossy full is flagged in meta', m1.lossy === true);
-  fs.copyFileSync(path.join(DIR, ldb), path.join(corrupt, ldb)); // restore → clean
+  expect(m1.lossy === true, 'cold-start lossy full is flagged in meta').toBe(true);
+  fs.copyFileSync(path.join(dir, ldb), path.join(corrupt, ldb)); // restore → clean
   const m2 = s.refreshNow(true);
-  ok('a clean full clears the lossy flag', m2.lossy === false && m2.counts.messages > 0);
+  expect(m2.lossy === false && m2.counts.messages > 0, 'a clean full clears the lossy flag').toBe(
+    true,
+  );
   s.dispose();
   fs.rmSync(corrupt, { recursive: true, force: true });
-}
+});
 
-console.log(
-  '\n=== L. hardening: post-COMMIT recompute throw → needFullRebuild (not a stuck store) ===',
-);
-{
-  const copy = copyDir(DIR);
+test('L. hardening: post-COMMIT recompute throw → needFullRebuild (not a stuck store)', () => {
+  const copy = copyDir(dir);
   const cap = midSeq(copy);
   const s = ingest(copy, { seqCap: cap });
   const snap = loadSnapshot(copy);
@@ -457,7 +445,7 @@ console.log(
     throw new Error('boom (simulated post-commit failure)');
   };
   const r = applyIncremental(s.store, s.state as IngestState, copy);
-  ok('post-commit throw returns needFullRebuild', r.needFullRebuild === true);
+  expect(r.needFullRebuild === true, 'post-commit throw returns needFullRebuild').toBe(true);
   (s.store as any).recomputeDerived = orig;
   // store is not left mid-transaction: a normal write still works
   let writable = true;
@@ -467,18 +455,15 @@ console.log(
   } catch {
     writable = false;
   }
-  ok('store not left in an open transaction', writable);
+  expect(writable, 'store not left in an open transaction').toBe(true);
   s.store.close();
   fs.rmSync(copy, { recursive: true, force: true });
-}
+});
 
-console.log(
-  '\n=== M. hardening: Session leaves no temp snapshot dir behind on a refresh throw ===',
-);
-{
+test('M. hardening: Session leaves no temp snapshot dir behind on a refresh throw', async () => {
   const { Session } = await import('../src/session.js');
   const before = fs.readdirSync(os.tmpdir()).filter((d) => d.startsWith('zaungast-')).length;
-  const copy = copyDir(DIR);
+  const copy = copyDir(dir);
   const s = new (Session as any)({
     overrideDir: copy,
     minDebounceMs: 0,
@@ -493,39 +478,35 @@ console.log(
   } catch {
     threw = true;
   }
-  ok('refresh threw on a vanished source', threw);
+  expect(threw, 'refresh threw on a vanished source').toBe(true);
   s.dispose();
   const final = fs.readdirSync(os.tmpdir()).filter((d) => d.startsWith('zaungast-')).length;
-  ok('no leaked zaungast- temp dirs after dispose', final <= before);
-}
+  expect(final <= before, 'no leaked zaungast- temp dirs after dispose').toBe(true);
+});
 
-console.log('\n=== N. hardening: handles stable across a full rebuild of identical data ===');
-{
-  const a = ingest(DIR);
-  const b = ingest(DIR);
+test('N. hardening: handles stable across a full rebuild of identical data', () => {
+  const a = ingest(dir);
+  const b = ingest(dir);
   const ha = (a.store.db.prepare('select id,handle from conversations order by id').all() as any[])
     .map((r) => `${r.id}=${r.handle}`)
     .join('|');
   const hb = (b.store.db.prepare('select id,handle from conversations order by id').all() as any[])
     .map((r) => `${r.id}=${r.handle}`)
     .join('|');
-  ok('conversation handles reproducible across rebuilds', ha === hb);
+  expect(ha === hb, 'conversation handles reproducible across rebuilds').toBe(true);
   const pa = (a.store.db.prepare('select mri,handle from people order by mri').all() as any[])
     .map((r) => `${r.mri}=${r.handle}`)
     .join('|');
   const pb = (b.store.db.prepare('select mri,handle from people order by mri').all() as any[])
     .map((r) => `${r.mri}=${r.handle}`)
     .join('|');
-  ok('people handles reproducible across rebuilds', pa === pb);
-  ok(
-    'handles are 6-hex (c:xxxxxx)',
+  expect(pa === pb, 'people handles reproducible across rebuilds').toBe(true);
+  expect(
     /^c:[0-9a-f]{6}$/.test(
       (a.store.db.prepare('select handle from conversations limit 1').get() as any).handle,
     ),
-  );
+    'handles are 6-hex (c:xxxxxx)',
+  ).toBe(true);
   a.store.close();
   b.store.close();
-}
-
-console.log(`\n==== ${pass} passed, ${fail} failed ====`);
-process.exit(fail ? 1 : 0);
+});

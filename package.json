@@ -24,6 +24,7 @@
     "typecheck:test": "tsc -p packages/libzaungast/test/tsconfig.json && tsc -p packages/libzaungast-native/test/tsconfig.json && tsc -p packages/zaungast/test/tsconfig.json",
     "check:deps": "node scripts/check-deps.mjs",
     "check:native-triples": "node scripts/check-native-triples.mjs",
+    "check:test-naming": "node scripts/check-test-naming.mjs",
     "check:native": "node scripts/check-native.mjs",
     "test:native": "node scripts/native-test.mjs",
     "diff": "node scripts/native-diff.mjs",
@@ -31,12 +32,13 @@
     "smoke:external-install": "node scripts/smoke-external-install.mjs",
     "format": "prettier --write \"packages/*/src/**/*.ts\" \"packages/*/shim/**/*.ts\" \"packages/*/test/**/*.ts\"",
     "format:check": "prettier --check \"packages/*/src/**/*.ts\" \"packages/*/shim/**/*.ts\" \"packages/*/test/**/*.ts\"",
-    "test": "node scripts/run-tests.mjs unit",
-    "test:fixture": "node scripts/run-tests.mjs fixture",
-    "test:integration:ci": "node --conditions=development --experimental-sqlite --import tsx packages/libzaungast/test/run-integration.ts",
-    "test:integration": "node scripts/run-tests.mjs int",
-    "test:golden": "node scripts/run-tests.mjs golden",
-    "test:golden:real": "node scripts/run-tests.mjs real",
+    "test": "vitest run --project unit",
+    "test:watch": "vitest",
+    "test:fixture": "vitest run --project fixture",
+    "test:integration:ci": "vitest run --project int",
+    "test:integration": "vitest run --project int",
+    "test:golden": "vitest run --project golden",
+    "test:golden:real": "vitest run --project real",
     "assets": "node scripts/render-assets.mjs",
     "profile": "node --experimental-sqlite --expose-gc scripts/profile.mjs",
     "profile:native": "node scripts/profile-rust.mjs",
@@ -52,6 +54,7 @@
     "@types/node": "^26.1.1",
     "prettier": "^3.9.5",
     "tsx": "^4.23.0",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
   }
 }

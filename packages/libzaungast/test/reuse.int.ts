@@ -1,8 +1,14 @@
 // Copy-reuse (stage 2) correctness: the cached loader must produce an identical live set to
 // the reparse loader, and applying it must equal a full rebuild.
+//
+// Run: npx vitest run packages/libzaungast/test/reuse.int.ts
+import { test, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { resolveLevelDbDir } from '../../../scripts/native-runner.mjs';
+import { generateFixtureWithTables } from './fixture/generate.js';
 import { ingest, applyIncremental, type IngestState } from '../src/ingest/ingest.js';
 import {
   loadSnapshot,
@@ -18,24 +24,23 @@ import {
   loadSnapshotReuse,
   decodePrefix,
 } from '../src/format/chromium/indexeddb.js';
+import { crc32c } from '../src/format/chromium/sstable.js';
 import { byCodeUnit } from '../src/util/sort.js';
 
-const DIR = process.argv[2] ?? process.env.ZAUNGAST_TEST_DIR;
-if (!DIR) {
-  console.error('Set ZAUNGAST_TEST_DIR or pass a leveldb dir as argv[2]');
-  process.exit(1);
-}
-let pass = 0,
-  fail = 0;
-const ok = (n: string, c: boolean, d = '') => {
-  if (c) {
-    pass++;
-    console.log(`  PASS ${n}`);
-  } else {
-    fail++;
-    console.log(`  FAIL ${n} ${d}`);
+let dir: string;
+let synthetic = false;
+beforeAll(() => {
+  const real = resolveLevelDbDir(process.env.ZAUNGAST_TEST_DIR);
+  if (real) dir = real;
+  else {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zaungast-reuse-'));
+    generateFixtureWithTables(dir);
+    synthetic = true;
   }
-};
+});
+afterAll(() => {
+  if (synthetic) fs.rmSync(dir, { recursive: true, force: true });
+});
 
 function liveSig(live: any[]): string {
   return live
@@ -49,119 +54,7 @@ function copyDir(src: string): string {
   return dst;
 }
 
-console.log('=== A. cached loader output == reparse loader output (cold cache) ===');
-{
-  const reparse = loadEntries(DIR);
-  const cache = new Map();
-  const reuse = loadEntriesReuse(DIR, cache);
-  ok('same live set', liveSig(reparse.live) === liveSig(reuse.live));
-  ok('same maxSeq', reparse.maxSeq === reuse.maxSeq);
-  ok(
-    'cache populated with every .ldb',
-    cache.size === fs.readdirSync(DIR).filter((f) => f.endsWith('.ldb')).length,
-  );
-  ok('not compacted, not lossy', reuse.compacted === false && reuse.lossy === false);
-}
-
-console.log('\n=== B. warm cache: second call reuses parses, identical output ===');
-{
-  const cache = new Map();
-  const first = loadEntriesReuse(DIR, cache);
-  const cachedObjs = [...cache.values()];
-  const second = loadEntriesReuse(DIR, cache);
-  ok('identical live set warm', liveSig(first.live) === liveSig(second.live));
-  ok(
-    'cache objects reused (same references)',
-    [...cache.values()].every((v, i) => v === cachedObjs[i]),
-  );
-}
-
-console.log('\n=== C. spine: partial + applyIncremental(cached load) == full rebuild ===');
-{
-  const cap = (() => {
-    const s = loadEntries(DIR)
-      .live.map((e: any) => e.seq)
-      .sort((a: number, b: number) => a - b);
-    return s[Math.floor(s.length / 2)];
-  })();
-  const partial = ingest(DIR, { seqCap: cap });
-  const cache = new Map();
-  const loaded = loadSnapshotReuse(DIR, cache);
-  const r = applyIncremental(partial.store, partial.state as IngestState, loaded);
-  const full = ingest(DIR);
-  const dump = (s: any) =>
-    JSON.stringify({
-      m: s.db
-        .prepare(
-          'select conv_id,id,version,ts,sender_mri,is_system,content from messages order by conv_id,id',
-        )
-        .all(),
-      p: s.db.prepare('select mri,name,msg_count from people order by mri').all(),
-    });
-  ok('no fallback', r.needFullRebuild === false && r.skipped === false);
-  ok('cached-load incremental == full rebuild', dump(partial.store) === dump(full.store));
-  partial.store.close();
-  full.store.close();
-}
-
-console.log('\n=== D. compaction detected when a cached .ldb disappears ===');
-{
-  const d = copyDir(DIR);
-  const cache = new Map();
-  loadEntriesReuse(d, cache); // populate
-  const victim = fs
-    .readdirSync(d)
-    .filter((f) => f.endsWith('.ldb'))
-    .sort()[0];
-  fs.rmSync(path.join(d, victim));
-  const after = loadEntriesReuse(d, cache);
-  ok('compacted flag set', after.compacted === true);
-  ok('cache pruned the removed file', !cache.has(victim));
-  fs.rmSync(d, { recursive: true, force: true });
-}
-
-console.log('\n=== E. new .ldb flush is picked up; still == reparse ===');
-{
-  const d = copyDir(DIR);
-  const cache = new Map();
-  const ldbs = fs
-    .readdirSync(d)
-    .filter((f) => f.endsWith('.ldb'))
-    .sort();
-  // cold cache over a SUBSET (simulate an earlier state), then reveal the rest = "flush"
-  const held = path.join(os.tmpdir(), 'held-' + ldbs[ldbs.length - 1]);
-  fs.copyFileSync(path.join(d, ldbs[ldbs.length - 1]), held);
-  fs.rmSync(path.join(d, ldbs[ldbs.length - 1]));
-  loadEntriesReuse(d, cache); // cache without the last .ldb
-  const cacheSizeBefore = cache.size;
-  fs.copyFileSync(held, path.join(d, ldbs[ldbs.length - 1])); // "flush" appears
-  const after = loadEntriesReuse(d, cache);
-  ok('new .ldb parsed into cache', cache.size === cacheSizeBefore + 1);
-  ok('reuse == reparse after flush', liveSig(after.live) === liveSig(loadEntries(d).live));
-  fs.rmSync(held, { force: true });
-  fs.rmSync(d, { recursive: true, force: true });
-}
-
-console.log('\n=== F. truncated (lossy) new .ldb → lossy, not cached (so it retries) ===');
-{
-  const d = copyDir(DIR);
-  const cache = new Map();
-  const victim = fs
-    .readdirSync(d)
-    .filter((f) => f.endsWith('.ldb'))
-    .sort()[0];
-  const good = fs.readFileSync(path.join(d, victim));
-  fs.writeFileSync(path.join(d, victim), good.subarray(0, Math.floor(good.length / 2)));
-  const res = loadEntriesReuse(d, cache);
-  ok('lossy flag set', res.lossy === true);
-  ok('lossy file NOT cached (will retry)', !cache.has(victim));
-  fs.rmSync(d, { recursive: true, force: true });
-}
-
 // ---- Session-level: copy-reuse mode must equal reparse mode after identical mutations ----
-import { crc32c } from '../src/format/chromium/sstable.js';
-import { fileURLToPath } from 'node:url';
-
 const VDIR = fileURLToPath(new URL('../src/schema/versions/', import.meta.url));
 function maskCrc(c: number): number {
   return (((c >>> 15) | (c << 17)) + 0xa282ead8) >>> 0;
@@ -198,9 +91,9 @@ function craftDeletionLog(userKey: Buffer, seq: number): Buffer {
   len.writeUInt16LE(batch.length);
   return Buffer.concat([crc, len, type, batch]);
 }
-function msgStoreKey(dir: string): Buffer | null {
-  const { live } = loadEntries(dir);
-  const snap = loadSnapshot(dir);
+function msgStoreKey(d: string): Buffer | null {
+  const { live } = loadEntries(d);
+  const snap = loadSnapshot(d);
   const mapping = selectMapping(fingerprint(snap), {
     mappings: fs
       .readdirSync(VDIR)
@@ -233,13 +126,117 @@ function storeDump(store: any): string {
   });
 }
 
-console.log(
-  '\n=== G. Session copy-reuse == reparse after the same mutation (mode equivalence) ===',
-);
-{
+test('A. cached loader output == reparse loader output (cold cache)', () => {
+  const reparse = loadEntries(dir);
+  const cache = new Map();
+  const reuse = loadEntriesReuse(dir, cache);
+  expect(liveSig(reparse.live) === liveSig(reuse.live), 'same live set').toBe(true);
+  expect(reparse.maxSeq === reuse.maxSeq, 'same maxSeq').toBe(true);
+  expect(
+    cache.size === fs.readdirSync(dir).filter((f) => f.endsWith('.ldb')).length,
+    'cache populated with every .ldb',
+  ).toBe(true);
+  expect(reuse.compacted === false && reuse.lossy === false, 'not compacted, not lossy').toBe(true);
+});
+
+test('B. warm cache: second call reuses parses, identical output', () => {
+  const cache = new Map();
+  const first = loadEntriesReuse(dir, cache);
+  const cachedObjs = [...cache.values()];
+  const second = loadEntriesReuse(dir, cache);
+  expect(liveSig(first.live) === liveSig(second.live), 'identical live set warm').toBe(true);
+  expect(
+    [...cache.values()].every((v, i) => v === cachedObjs[i]),
+    'cache objects reused (same references)',
+  ).toBe(true);
+});
+
+test('C. spine: partial + applyIncremental(cached load) == full rebuild', () => {
+  const cap = (() => {
+    const s = loadEntries(dir)
+      .live.map((e: any) => e.seq)
+      .sort((a: number, b: number) => a - b);
+    return s[Math.floor(s.length / 2)];
+  })();
+  const partial = ingest(dir, { seqCap: cap });
+  const cache = new Map();
+  const loaded = loadSnapshotReuse(dir, cache);
+  const r = applyIncremental(partial.store, partial.state as IngestState, loaded);
+  const full = ingest(dir);
+  const dump = (s: any) =>
+    JSON.stringify({
+      m: s.db
+        .prepare(
+          'select conv_id,id,version,ts,sender_mri,is_system,content from messages order by conv_id,id',
+        )
+        .all(),
+      p: s.db.prepare('select mri,name,msg_count from people order by mri').all(),
+    });
+  expect(r.needFullRebuild === false && r.skipped === false, 'no fallback').toBe(true);
+  expect(dump(partial.store) === dump(full.store), 'cached-load incremental == full rebuild').toBe(
+    true,
+  );
+  partial.store.close();
+  full.store.close();
+});
+
+test('D. compaction detected when a cached .ldb disappears', () => {
+  const d = copyDir(dir);
+  const cache = new Map();
+  loadEntriesReuse(d, cache); // populate
+  const victim = fs
+    .readdirSync(d)
+    .filter((f) => f.endsWith('.ldb'))
+    .sort()[0];
+  fs.rmSync(path.join(d, victim));
+  const after = loadEntriesReuse(d, cache);
+  expect(after.compacted === true, 'compacted flag set').toBe(true);
+  expect(!cache.has(victim), 'cache pruned the removed file').toBe(true);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('E. new .ldb flush is picked up; still == reparse', () => {
+  const d = copyDir(dir);
+  const cache = new Map();
+  const ldbs = fs
+    .readdirSync(d)
+    .filter((f) => f.endsWith('.ldb'))
+    .sort();
+  // cold cache over a SUBSET (simulate an earlier state), then reveal the rest = "flush"
+  const held = path.join(os.tmpdir(), 'held-' + ldbs[ldbs.length - 1]);
+  fs.copyFileSync(path.join(d, ldbs[ldbs.length - 1]), held);
+  fs.rmSync(path.join(d, ldbs[ldbs.length - 1]));
+  loadEntriesReuse(d, cache); // cache without the last .ldb
+  const cacheSizeBefore = cache.size;
+  fs.copyFileSync(held, path.join(d, ldbs[ldbs.length - 1])); // "flush" appears
+  const after = loadEntriesReuse(d, cache);
+  expect(cache.size === cacheSizeBefore + 1, 'new .ldb parsed into cache').toBe(true);
+  expect(liveSig(after.live) === liveSig(loadEntries(d).live), 'reuse == reparse after flush').toBe(
+    true,
+  );
+  fs.rmSync(held, { force: true });
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('F. truncated (lossy) new .ldb → lossy, not cached (so it retries)', () => {
+  const d = copyDir(dir);
+  const cache = new Map();
+  const victim = fs
+    .readdirSync(d)
+    .filter((f) => f.endsWith('.ldb'))
+    .sort()[0];
+  const good = fs.readFileSync(path.join(d, victim));
+  fs.writeFileSync(path.join(d, victim), good.subarray(0, Math.floor(good.length / 2)));
+  const res = loadEntriesReuse(d, cache);
+  expect(res.lossy === true, 'lossy flag set').toBe(true);
+  expect(!cache.has(victim), 'lossy file NOT cached (will retry)').toBe(true);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('G. Session copy-reuse == reparse after the same mutation (mode equivalence)', async () => {
   const { Session } = await import('../src/session.js');
-  const dR = copyDir(DIR),
-    dC = copyDir(DIR);
+  const dR = copyDir(dir),
+    dC = copyDir(dir);
   const sR = new (Session as any)({
     overrideDir: dR,
     minDebounceMs: 0,
@@ -260,22 +257,21 @@ console.log(
   fs.writeFileSync(path.join(dC, 'zz9.log'), craftDeletionLog(msgStoreKey(dC)!, seqC + 1000));
   sR.refreshNow(false);
   const mC = sC.refreshNow(false);
-  ok('copy-reuse refresh is incremental', mC.refreshMode === 'incremental');
-  ok(
-    'copy-reuse store == reparse store after deletion',
+  expect(mC.refreshMode === 'incremental', 'copy-reuse refresh is incremental').toBe(true);
+  expect(
     storeDump(sR.getStore()) === storeDump(sC.getStore()),
-  );
+    'copy-reuse store == reparse store after deletion',
+  ).toBe(true);
   sR.dispose();
   sC.dispose();
   fs.rmSync(dR, { recursive: true, force: true });
   fs.rmSync(dC, { recursive: true, force: true });
-}
+});
 
-console.log('\n=== H. Session copy-reuse multi-step (add then delete) == reparse ===');
-{
+test('H. Session copy-reuse multi-step (add then delete) == reparse', async () => {
   const { Session } = await import('../src/session.js');
-  const dR = copyDir(DIR),
-    dC = copyDir(DIR);
+  const dR = copyDir(dir),
+    dC = copyDir(dir);
   const sR = new (Session as any)({
     overrideDir: dR,
     minDebounceMs: 0,
@@ -296,20 +292,20 @@ console.log('\n=== H. Session copy-reuse multi-step (add then delete) == reparse
   fs.writeFileSync(path.join(dC, 'a.log'), craftDeletionLog(kC1, loadEntries(dC).maxSeq + 1000));
   sR.refreshNow(false);
   sC.refreshNow(false);
-  ok('multi-step copy-reuse == reparse', storeDump(sR.getStore()) === storeDump(sC.getStore()));
+  expect(
+    storeDump(sR.getStore()) === storeDump(sC.getStore()),
+    'multi-step copy-reuse == reparse',
+  ).toBe(true);
   sR.dispose();
   sC.dispose();
   fs.rmSync(dR, { recursive: true, force: true });
   fs.rmSync(dC, { recursive: true, force: true });
-}
+});
 
-console.log(
-  '\n=== I. end-to-end: compaction (merge .ldb) → copy-reuse store == reparse, no resurrection ===',
-);
-{
+test('I. end-to-end: compaction (merge .ldb) → copy-reuse store == reparse, no resurrection', async () => {
   const { Session } = await import('../src/session.js');
-  const dC = copyDir(DIR),
-    dR = copyDir(DIR);
+  const dC = copyDir(dir),
+    dR = copyDir(dir);
   const sC = new (Session as any)({
     overrideDir: dC,
     minDebounceMs: 0,
@@ -339,20 +335,19 @@ console.log(
     JSON.stringify(s.db.prepare('select conv_id,id from messages order by conv_id,id').all());
   // both may go degraded (removing an .ldb can break the schema mapping) OR match — the invariant
   // is that copy-reuse never has MORE data than reparse (no resurrection).
-  ok(
-    'copy-reuse store == reparse store after compaction',
+  expect(
     dump(sC.getStore()) === dump(sR.getStore()),
-  );
+    'copy-reuse store == reparse store after compaction',
+  ).toBe(true);
   sC.dispose();
   sR.dispose();
   fs.rmSync(dC, { recursive: true, force: true });
   fs.rmSync(dR, { recursive: true, force: true });
-}
+});
 
-console.log('\n=== J. needFullRebuild in copy-reuse latches a full rebuild (pendingFull) ===');
-{
+test('J. needFullRebuild in copy-reuse latches a full rebuild (pendingFull)', async () => {
   const { Session } = await import('../src/session.js');
-  const d = copyDir(DIR);
+  const d = copyDir(dir);
   const s = new (Session as any)({
     overrideDir: d,
     minDebounceMs: 0,
@@ -364,21 +359,18 @@ console.log('\n=== J. needFullRebuild in copy-reuse latches a full rebuild (pend
   s.cur.state.msgTargets = new Set([...s.cur.state.msgTargets, '99999:1']);
   const before = (s.getStore().db.prepare('select count(*) n from messages').get() as any).n;
   const m = s.refreshNow(false);
-  ok('recovered via full rebuild', m.refreshMode === 'full');
-  ok(
-    'store still valid after fallback',
+  expect(m.refreshMode === 'full', 'recovered via full rebuild').toBe(true);
+  expect(
     (s.getStore().db.prepare('select count(*) n from messages').get() as any).n === before,
-  );
+    'store still valid after fallback',
+  ).toBe(true);
   s.dispose();
   fs.rmSync(d, { recursive: true, force: true });
-}
+});
 
-console.log(
-  '\n=== K. partial-.ldb wedge (H-A/H-B): a truncated snapshot .ldb recovers within one refresh ===',
-);
-{
+test('K. partial-.ldb wedge (H-A/H-B): a truncated snapshot .ldb recovers within one refresh', async () => {
   const { Session } = await import('../src/session.js');
-  const d = copyDir(DIR);
+  const d = copyDir(dir);
   const s = new (Session as any)({
     overrideDir: d,
     minDebounceMs: 0,
@@ -398,19 +390,18 @@ console.log(
   s.refreshNow(false);
   const n = (s.getStore().db.prepare('select count(*) n from messages').get() as any).n;
   const full = ingest(d);
-  ok(
-    'recovered full message set within one refresh (size-check re-copied the truncated .ldb)',
+  expect(
     n === (full.store.db.prepare('select count(*) n from messages').get() as any).n,
-  );
+    'recovered full message set within one refresh (size-check re-copied the truncated .ldb)',
+  ).toBe(true);
   full.store.close();
   s.dispose();
   fs.rmSync(d, { recursive: true, force: true });
-}
+});
 
-console.log('\n=== L. backstop fires in copy-reuse mode ===');
-{
+test('L. backstop fires in copy-reuse mode', async () => {
   const { Session } = await import('../src/session.js');
-  const d = copyDir(DIR);
+  const d = copyDir(dir);
   const s = new (Session as any)({
     overrideDir: d,
     minDebounceMs: 0,
@@ -423,10 +414,7 @@ console.log('\n=== L. backstop fires in copy-reuse mode ===');
     s.refreshNow(false).refreshMode,
     s.refreshNow(false).refreshMode,
   ];
-  ok('backstop forces a full within copy-reuse cadence', modes.includes('full'));
+  expect(modes.includes('full'), 'backstop forces a full within copy-reuse cadence').toBe(true);
   s.dispose();
   fs.rmSync(d, { recursive: true, force: true });
-}
-
-console.log(`\n==== ${pass} passed, ${fail} failed ====`);
-process.exit(fail ? 1 : 0);
+});

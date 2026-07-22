@@ -6,10 +6,11 @@
 // sha256 of the canonicalized rows — never any message/person content. Hashes+counts are not PII.
 //
 // SKIP-IF-ABSENT: the real snapshot is local-only (gitignored `data/`), so on a machine without it
-// this test prints SKIP and exits 0. It gates locally, before merging.
+// this test is skipped (green). It gates locally, before merging.
 //
-// Run:  node --experimental-sqlite --import tsx test/golden/real-digest.ts   [<leveldb-dir>]
-//       UPDATE_GOLDEN=1 node --experimental-sqlite --import tsx test/golden/real-digest.ts
+// Run:  npx vitest run packages/libzaungast/test/golden/real-digest.real.ts   [<leveldb-dir>]
+//       npx vitest run -u packages/libzaungast/test/golden/real-digest.real.ts   (rewrite the golden)
+import { test, expect } from 'vitest';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -44,23 +45,7 @@ function autofind(root: string): string | undefined {
 }
 
 const DIR = process.env.ZAUNGAST_REAL_DIR ?? process.argv[2] ?? autofind(path.resolve('data'));
-
-if (!DIR || !fs.existsSync(path.join(DIR, 'CURRENT'))) {
-  console.log('  SKIP real-digest: no local real leveldb store found (set ZAUNGAST_REAL_DIR).');
-  process.exit(0);
-}
-
-let pass = 0,
-  fail = 0;
-const ok = (n: string, c: boolean, d = '') => {
-  if (c) {
-    pass++;
-    console.log(`  PASS ${n}`);
-  } else {
-    fail++;
-    console.log(`  FAIL ${n} ${d}`);
-  }
-};
+const hasCorpus = !!DIR && fs.existsSync(path.join(DIR, 'CURRENT'));
 
 // Recursively key-sorted JSON — canonical regardless of property insertion order.
 function canonical(v: unknown): string {
@@ -101,45 +86,7 @@ function digestOf(dir: string) {
   return { fingerprint: fp.hash, entities };
 }
 
-const digest = digestOf(DIR);
-
-if (process.env.UPDATE_GOLDEN) {
-  fs.writeFileSync(GOLDEN, JSON.stringify(digest, null, 2) + '\n');
-  console.log(`  wrote golden → ${path.relative(process.cwd(), GOLDEN)}`);
-  console.log(`  fingerprint ${digest.fingerprint}`);
-  for (const [n, e] of Object.entries(digest.entities))
-    console.log(`    ${n}: ${e.count} rows · ${e.sha256.slice(0, 12)}…`);
-  ok('golden written', true);
-} else {
-  const have = fs.existsSync(GOLDEN)
-    ? (JSON.parse(fs.readFileSync(GOLDEN, 'utf8')) as typeof digest)
-    : null;
-  if (!have) {
-    ok(
-      'golden exists',
-      false,
-      'run once with UPDATE_GOLDEN=1 on the machine holding the real data',
-    );
-  } else {
-    ok(
-      'fingerprint matches',
-      have.fingerprint === digest.fingerprint,
-      `${have.fingerprint} vs ${digest.fingerprint}`,
-    );
-    const names = new Set([...Object.keys(have.entities), ...Object.keys(digest.entities)]);
-    for (const n of [...names].sort()) {
-      const h = have.entities[n],
-        g = digest.entities[n];
-      ok(
-        `entity ${n} digest matches`,
-        !!h && !!g && h.count === g.count && h.sha256 === g.sha256,
-        h && g
-          ? `count ${h.count}->${g.count}, sha ${h.sha256.slice(0, 8)}->${g.sha256.slice(0, 8)}`
-          : 'entity missing on one side',
-      );
-    }
-  }
-}
-
-console.log(`\n==== ${pass} passed, ${fail} failed ====`);
-process.exit(fail ? 1 : 0);
+test.skipIf(!hasCorpus)('real-corpus digest matches committed golden', async () => {
+  const digest = digestOf(DIR as string);
+  await expect(JSON.stringify(digest, null, 2) + '\n').toMatchFileSnapshot(GOLDEN);
+});

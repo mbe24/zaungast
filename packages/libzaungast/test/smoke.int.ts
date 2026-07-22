@@ -1,56 +1,54 @@
+// Ingest smoke test over a real leveldb cache: exercises ingest + a handful of queries end-to-end.
+// Requires ZAUNGAST_TEST_DIR (or a `data/<date>` cache) — skips (green) when none is available.
+import { test, expect } from 'vitest';
+import { resolveLevelDbDir } from '../../../scripts/native-runner.mjs';
 import { ingest } from '../src/ingest/ingest.js';
 
-const dir = process.argv[2];
-const t0 = Date.now();
-const { store, meta } = ingest(dir);
-const ms = Date.now() - t0;
+const dir = resolveLevelDbDir(process.env.ZAUNGAST_TEST_DIR);
 
-console.log(
-  `ingest ${ms}ms · fingerprint ${meta.fingerprint} · mapping ${meta.mappingVersion} · fts ${meta.ftsEnabled}`,
-);
-console.log(
-  `counts: ${meta.counts.conversations} conv · ${meta.counts.messages} msg · ${meta.counts.people} people`,
-);
-console.log(`earliest: ${new Date(meta.earliestTs).toISOString()}`);
+test.skipIf(!dir)('ingest smoke over a real cache', () => {
+  const { store, meta } = ingest(dir!);
 
-const db = store.db;
-const iso = (t: number) => new Date(t).toISOString();
+  expect(meta.schemaMatched).toBe(true);
+  expect(meta.counts.messages).toBeGreaterThan(0);
 
-console.log('\n— latest 6 conversations —');
-for (const r of db
-  .prepare(
-    `select handle,kind,topic,participant_names,last_ts,msg_count
-    from conversations order by last_ts desc limit 6`,
-  )
-  .all() as any[])
   console.log(
-    `  ${r.handle} [${r.kind}] ${(r.topic || r.participant_names || '(untitled)').slice(0, 40)} · ${r.msg_count} msg · ${iso(r.last_ts).slice(0, 16)}`,
+    `ingest · fingerprint ${meta.fingerprint} · mapping ${meta.mappingVersion} · fts ${meta.ftsEnabled} · ` +
+      `${meta.counts.conversations} conv · ${meta.counts.messages} msg · ${meta.counts.people} people`,
   );
 
-console.log('\n— search "weekend" (FTS) —');
-if (meta.ftsEnabled) {
-  for (const r of db
+  const db = store.db;
+
+  const conversations = db
     .prepare(
-      `select m.sender_name, m.ts, snippet(messages_fts,0,'[',']','…',8) s
-      from messages_fts f join messages m on m.conv_id=f.conv_id and m.id=f.id
-      where messages_fts match 'weekend' order by m.ts desc limit 4`,
+      `select handle,kind,topic,participant_names,last_ts,msg_count
+      from conversations order by last_ts desc limit 6`,
     )
-    .all() as any[])
-    console.log(`  ${iso(r.ts).slice(0, 16)} ${r.sender_name}: ${r.s}`);
-}
+    .all() as any[];
+  expect(conversations.length).toBeGreaterThan(0);
 
-console.log('\n— message kind distribution —');
-for (const r of db
-  .prepare(
-    `select kind, is_system, count(*) n from messages group by kind, is_system order by n desc`,
-  )
-  .all() as any[])
-  console.log(`  ${r.kind}${r.is_system ? ' (system)' : ''}: ${r.n}`);
+  if (meta.ftsEnabled) {
+    const hits = db
+      .prepare(
+        `select m.sender_name, m.ts, snippet(messages_fts,0,'[',']','…',8) s
+        from messages_fts f join messages m on m.conv_id=f.conv_id and m.id=f.id
+        where messages_fts match 'weekend' order by m.ts desc limit 4`,
+      )
+      .all();
+    expect(Array.isArray(hits)).toBe(true);
+  }
 
-console.log('\n— top 5 people —');
-for (const r of db
-  .prepare(`select handle,name,msg_count,last_ts from people order by msg_count desc limit 5`)
-  .all() as any[])
-  console.log(`  ${r.handle} ${r.name} · ${r.msg_count} msg · last ${iso(r.last_ts).slice(0, 10)}`);
+  const kinds = db
+    .prepare(
+      `select kind, is_system, count(*) n from messages group by kind, is_system order by n desc`,
+    )
+    .all() as any[];
+  expect(kinds.length).toBeGreaterThan(0);
 
-store.close();
+  const people = db
+    .prepare(`select handle,name,msg_count,last_ts from people order by msg_count desc limit 5`)
+    .all() as any[];
+  expect(people.length).toBeGreaterThan(0);
+
+  store.close();
+});

@@ -17,26 +17,19 @@
 // 'incremental', so refreshMode alone can't tell them apart).
 //
 // Run (on a host with the built addon + a real leveldb dir):
-//   ZAUNGAST_TEST_DIR=<leveldb-dir> node --conditions=development --experimental-sqlite \
-//     --import tsx packages/libzaungast-native/test/reuse.ts
+//   ZAUNGAST_TEST_DIR=<leveldb-dir> npx vitest run packages/libzaungast-native/test/reuse.int.ts
+import { test, expect, afterAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { resolveLevelDbDir } from '../../../scripts/native-runner.mjs';
 import { createNativeEngine } from 'libzaungast-native';
 import { openLiveStore } from 'libzaungast';
 import type { IngestEngine, Ingested, RefreshResult } from 'libzaungast/engine-spi';
 
-let pass = 0,
-  fail = 0;
-const ok = (name: string, cond: boolean, detail = ''): void => {
-  if (cond) {
-    pass++;
-    console.log(`  PASS ${name}`);
-  } else {
-    fail++;
-    console.log(`  FAIL ${name}${detail ? ` — ${detail}` : ''}`);
-  }
-};
+const dir = resolveLevelDbDir(process.env.ZAUNGAST_TEST_DIR);
+const engine = createNativeEngine();
+const nativeReady = !('unavailable' in engine);
 
 const tmpDirs: string[] = [];
 // Copy a leveldb dir's files to a fresh temp dir; optionally drop the `.log` (→ an earlier state).
@@ -59,52 +52,48 @@ const countsEq = (a: Counts, b: Counts) =>
   a.conversations === b.conversations && a.messages === b.messages && a.people === b.people;
 const kindOf = (r: RefreshResult | 'defer') => (r === 'defer' ? 'defer' : r.kind);
 
-console.log('\n=== native copy-reuse runtime ===');
-const engineOrReason = createNativeEngine();
-const DIR = process.env.ZAUNGAST_TEST_DIR;
-if ('unavailable' in engineOrReason) {
-  console.log(`  SKIP — native addon unavailable (${engineOrReason.unavailable})`);
-} else if (!DIR) {
-  console.log('  SKIP — set ZAUNGAST_TEST_DIR to a leveldb dir to run the runtime reuse test');
-} else {
-  const engine = engineOrReason;
-  const opened: Ingested[] = []; // track builds so we always close their temp .db dirs
-  const build = (dir: string): Ingested => {
-    const ing = engine.full(dir);
-    opened.push(ing);
-    return ing;
-  };
-  try {
-    // One-time STATIC copy of the (possibly live) source, and an EARLIER state with the `.log` dropped.
-    const source = copyDir(DIR);
-    const early = copyDir(source, { dropLog: true });
+afterAll(() => {
+  for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
+});
 
-    // The full-rebuild oracle + the precheck: if dropping the `.log` didn't change the data (no WAL
-    // delta — e.g. a cleanly-flushed copy), there is nothing for copy-reuse to catch up to → SKIP
-    // rather than record a vacuous PASS.
-    const prev = build(early);
-    const truth = build(source);
-    if (countsEq(prev.meta.counts, truth.meta.counts)) {
-      console.log('  SKIP — source has no .log delta over its .ldb (nothing for reuse to apply)');
-    } else {
+test.skipIf(!dir || !nativeReady)(
+  'native copy-reuse runtime is self-consistent with a full rebuild',
+  () => {
+    if ('unavailable' in engine) throw new Error('unreachable — skipIf guards this');
+    const opened: Ingested[] = []; // track builds so we always close their temp .db dirs
+    const build = (d: string): Ingested => {
+      const ing = engine.full(d);
+      opened.push(ing);
+      return ing;
+    };
+    try {
+      // One-time STATIC copy of the (possibly live) source, and an EARLIER state with the `.log` dropped.
+      const source = copyDir(dir!);
+      const early = copyDir(source, { dropLog: true });
+
+      // The full-rebuild oracle + the precheck: if dropping the `.log` didn't change the data (no WAL
+      // delta — e.g. a cleanly-flushed copy), there is nothing for copy-reuse to catch up to → skip
+      // rather than record a vacuous pass.
+      const prev = build(early);
+      const truth = build(source);
+      if (countsEq(prev.meta.counts, truth.meta.counts)) {
+        console.log('  SKIP — source has no .log delta over its .ldb (nothing for reuse to apply)');
+        return;
+      }
+
       // ---- Engine level: External cache + reuseRefresh MUST swap (needFull/skipped/defer = FAIL) ----
       const res = engine.reuseRefresh!(prev, source); // cold reuse over the full (with-.log) source
-      ok('engine reuseRefresh → swapped', res !== 'defer' && res.kind === 'swapped', kindOf(res));
+      expect(res !== 'defer' && res.kind === 'swapped', kindOf(res)).toBe(true);
       if (res !== 'defer' && res.kind === 'swapped') {
         opened.push(res.next);
-        ok(
-          'engine swapped counts == full rebuild',
+        expect(
           countsEq(res.next.meta.counts, truth.meta.counts),
           `${JSON.stringify(res.next.meta.counts)} vs ${JSON.stringify(truth.meta.counts)}`,
-        );
+        ).toBe(true);
         // Second tick on the unchanged source: the External handle round-trips; the no-op-refresh gate
         // must short-circuit → skipped (accepting swapped here would tolerate a regressed no-op gate).
         const res2 = engine.reuseRefresh!(res.next, source);
-        ok(
-          'second tick → skipped (no-op gate, cache handle survived)',
-          kindOf(res2) === 'skipped',
-          kindOf(res2),
-        );
+        expect(kindOf(res2) === 'skipped', kindOf(res2)).toBe(true);
         if (res2 !== 'defer' && res2.kind === 'swapped') opened.push(res2.next);
       }
 
@@ -128,29 +117,23 @@ if ('unavailable' in engineOrReason) {
       });
       restoreLogs(source, mirror); // "new data landed" in the live dir
       const meta = live.refresh({ full: false }); // → tryCopyReuse → reuseRefresh → swapped branch
-      ok(
-        'Session engaged copy-reuse and it swapped (not a fallback)',
+      expect(
         seen.length === 1 && seen[0] === 'swapped',
         `reuseRefresh returned [${seen.join(',')}]`,
-      );
-      ok(
-        'Session copy-reuse counts == full rebuild',
+      ).toBe(true);
+      expect(
         countsEq(meta.counts, truth.meta.counts),
         `${JSON.stringify(meta.counts)} vs ${JSON.stringify(truth.meta.counts)}`,
-      );
+      ).toBe(true);
       live.close();
-    }
-  } finally {
-    for (const ing of opened) {
-      try {
-        ing.store.close();
-      } catch {
-        /* best-effort cleanup */
+    } finally {
+      for (const ing of opened) {
+        try {
+          ing.store.close();
+        } catch {
+          /* best-effort cleanup */
+        }
       }
     }
-    for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
-  }
-}
-
-console.log(`\n==== ${pass} passed, ${fail} failed ====`);
-process.exit(fail ? 1 : 0);
+  },
+);

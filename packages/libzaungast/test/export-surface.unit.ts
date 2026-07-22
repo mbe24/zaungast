@@ -10,9 +10,7 @@
 //   4. TYPE-level guards (checked by typecheck:test, erased at runtime): the removed `Engine` policy
 //      type must not reappear on '.', and engine-spi must keep exporting the four contract types.
 //   5. Purity: libzaungast must not depend on the native accelerator (one-way dependency).
-//
-// Run:
-//   node --conditions=development --experimental-sqlite --import tsx packages/libzaungast/test/export-surface.ts
+import { test, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import type * as ClientApi from 'libzaungast';
 import type * as EngineSpi from 'libzaungast/engine-spi';
@@ -30,41 +28,24 @@ export type _SpiContractTypes = [
   EngineSpi.StoreMeta,
 ];
 
-let pass = 0,
-  fail = 0;
-const ok = (name: string, cond: boolean, detail = ''): void => {
-  if (cond) {
-    pass++;
-    console.log(`  PASS ${name}`);
-  } else {
-    fail++;
-    console.log(`  FAIL ${name}${detail ? ` — ${detail}` : ''}`);
-  }
-};
 const keys = (m: object): string[] => Object.keys(m).sort();
-const same = (got: string[], want: string[]): boolean =>
-  got.length === want.length && got.every((k, i) => k === want[i]);
-
-console.log('\n=== public-surface guard ===');
 
 // 1. Client API '.' — runtime VALUE exports only (type-only exports erase). This is the frozen
 // baseline: adding a runtime export to the root must be a deliberate edit to this list.
 const CLIENT_API = ['htmlToText', 'inspect', 'openLiveStore', 'openStore', 'tryOpen'];
-const root = keys(await import('libzaungast'));
-ok(
-  `'.' exposes exactly the client API [${CLIENT_API.join(', ')}]`,
-  same(root, CLIENT_API),
-  `got [${root.join(', ')}]`,
+
+test("'.' exposes exactly the client API", async () => {
+  const root = keys(await import('libzaungast'));
+  expect(root).toEqual(CLIENT_API);
+});
+
+test.each(['openStoreFile', 'SCHEMA_SQL', 'EXPECTED_CONFORMANCE', 'createJsEngine', 'ingest'])(
+  "'.' does NOT leak %s",
+  async (leaked) => {
+    const root = keys(await import('libzaungast'));
+    expect(root).not.toContain(leaked);
+  },
 );
-for (const leaked of [
-  'openStoreFile',
-  'SCHEMA_SQL',
-  'EXPECTED_CONFORMANCE',
-  'createJsEngine',
-  'ingest',
-]) {
-  ok(`'.' does NOT leak ${leaked}`, !root.includes(leaked));
-}
 
 // 2. Engine SPI — EXACTLY the engine-author value set (the four contract TYPES erase at runtime).
 const ENGINE_SPI = [
@@ -73,55 +54,58 @@ const ENGINE_SPI = [
   'loadBundledMappingTexts',
   'openStoreFile',
 ];
-const spi = keys(await import('libzaungast/engine-spi'));
-ok(
-  `'engine-spi' exposes exactly [${ENGINE_SPI.join(', ')}]`,
-  same(spi, ENGINE_SPI),
-  `got [${spi.join(', ')}]`,
+
+test("'engine-spi' exposes exactly the engine-author value set", async () => {
+  const spi = keys(await import('libzaungast/engine-spi'));
+  expect(spi).toEqual(ENGINE_SPI);
+});
+
+test.each(['ChatStore', 'createJsEngine', 'ingest'])(
+  "'engine-spi' does NOT expose %s",
+  async (hidden) => {
+    const spi = keys(await import('libzaungast/engine-spi'));
+    expect(spi).not.toContain(hidden);
+  },
 );
-for (const hidden of ['ChatStore', 'createJsEngine', 'ingest']) {
-  ok(`'engine-spi' does NOT expose ${hidden}`, !spi.includes(hidden));
-}
 
 // 3. Internal deep-imports must REJECT (not in the exports map). store.js + query.js keep ChatStore
 // and the SQL layer internal; ingest.js is the sensitive one — both ingest() and openStoreFile live
 // there, and only the latter may be reached, via engine-spi (never ingest()/applyIncremental raw).
-for (const internal of [
-  'libzaungast/ingest/store.js',
-  'libzaungast/ingest/ingest.js',
-  'libzaungast/query.js',
-]) {
-  let rejected = false;
-  let detail = '(resolved — LEAK)';
-  try {
-    await import(internal);
-  } catch (e) {
-    const code = (e as { code?: string }).code ?? '';
-    const msg = (e as Error).message ?? '';
-    rejected =
-      code === 'ERR_PACKAGE_PATH_NOT_EXPORTED' || /not exported|package subpath/i.test(msg);
-    detail = `code=${code}`;
-  }
-  ok(`internal '${internal}' is not importable`, rejected, detail);
-}
+test.each(['libzaungast/ingest/store.js', 'libzaungast/ingest/ingest.js', 'libzaungast/query.js'])(
+  'internal %s is not importable',
+  async (internal) => {
+    let resolved = false;
+    let code = '';
+    let msg = '';
+    try {
+      await import(/* @vite-ignore */ internal);
+      resolved = true;
+    } catch (e) {
+      code = (e as { code?: string }).code ?? '';
+      msg = (e as Error).message ?? '';
+    }
+    expect(resolved, `${internal} resolved — LEAK`).toBe(false);
+    expect(
+      code === 'ERR_PACKAGE_PATH_NOT_EXPORTED' || /not exported|package subpath/i.test(msg),
+      `unexpected rejection: code=${code} msg=${msg}`,
+    ).toBe(true);
+  },
+);
 
 // 5. Purity / one-way dependency: libzaungast must never depend on the native accelerator. The
 // dependency only ever points the other way (libzaungast-native → libzaungast/engine-spi).
-const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
-  dependencies?: Record<string, string>;
-  peerDependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
-};
-const allDeps = {
-  ...manifest.dependencies,
-  ...manifest.peerDependencies,
-  ...manifest.optionalDependencies,
-};
-ok(
-  'libzaungast does NOT depend on libzaungast-native (one-way dependency)',
-  !('libzaungast-native' in allDeps),
-  `deps=[${Object.keys(allDeps).join(', ')}]`,
-);
-
-console.log(`\n==== ${pass} passed, ${fail} failed ====`);
-process.exit(fail ? 1 : 0);
+test('libzaungast does NOT depend on libzaungast-native (one-way dependency)', () => {
+  const manifest = JSON.parse(
+    readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+  ) as {
+    dependencies?: Record<string, string>;
+    peerDependencies?: Record<string, string>;
+    optionalDependencies?: Record<string, string>;
+  };
+  const allDeps = {
+    ...manifest.dependencies,
+    ...manifest.peerDependencies,
+    ...manifest.optionalDependencies,
+  };
+  expect(Object.keys(allDeps)).not.toContain('libzaungast-native');
+});

@@ -2,50 +2,35 @@
 // The KEY_INVENTORY table below is a literal copy of the 117 distinct Teams reaction keys seen in
 // a real (PII-free) cache, with usage counts, used to assert full coverage and report the
 // glyph-vs-fallback split by both key count and usage share.
-// Run: node --import tsx test/emoji.test.ts
+// Run: npx vitest run packages/zaungast/test/emoji.unit.ts
+import { test, expect } from 'vitest';
 import { reactionGlyph } from 'zaungast/util/emoji.js';
-
-let pass = 0,
-  fail = 0;
-const ok = (name: string, cond: boolean, detail = ''): void => {
-  if (cond) {
-    pass++;
-    console.log(`  PASS ${name}`);
-  } else {
-    fail++;
-    console.log(`  FAIL ${name} ${detail}`);
-  }
-};
-const eq = (name: string, a: unknown, b: unknown): void =>
-  ok(name, a === b, `got ${JSON.stringify(a)} want ${JSON.stringify(b)}`);
 
 // A codepoint outside the ASCII range signals a real emoji glyph resolved (as opposed to a
 // cleaned-up text fallback, which is always plain ASCII/identifier characters in this inventory).
 const isGlyph = (s: string): boolean => [...s].some((ch) => ch.codePointAt(0)! > 127);
 
-console.log('=== codepoint-prefix ===');
-eq('single codepoint prefix', reactionGlyph('1f389_partypopper'), '🎉');
-eq('single codepoint prefix 2', reactionGlyph('2705_whiteheavycheckmark'), '✅');
+test('codepoint-prefix', () => {
+  expect(reactionGlyph('1f389_partypopper')).toEqual('🎉');
+  expect(reactionGlyph('2705_whiteheavycheckmark')).toEqual('✅');
+});
 
-console.log('\n=== classic shortcode table ===');
-eq('like', reactionGlyph('like'), '👍');
+test('classic shortcode table', () => {
+  expect(reactionGlyph('like')).toEqual('👍');
+});
 
-console.log('\n=== skin-tone suffix stripped before lookup ===');
-eq(
-  'fistbump-tone2 resolves same as fistbump',
-  reactionGlyph('fistbump-tone2'),
-  reactionGlyph('fistbump'),
-);
-ok('fistbump-tone2 is a real glyph', isGlyph(reactionGlyph('fistbump-tone2')));
+test('skin-tone suffix stripped before lookup', () => {
+  expect(reactionGlyph('fistbump-tone2')).toEqual(reactionGlyph('fistbump'));
+  expect(isGlyph(reactionGlyph('fistbump-tone2')), 'fistbump-tone2 is a real glyph').toBe(true);
+});
 
-console.log('\n=== org-custom tail stripped before lookup ===');
-eq('plusone;0-weu-abc', reactionGlyph('plusone;0-weu-abc'), '👍');
+test('org-custom tail stripped before lookup', () => {
+  expect(reactionGlyph('plusone;0-weu-abc')).toEqual('👍');
+});
 
-console.log('\n=== edge cases ===');
-eq('empty key returns original (empty) key', reactionGlyph(''), '');
-ok(
-  'never throws on garbage input',
-  (() => {
+test('edge cases', () => {
+  expect(reactionGlyph('')).toEqual('');
+  const neverThrows = (() => {
     try {
       reactionGlyph('___;;;-tone9');
       reactionGlyph('_');
@@ -54,8 +39,9 @@ ok(
     } catch {
       return false;
     }
-  })(),
-);
+  })();
+  expect(neverThrows, 'never throws on garbage input').toBe(true);
+});
 
 // ---- full real-world inventory: every key must resolve to a non-empty string, never throw ----
 // count / key, taken verbatim from a real (PII-free) Teams reaction-key inventory (117 keys).
@@ -179,13 +165,7 @@ const KEY_INVENTORY: Array<[number, string]> = [
   [1, '1f41e_ladybeetle'],
 ];
 
-console.log(`\n=== full inventory (${KEY_INVENTORY.length} keys) ===`);
-let glyphKeys = 0,
-  fallbackKeys = 0;
-let glyphUsage = 0,
-  fallbackUsage = 0;
-const fallbacks: Array<[number, string]> = [];
-for (const [count, key] of KEY_INVENTORY) {
+test.each(KEY_INVENTORY)('full inventory: resolves %s', (_count, key) => {
   let result = '';
   let threw = false;
   try {
@@ -193,30 +173,6 @@ for (const [count, key] of KEY_INVENTORY) {
   } catch {
     threw = true;
   }
-  ok(`no throw: ${key}`, !threw);
-  ok(`non-empty: ${key}`, result.length > 0, `got ${JSON.stringify(result)}`);
-  if (isGlyph(result)) {
-    glyphKeys++;
-    glyphUsage += count;
-  } else {
-    fallbackKeys++;
-    fallbackUsage += count;
-    fallbacks.push([count, key]);
-  }
-}
-
-const totalKeys = KEY_INVENTORY.length;
-const totalUsage = KEY_INVENTORY.reduce((n, [c]) => n + c, 0);
-console.log('\n=== coverage summary ===');
-console.log(
-  `  by key count:  ${glyphKeys}/${totalKeys} resolved to a glyph (${((glyphKeys / totalKeys) * 100).toFixed(1)}%), ${fallbackKeys} fell back to text`,
-);
-console.log(
-  `  by usage share: ${glyphUsage}/${totalUsage} reaction instances got a glyph (${((glyphUsage / totalUsage) * 100).toFixed(1)}%), ${fallbackUsage} fell back to text`,
-);
-console.log('  fallback keys (deliberately unmapped):');
-for (const [count, key] of fallbacks.sort((a, b) => b[0] - a[0]))
-  console.log(`    ${key} (used ${count}x) -> "${reactionGlyph(key)}"`);
-
-console.log(`\n==== ${pass} passed, ${fail} failed ====`);
-process.exit(fail ? 1 : 0);
+  expect(threw, `no throw: ${key}`).toBe(false);
+  expect(result.length > 0, `non-empty: ${key} got ${JSON.stringify(result)}`).toBe(true);
+});
