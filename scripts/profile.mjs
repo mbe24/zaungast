@@ -182,10 +182,11 @@ for (const ent of ['event', 'call', 'profile']) {
 }
 
 // ---- 2b. store-build phases (shared with native PhaseTimings). ingest() fires an opt-in onPhase hook
-// per phase (dev only; a no-op in production), so this measures the REAL build pipeline. Two attribution
-// caveats vs native keep apply/fts from being commit-for-commit comparable (see plan/perf.typescript.md
-// C1/C2): TS shapes profile/event/call rows under `extract` (perf-1b) not `apply`; and native's R1
-// tuning wraps apply+recompute+fts in ONE txn (COMMIT in `fts`) whereas TS commits per-phase. ----
+// per phase (dev only; a no-op in production), so this measures the REAL build pipeline. Two structural
+// differences keep apply/fts from being commit-for-commit comparable to the native engine: TS shapes
+// the profile/event/call rows during `extract` (to drop the snapshot before building) whereas native
+// shapes them during `apply`; and native wraps apply+recompute+fts in ONE transaction (COMMIT inside
+// `fts`) whereas TS commits after `apply` and autocommits recompute/fts. ----
 {
   const s = { extract: [], apply: [], recompute: [], fts: [] };
   for (let i = 0; i < N; i++) {
@@ -356,10 +357,12 @@ show('format phases', [
   'format.extract.call',
   'format.extract.profile',
 ]);
-show(
-  'store-build phases (~= native PhaseTimings; apply/fts not commit-for-commit — see perf.typescript.md)',
-  ['storeBuild.extract', 'storeBuild.apply', 'storeBuild.recompute', 'storeBuild.fts'],
-);
+show('store-build phases (~= native PhaseTimings; apply/fts not commit-for-commit comparable)', [
+  'storeBuild.extract',
+  'storeBuild.apply',
+  'storeBuild.recompute',
+  'storeBuild.fts',
+]);
 show('incremental (no-op floor)', ['refresh.noop.copyReuse', 'refresh.noop.reparse']);
 show(
   'engineExtra (TS-only)',

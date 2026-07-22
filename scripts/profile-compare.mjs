@@ -87,7 +87,7 @@ const signed = (x) => (x >= 0 ? '+' : '') + +x.toFixed(3);
 const sha = (j) => `${(j.git?.sha || '???').slice(0, 7)}${j.git?.dirty ? '+' : ''}`;
 // Cross-engine, these two aren't commit-for-commit comparable (native wraps apply+recompute+fts in one
 // txn with the COMMIT in `fts`; TS commits per-phase) — flag them in the PARITY table only. Within a
-// same-engine regression they ARE comparable, so no mark there. See plan/perf.typescript.md C2.
+// same-engine regression they ARE comparable, so no mark there.
 const APPROX = new Set(['storeBuild.apply', 'storeBuild.fts']);
 const mark = (k, approx) => (approx && APPROX.has(k) ? `${k} ~` : k);
 
@@ -123,7 +123,7 @@ if (parity) {
   }
   if (shared.some((k) => APPROX.has(k)))
     console.log(
-      '\n  ~ apply/fts: not commit-for-commit comparable cross-engine (plan/perf.typescript.md C2)',
+      '\n  ~ apply/fts: not commit-for-commit comparable cross-engine (differing transaction boundaries)',
     );
   const only = (m, other, eng) => {
     const ks = Object.keys(m)
