@@ -2,7 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { fileURLToPath } from 'node:url';
 
-const indexPath = fileURLToPath(new URL('zaungast/index.ts', import.meta.url));
+const indexPath = fileURLToPath(new URL('../src/index.ts', import.meta.url));
 const dbDir = process.argv[2] ?? process.env.ZAUNGAST_TEST_DIR;
 if (!dbDir) {
   console.error('Set ZAUNGAST_TEST_DIR or pass a leveldb dir as argv[2]');
@@ -11,7 +11,7 @@ if (!dbDir) {
 
 const transport = new StdioClientTransport({
   command: process.execPath,
-  args: ['--experimental-sqlite', '--import', 'tsx', indexPath],
+  args: ['--conditions=development', '--experimental-sqlite', '--import', 'tsx', indexPath],
   env: { ...process.env, ZAUNGAST_DB_DIR: dbDir },
   stderr: 'inherit',
 });

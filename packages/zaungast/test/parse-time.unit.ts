@@ -1,5 +1,5 @@
 // MCP-layer unit tests. parseTime (ISO / relative time-filter parsing) lives in zaungast/tools —
-// the lib-layer unit tests are in packages/libzaungast/test/unit.ts.
+// the lib-layer unit tests are in packages/libzaungast/test/core.unit.ts.
 import { parseTime } from 'zaungast/tools.js';
 
 let pass = 0,

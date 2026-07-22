@@ -178,7 +178,7 @@ export function encodeDenseArray(arr: unknown[]): Buffer {
 
 // Full top-level SSV blob for an IndexedDB record value: minimal envelope `0xFF <ver> <object>`
 // (findEnvelopeRoot in structured-clone.ts anchors on 0xFF, skips 2 bytes, and finds 0x6F right
-// there — no 0xFE blink-trailer needed). See test/unit.ts's own {a:1} test vector for the same shape.
+// there — no 0xFE blink-trailer needed). See test/core.unit.ts's own {a:1} test vector for the same shape.
 export function ssvObject(obj: Record<string, unknown>): Buffer {
   return Buffer.concat([Buffer.from([0xff, 0x0f]), encodeObject(obj)]);
 }
@@ -197,7 +197,7 @@ const HEADER = 7;
 // leveldb's crc masking. Forward mask: Mask(c) = rotate_right(c,15) + kMaskDelta (0xa282ead8).
 // rotate_right(c,15) = (c>>>15) | (c<<17), all mod 2**32. sstable.ts exports the inverse
 // (unmaskCrc) but not this forward direction, so it's reimplemented here (same formula the
-// task spec gives, and the same one test/_inctest.ts uses for its own crafted WAL records).
+// task spec gives, and the same one test/incremental.int.ts uses for its own crafted WAL records).
 // Exported: sstable-encode.ts (the .ldb writer) needs the identical forward mask for its
 // per-block CRC trailers.
 export function maskCrc(c: number): number {

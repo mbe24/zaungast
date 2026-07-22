@@ -1,5 +1,5 @@
 // Data-free unit tests for the stable/pure layers — run in CI (no Teams cache needed).
-// The integration suites (src/_inctest, _reusetest, _fbtest) need a real local cache and run
+// The integration suites (incremental.int, reuse.int, feedback.int) need a real local cache and run
 // locally via `npm run test:integration`.
 import * as Snappy from '../src/format/chromium/snappy.js';
 import { deserialize } from '../src/format/chromium/structured-clone.js';
@@ -141,7 +141,7 @@ console.log('=== topic extraction ===');
   ok('drops German stopwords (das/ist)', !de.includes('das') && !de.includes('ist'));
 }
 
-// parseTime lives in the MCP layer (zaungast/tools) → its test moved to packages/zaungast/test/unit.ts
+// parseTime lives in the MCP layer (zaungast/tools) → its test is packages/zaungast/test/parse-time.unit.ts
 // (a libzaungast test must not depend on zaungast).
 
 console.log('\n=== discoverTeamsDbs: platform layouts (Windows + macOS) ===');

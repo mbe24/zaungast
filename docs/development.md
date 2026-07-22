@@ -18,10 +18,12 @@ Requires Node.js ≥ 22.5.
 | `npm run typecheck:test` | Type-check `test/` (via `test/tsconfig.json`; run in CI). |
 | `npm run format` | Format `src/` + `test/` with Prettier. |
 | `npm run format:check` | Verify formatting (run in CI). |
-| `npm test` | Data-free unit tests (`test/unit.ts`) — run in CI. |
+| `npm test` | Data-free unit tests (all `*.unit.ts`, auto-discovered) — run in CI. |
 | `npm run test:fixture` | Generate a synthetic leveldb cache and drive the full read → ingest → tools pipeline against it — no real data; run in CI. |
 | `npm run test:integration:ci` | Run the mutation/equivalence harnesses against a synthetic `.ldb`+`.log` fixture — no real data; run in CI. |
 | `npm run test:integration` | Same harnesses against a **real** local Teams cache (see below). |
+| `npm run test:golden` | Freeze decode/extract + MCP tool output over the synthetic fixture — run in CI. |
+| `npm run test:golden:real` | Same freezes over a **real** local cache (skip-if-absent; local only). |
 | `npm run dev` | Run the server from source via `tsx` (no build step). |
 | `npm run assets` | Re-render the SVG brand assets in `assets/` and `.github/` to PNG. |
 
@@ -37,6 +39,14 @@ TS 7; the intended ruleset is typescript-eslint `recommended` + `no-unused-vars`
 
 ## Tests
 
+Test files are **discovered by role**, not enumerated: `scripts/run-tests.mjs` globs
+`packages/*/test/**` and dispatches by a suffix in the filename — `*.unit.ts` (pure, CI),
+`*.fixture.ts` (synthetic-fixture-driven, CI), `*.golden.ts` (synthetic golden, CI), `*.int.ts`
+(needs a leveldb dir), `*.real.ts` (needs a real cache). A test file with no recognized role suffix
+is a hard error (you can't add a test the runner forgets), and a data-role run with no cache prints a
+visible SKIP with the file list — never a silent pass. `npm test` / `test:fixture` / `test:golden` /
+`test:integration` / `test:golden:real` each run one role.
+
 - **Unit** (`npm test`) exercise the pure layers — Snappy, structured-clone decode, CRC32C,
   key coding, HTML→text, handles, topic extraction — with synthetic inputs and **no Teams
   data**. These run in CI.
@@ -48,10 +58,10 @@ TS 7; the intended ruleset is typescript-eslint `recommended` + `no-unused-vars`
   - `npm run test:fixture` generates a WAL-only cache and drives the full read → ingest → tools
     pipeline, asserting the decoded content matches what was generated.
   - `npm run test:integration:ci` generates a mixed `.ldb`+`.log` cache and runs the
-    mutation/equivalence harnesses (`_inctest`, `_reusetest`, `_fbtest`) against it — including
-    `.ldb` truncation and forced compaction.
-- **Real-cache integration** (`npm run test:integration`) runs the same `_inctest`/`_reusetest`/
-  `_fbtest` harnesses against a **real** on-disk Teams cache — a belt-and-braces check that
+    mutation/equivalence harnesses (`incremental.int.ts`, `reuse.int.ts`, `feedback.int.ts`) against
+    it — including `.ldb` truncation and forced compaction.
+- **Real-cache integration** (`npm run test:integration`) runs the same `*.int.ts` harnesses against
+  a **real** on-disk Teams cache — a belt-and-braces check that
   catches real-world format quirks the synthetic fixture doesn't model. It runs locally (shipping
   a real cache would leak PII): point it at a copy of your leveldb dir via `ZAUNGAST_TEST_DIR`
   (or pass the dir as `argv[2]` to a harness directly).

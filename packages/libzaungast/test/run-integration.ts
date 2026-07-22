@@ -1,8 +1,8 @@
 // CI integration runner: generate a synthetic .ldb+.log leveldb fixture and run the
 // mutation/equivalence harnesses against it — no real Teams cache (no PII), so this runs in CI.
 //
-// Each harness gets a FRESH fixture dir, because _inctest/_reusetest mutate their source dir
-// (truncate .ldb, append .log, force compaction) — sharing one dir across harnesses would let
+// Each harness gets a FRESH fixture dir, because the incremental/reuse harnesses mutate their source
+// dir (truncate .ldb, append .log, force compaction) — sharing one dir across harnesses would let
 // earlier mutations corrupt later runs. The synthetic fixture is tiny, so this is fast.
 //
 // Run: node --experimental-sqlite --import tsx test/run-integration.ts  (or `npm run test:integration:ci`)
@@ -14,9 +14,9 @@ import { fileURLToPath } from 'node:url';
 import { generateFixtureWithTables } from './fixture/generate.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-// _inctest/_reusetest are libzaungast reader tests (here); _fbtest is a zaungast MCP-tool e2e test
-// (cross-package) — all three run against a fresh synthetic fixture (libzaungast's generator).
-const harnesses = ['_inctest.ts', '_reusetest.ts', '../../zaungast/test/_fbtest.ts'];
+// incremental/reuse.int are libzaungast reader tests (here); feedback.int is a zaungast MCP-tool e2e
+// test (cross-package) — all three run against a fresh synthetic fixture (libzaungast's generator).
+const harnesses = ['incremental.int.ts', 'reuse.int.ts', '../../zaungast/test/feedback.int.ts'];
 
 let failed = 0;
 for (const h of harnesses) {
