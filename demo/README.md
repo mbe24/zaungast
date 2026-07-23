@@ -1,42 +1,49 @@
-# sv
+# Your Teams, Wrapped — demo
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+A static web app that reads your local **Microsoft Teams** cache **entirely in your browser** and turns
+it into a year-in-review — totals, busiest day, night-owl index, longest streak, the people you talk to,
+activity over time, and your first cached message. Nothing is uploaded; the data never leaves the tab.
 
-## Creating a project
+It's the showcase for [`libzaungast`](../packages/libzaungast) (the Teams-cache reader) and the
+`zaungast` MCP server.
 
-If you're seeing this, you've probably already done this step. Congrats!
+## How it works
 
-```sh
-# create a new project
-npx sv create my-app
-```
+A Web Worker owns `libzaungast/web` + a wasm SQLite build: you pick your `…indexeddb.leveldb` folder, it
+decodes it and builds an in-memory store, and the UI queries that over
+[Comlink](https://github.com/GoogleChromeLabs/comlink) — all client-side. (The in-app "Need help finding
+the folder?" dialog shows where the cache lives on Windows / macOS.)
 
-To recreate this project with the same configuration:
+## Develop
 
-```sh
-# recreate this project
-npx sv@0.16.5 create --template minimal --types ts --no-install apps/demo
-```
-
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+The demo bundles `libzaungast/web` from the local workspace (`file:../packages/libzaungast`), so build the
+library first:
 
 ```sh
+# from the repo root — install + build the library the demo links
+npm ci
+npm run build --workspace libzaungast
+
+# then run the demo (its own install; not a workspace member)
+cd demo
+npm install
 npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
 ```
 
-## Building
-
-To create a production version of your app:
+## Build & deploy
 
 ```sh
-npm run build
+npm run build                       # static site → demo/build/
+BASE_PATH=/zaungast npm run build   # with the GitHub Pages project subpath
 ```
 
-You can preview the production build with `npm run preview`.
+Deployment is **manual**: Actions → "Deploy demo to GitHub Pages" → Run workflow
+(`.github/workflows/pages.yml`). Live at <https://mbe24.github.io/zaungast/>.
 
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+## Stack
+
+SvelteKit (static adapter) · Tailwind + shadcn-svelte · Observable Plot + d3-force · a Comlink Web Worker
+over `libzaungast/web` + `@sqlite.org/sqlite-wasm`. Cross-browser and fully static — no server, no
+COOP/COEP headers needed.
+
+Once `libzaungast` is published to npm, the `file:` dependency becomes `libzaungast@^0.5.0`.
