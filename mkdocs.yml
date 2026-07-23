@@ -29,5 +29,6 @@ nav:
   - Privacy & safety: privacy.md
   - Troubleshooting: troubleshooting.md
   - Development: development.md
+  - Browser usage: browser.md
   - Reference:
     - Chromium IndexedDB format: reference/chromium-indexeddb-format.md

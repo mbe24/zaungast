@@ -62,12 +62,13 @@ console.log(live.current().meta.counts);
 
 ## Public surface
 
-libzaungast has three entry points, one for each audience. Everything else is internal and cannot be
+libzaungast has four entry points, one for each audience. Everything else is internal and cannot be
 reached through the package's `exports`.
 
 | Import                   | Audience                       | Description                                                                                                                                                                                                                                                                                             |
 | ------------------------ | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `libzaungast`            | Application and script authors | The high-level data API and the primary path for reading a Teams cache. You open a store from a leveldb directory and query six orthogonal namespaces that return clean typed rows, so you can read conversations and messages or run full-text search without ever handling the underlying byte format. |
+| `libzaungast/web`        | Browser authors                | The browser-safe subset of the data API: the same static query namespaces, but reading from an in-memory `SnapshotSource` on an injected SQLite driver instead of the filesystem and `node:sqlite`. Runs the whole pipeline client-side with no Node builtins. See [Browser usage](https://zaungast.readthedocs.io/en/latest/browser/). |
 | `libzaungast/format`     | Power users and tooling        | The decode and schema layer that sits beneath the data API. It exposes the Chromium byte readers, the structured-clone value decoder, the content fingerprinting, and the schema description utilities, for callers who need to inspect or reinterpret the raw store rather than the resolved rows.       |
 | `libzaungast/engine-spi` | Engine authors                 | The service provider interface for implementing an ingest engine. It hands an implementer the contract types, the schema inputs, and a factory for wrapping a finished store, so an alternative engine such as a native accelerator can be built in a separate package and injected without libzaungast ever depending on it. |
 
@@ -86,6 +87,17 @@ rows such as `Conversation`, `Message`, `Person`, `CalendarEvent`, `Call`, and `
 lookups return an explicit result object carrying an `ok` flag rather than failing silently. The
 companions `tryOpen` and `inspect` let you check a directory before committing to a full open, and
 `htmlToText` renders Teams rich-text bodies to plain text.
+
+### The browser entry: `libzaungast/web`
+
+The same static query facade, made to run in the browser. Instead of a directory path you build a
+`MemorySource` from the leveldb files' bytes (from a folder `<input>` or the File System Access API),
+and instead of `node:sqlite` you inject a `SqlDriver` backed by a WebAssembly SQLite build such as
+`@sqlite.org/sqlite-wasm` (which ships FTS5, so full-text search works). `openStoreFromSource(source,
+{ driver })` then returns the same `TeamsStore` handle — conversations, messages, people, events,
+calls, topics — minus live-refresh. libzaungast carries no browser dependency; the wasm SQLite build
+is yours to choose and bundle. A reference driver lives at `examples/sqlite-wasm-driver.ts`. Full
+walkthrough: [Browser usage](https://zaungast.readthedocs.io/en/latest/browser/).
 
 ### The format layer: `libzaungast/format`
 
