@@ -330,15 +330,39 @@ export class StaticTeamsStore implements TeamsStore {
 
 // ---------- browser entry point ----------
 
+// A build-progress phase, reported (at each phase's COMPLETION) by openStoreFromSource's optional
+// onPhase hook: `decode` (loadSnapshotFrom) then the four ingest phases. Pure observation — the hook
+// never affects the build. `extract`/`apply`/`recompute`/`fts` are the engine-wide phase vocabulary
+// (shared with the native engine + the timings schema); `decode` is browser-facing only. A handler
+// over this wider union is contravariantly assignable to ingest-core's PhaseHook, so it threads through
+// extractFromSnapshot/buildStore with no ingest-core change.
+export type BuildPhase = 'decode' | 'extract' | 'apply' | 'recompute' | 'fts';
+
+// Decode + extract, timed, inside a frame that unwinds before the caller runs buildStore — so the
+// Snapshot's ~56MB decode graph and the growing store never coexist (the extract-then-drop-snapshot
+// ordering; see ingest-core). Mirrors the Node `extractForFullIngest` helper.
+function extractFromSource(source: SnapshotSource, onPhase?: (p: BuildPhase, ms: number) => void) {
+  const t = onPhase ? performance.now() : 0;
+  const snap = loadSnapshotFrom(source);
+  onPhase?.('decode', performance.now() - t);
+  return extractFromSnapshot(snap, { onPhase });
+}
+
 // One-shot static read of a leveldb store presented as a `SnapshotSource` (the browser path — e.g. a
 // `MemorySource` preloaded from a directory-picker), built on an injected `SqlDriver` (the sqlite-wasm
 // driver in the browser). Mirrors `openStore(dir)`'s contract minus live-refresh: never throws for an
 // unknown schema or a lossy load — `meta` tells the truth (schemaMatched / lossy). Synchronous; the only
-// async is the caller's one-time driver init (e.g. `await createSqliteWasmDriver()`).
+// async is the caller's one-time driver init (e.g. `await createSqliteWasmDriver()`). `onPhase` is an
+// optional progress hook (see BuildPhase) — pure observation, omit for zero overhead.
 export function openStoreFromSource(
   source: SnapshotSource,
-  opts: { driver: SqlDriver; extraStopwords?: Iterable<string> },
+  opts: {
+    driver: SqlDriver;
+    extraStopwords?: Iterable<string>;
+    onPhase?: (phase: BuildPhase, ms: number) => void;
+  },
 ): TeamsStore {
-  const ingested = buildStore(extractFromSnapshot(loadSnapshotFrom(source)), opts.driver);
+  const ex = extractFromSource(source, opts.onPhase);
+  const ingested = buildStore(ex, opts.driver, { onPhase: opts.onPhase });
   return new StaticTeamsStore(ingested, opts.extraStopwords);
 }

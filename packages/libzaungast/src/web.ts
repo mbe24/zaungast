@@ -25,6 +25,7 @@ export type * from './format/types.js';
 // cost). The driver types let the consumer type the wasm driver they inject.
 export {
   openStoreFromSource,
+  type BuildPhase,
   type StoreView,
   type TeamsStore,
   type ConversationsApi,

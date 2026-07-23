@@ -67,6 +67,34 @@ Swapping to a different SQLite build (e.g. sql.js, wa-sqlite) is just another `S
 implementation — libzaungast is agnostic. (Note: FTS5 must be present for `messages.search` to use the
 index; without it the reader degrades gracefully to a scan.)
 
+## Progress reporting
+
+A store build takes a few seconds (decode + wasm SQLite), so `openStoreFromSource` accepts an optional
+`onPhase(phase, ms)` hook. It fires as each phase **completes** — `decode`, then `extract`, `apply`,
+`recompute`, `fts` — with the phase's wall-clock in ms. Pure observation (omit it for zero overhead);
+handy for a progress bar:
+
+```ts
+openStoreFromSource(source, {
+  driver,
+  onPhase: (phase, ms) => console.log(`${phase}: ${Math.round(ms)}ms`),
+});
+```
+
+For file-level decode progress ("decoding 000048.ldb — 12 of 30"), no extra API is needed — the decoder
+calls `source.read(name)` once per `.ldb`/`.log` file, so a `SnapshotSource` whose `read` reports before
+returning gives per-file progress for free:
+
+```ts
+const source: SnapshotSource = {
+  names: () => [...files.keys()],
+  read: (name) => {
+    report(name); // e.g. postMessage to the UI
+    return files.get(name)!;
+  },
+};
+```
+
 ## Browser support
 
 The engine is universal — WebAssembly SQLite and libzaungast's decode/query code run in every modern
