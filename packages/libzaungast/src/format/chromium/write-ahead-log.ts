@@ -5,7 +5,6 @@
 //   header: sequence(8 LE) + count(4 LE); then `count` ops:
 //     op: 1=kTypeValue -> key(varlen)+value(varlen); 0=kTypeDeletion -> key(varlen)
 import fs from 'node:fs';
-import { pathToFileURL } from 'node:url';
 import { crc32c, unmaskCrc } from './sstable.js';
 import type { WalBatch, WalOp } from '../types.js';
 
@@ -100,11 +99,4 @@ export function parseWriteAheadLog(path: string): WalBatch[] {
   }
 
   return batches;
-}
-
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const batches = parseWriteAheadLog(process.argv[2]);
-  let ops = 0;
-  for (const b of batches) ops += b.ops.length;
-  console.log(`batches: ${batches.length}, total ops: ${ops}`);
 }

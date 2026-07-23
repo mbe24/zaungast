@@ -9,7 +9,6 @@ import {
 import type { SnapshotRecord, Snapshot } from '../format/types.js';
 import { ChatStore, type StoreMeta } from './store.js';
 import { htmlToText, isSystemMessage, mentionedMris, hasAttachment } from '../util/text.js';
-import { performance } from 'node:perf_hooks';
 
 export function convKind(id = ''): string {
   if (id.includes('@unq.gbl.spaces')) return '1:1';
