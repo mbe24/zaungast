@@ -71,26 +71,29 @@ test.each(['ChatStore', 'createJsEngine', 'ingest'])(
 // 3. Internal deep-imports must REJECT (not in the exports map). store.js + query.js keep ChatStore
 // and the SQL layer internal; ingest.js is the sensitive one — both ingest() and openStoreFile live
 // there, and only the latter may be reached, via engine-spi (never ingest()/applyIncremental raw).
-test.each(['libzaungast/ingest/store.js', 'libzaungast/ingest/ingest.js', 'libzaungast/query.js'])(
-  'internal %s is not importable',
-  async (internal) => {
-    let resolved = false;
-    let code = '';
-    let msg = '';
-    try {
-      await import(/* @vite-ignore */ internal);
-      resolved = true;
-    } catch (e) {
-      code = (e as { code?: string }).code ?? '';
-      msg = (e as Error).message ?? '';
-    }
-    expect(resolved, `${internal} resolved — LEAK`).toBe(false);
-    expect(
-      code === 'ERR_PACKAGE_PATH_NOT_EXPORTED' || /not exported|package subpath/i.test(msg),
-      `unexpected rejection: code=${code} msg=${msg}`,
-    ).toBe(true);
-  },
-);
+test.each([
+  'libzaungast/ingest/store.js',
+  'libzaungast/ingest/ingest.js',
+  'libzaungast/ingest/ingest-core.js',
+  'libzaungast/store-facade.js',
+  'libzaungast/query.js',
+])('internal %s is not importable', async (internal) => {
+  let resolved = false;
+  let code = '';
+  let msg = '';
+  try {
+    await import(/* @vite-ignore */ internal);
+    resolved = true;
+  } catch (e) {
+    code = (e as { code?: string }).code ?? '';
+    msg = (e as Error).message ?? '';
+  }
+  expect(resolved, `${internal} resolved — LEAK`).toBe(false);
+  expect(
+    code === 'ERR_PACKAGE_PATH_NOT_EXPORTED' || /not exported|package subpath/i.test(msg),
+    `unexpected rejection: code=${code} msg=${msg}`,
+  ).toBe(true);
+});
 
 // 5. Purity / one-way dependency: libzaungast must never depend on the native accelerator. The
 // dependency only ever points the other way (libzaungast-native → libzaungast/engine-spi).

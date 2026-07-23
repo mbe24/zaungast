@@ -18,3 +18,47 @@ export {
 export { sampleStoreFields, type StoreFieldSample } from './format/sample.js';
 export { proposeSchema, type SchemaProposal, type ProposedStore } from './format/propose.js';
 export type * from './format/types.js';
+
+// The static query facade (plan B5): build a store from a SnapshotSource on an injected SqlDriver, then
+// query it with the same StoreView namespaces as the Node openStore(dir) — minus live-refresh. Types
+// are exported so a browser consumer can name everything the facade returns (all type-only, zero bundle
+// cost). The driver types let the consumer type the wasm driver they inject.
+export {
+  openStoreFromSource,
+  type StoreView,
+  type TeamsStore,
+  type ConversationsApi,
+  type MessagesApi,
+  type PeopleApi,
+  type EventsApi,
+  type CallsApi,
+  type TopicsApi,
+  type MessageSearchOptions,
+  type ConversationMessagesOptions,
+  type ConversationListOptions,
+  type PeopleFindOptions,
+  type EventsListOptions,
+  type CallsListOptions,
+  type TopicsComputeOptions,
+  type MessageSearchResult,
+  type ConvMessagesResult,
+  type TopicsComputeResult,
+} from './store-facade.js';
+export type { SqlDriver, SqlDatabase, SqlStatement, SqlParam } from './ingest/sql-driver.js';
+export type { StoreMeta } from './ingest/store.js';
+export type {
+  Conversation,
+  Message,
+  ReactionGroup,
+  SearchHit,
+  ThreadSummary,
+  Person,
+  PeopleResult,
+  CalendarEvent,
+  Attendee,
+  Call,
+  RecordingLink,
+  Topic,
+  QueryMiss,
+  ConvMessagesMiss,
+} from './query.js';
