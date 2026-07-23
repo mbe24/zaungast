@@ -25,8 +25,10 @@ people, events, calls, topics, FTS search). Nothing is uploaded.
 Build both outputs (build the library first):
 
 ```sh
+# 1. build the library (run from the repo root)
 npm run build --workspace libzaungast
-node packages/libzaungast/examples/browser-demo/build.mjs
+# 2. build the demo (run from this directory, packages/libzaungast/examples/)
+node browser-demo/build.mjs
 ```
 
 `build.mjs` emits two shapes into `browser-demo/dist/` (gitignored):
@@ -41,3 +43,17 @@ node packages/libzaungast/examples/browser-demo/build.mjs
 
 Both expose a "Self-test (no data)" button that only exercises the wasm driver, and a "Pick Teams cache
 folder…" button for a real run.
+
+### Using this outside the monorepo
+
+The example imports `libzaungast/web` — a version-agnostic specifier. **Inside this repo it resolves to
+the local workspace build**, so the example always exercises the current source and catches regressions
+before a release; it is deliberately *not* pinned to a published version here. To run the demo as a
+standalone project, copy `browser-demo/` and `sqlite-wasm-driver.ts` out and install the dependencies —
+the imports don't change:
+
+```sh
+npm install libzaungast@^0.5.0 @sqlite.org/sqlite-wasm esbuild   # 0.5.0 is the first release with ./web
+node build.mjs
+```
+
