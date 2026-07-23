@@ -30,6 +30,16 @@
       "default": "./dist/schema/versions/*.json"
     }
   },
+  "imports": {
+    "#bytes": {
+      "browser": {
+        "development": "./src/util/bytes-web.ts",
+        "default": "./dist/util/bytes-web.js"
+      },
+      "development": "./src/util/bytes-node.ts",
+      "default": "./dist/util/bytes-node.js"
+    }
+  },
   "files": [
     "dist"
   ],
