@@ -9,6 +9,7 @@ import {
 import { fromLatin1, toHex } from '#bytes';
 import type { SnapshotRecord, Snapshot } from '../format/types.js';
 import { ChatStore, type StoreMeta } from './store.js';
+import { nodeSqlDriver } from './sqlite-node.js';
 import { htmlToText, isSystemMessage, mentionedMris, hasAttachment } from '../util/text.js';
 
 export function convKind(id = ''): string {
@@ -405,7 +406,7 @@ export function openStoreFile(
   meta: StoreMeta,
   opts: { ftsEnabled: boolean; tempDir?: string },
 ): Ingested {
-  const store = new ChatStore({
+  const store = new ChatStore(nodeSqlDriver, {
     openFile: dbPath,
     ftsEnabled: opts.ftsEnabled,
     tempFile: opts.tempDir,
@@ -420,7 +421,7 @@ export function ingest(dir: string, opts: { seqCap?: number; onPhase?: PhaseHook
   // store below, so the two memory peaks never coexist.
   const ex = extractForFullIngest(dir, opts);
   if (!ex.mapping) {
-    const store = new ChatStore();
+    const store = new ChatStore(nodeSqlDriver);
     return {
       store,
       state: null,
@@ -441,7 +442,7 @@ export function ingest(dir: string, opts: { seqCap?: number; onPhase?: PhaseHook
     };
   }
 
-  const store = new ChatStore();
+  const store = new ChatStore(nodeSqlDriver);
   const tApply = opts.onPhase ? performance.now() : 0;
   store.db.exec('BEGIN');
   applyConversationMeta(store, ex.convRows);

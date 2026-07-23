@@ -7,6 +7,7 @@ import { resolveLevelDbDir } from '../../../scripts/native-runner.mjs';
 import { generateFixtureWithTables } from './fixture/generate.js';
 import { ingest, applyIncremental, type IngestState } from '../src/ingest/ingest.js';
 import { ChatStore } from '../src/ingest/store.js';
+import { nodeSqlDriver } from '../src/ingest/sqlite-node.js';
 import {
   loadSnapshot,
   entityTargets,
@@ -334,7 +335,7 @@ test('H. lossy load MUST NOT mass-delete (Hole 1 regression)', () => {
 });
 
 test('I. store-level: edit + soft-delete update flags and FTS (Hole 3)', () => {
-  const st = new ChatStore();
+  const st = new ChatStore(nodeSqlDriver);
   const base = {
     convId: 'c',
     chainKey: 'k',

@@ -1,6 +1,6 @@
-import { DatabaseSync } from 'node:sqlite';
-import { readFileSync, rmSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { makeHandle } from '../util/handles.js';
+import type { SqlDatabase, SqlDriver, SqlStatement } from './sql-driver.js';
 
 // The ChatStore DDL, read from the single-source schema.sql (see that file's header). This is the
 // SAME string the native engine (libzaungast-native) execs verbatim, so the two engines' schemas
@@ -29,7 +29,7 @@ export function isBotMri(mri: string | null | undefined): boolean {
 }
 
 export class ChatStore {
-  db: DatabaseSync;
+  db: SqlDatabase;
   ftsEnabled = false;
   private readonly handleByFull = new Map<string, string>();
   private readonly usedHandles = new Set<string>();
@@ -41,21 +41,22 @@ export class ChatStore {
   phraseCache = new Map<string, string[]>();
   phraseCacheSig = '';
 
-  // Set when this store was opened onto a native-built temp .db; unlinked on close().
-  private tempFile?: string;
-
   // Default: an in-memory store, schema created + populated by the TS ingest. `openFile`: open an
   // EXISTING ChatStore .db read-only (the native engine already built it end-to-end) — skips schema
   // creation and ingest; only the query surface (db + ftsEnabled) is used. `tempFile` (if the opened
-  // file is a throwaway the native path wrote) is deleted on close().
-  constructor(opts?: { openFile?: string; ftsEnabled?: boolean; tempFile?: string }) {
+  // file is a throwaway the native path wrote) is deleted on close() by the driver. `driver` is
+  // injected — node:sqlite at the Node entry, a wasm driver in the browser — so this module never
+  // imports a concrete SQLite backend.
+  constructor(
+    private readonly driver: SqlDriver,
+    opts?: { openFile?: string; ftsEnabled?: boolean; tempFile?: string },
+  ) {
     if (opts?.openFile) {
-      this.db = new DatabaseSync(opts.openFile, { readOnly: true });
+      this.db = driver.open(opts.openFile, { readOnly: true, deleteOnClose: !!opts.tempFile });
       this.ftsEnabled = opts.ftsEnabled ?? this.detectFtsFromDb();
-      this.tempFile = opts.tempFile;
       return;
     }
-    this.db = new DatabaseSync(':memory:');
+    this.db = driver.open(':memory:');
     this.ftsEnabled = this.detectFts();
     this.db.exec(SCHEMA_SQL);
     if (this.ftsEnabled) {
@@ -66,7 +67,7 @@ export class ChatStore {
 
   private detectFts(): boolean {
     try {
-      const t = new DatabaseSync(':memory:');
+      const t = this.driver.open(':memory:');
       t.exec('create virtual table _p using fts5(x)');
       t.close();
       return true;
@@ -112,7 +113,7 @@ export class ChatStore {
     return fb;
   }
 
-  private readonly stmt = new Map<string, ReturnType<DatabaseSync['prepare']>>();
+  private readonly stmt = new Map<string, SqlStatement>();
   private q(sql: string) {
     let s = this.stmt.get(sql);
     if (!s) {
@@ -424,13 +425,6 @@ export class ChatStore {
   }
 
   close() {
-    this.db.close();
-    if (this.tempFile) {
-      try {
-        rmSync(this.tempFile, { force: true, recursive: true });
-      } catch {
-        /* best-effort cleanup of the native engine's throwaway .db dir */
-      }
-    }
+    this.db.close(); // the driver unlinks a deleteOnClose temp file (the native engine's throwaway .db)
   }
 }
