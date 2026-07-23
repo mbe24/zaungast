@@ -6,7 +6,7 @@
   "description": "Copy-out scaffolding for the libzaungast examples (see README.md). NOT a workspace member and never installed in-repo — in the monorepo the examples resolve via the root install. `npm install` here is only for running the examples OUTSIDE the repo (needs libzaungast >= 0.5, the first release with ./web).",
   "scripts": {
     "build": "node browser-demo/build.mjs",
-    "serve": "node browser-demo/serve.mjs"
+    "serve": "npx -y serve browser-demo/dist"
   },
   "dependencies": {
     "libzaungast": "^0.5.0"

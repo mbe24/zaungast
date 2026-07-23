@@ -2,7 +2,7 @@
 
 Runnable examples for the library. These are **not published** (the package ships only `dist/`) and are
 not compiled by the package's `tsc` (which is `src`-only, with no DOM lib) — for the browser example the
-**esbuild build is the check** (a break fails `node build.mjs`). `sqlite-wasm-driver.ts` is additionally
+**esbuild build is the check** (a break fails `node browser-demo/build.mjs`). `sqlite-wasm-driver.ts` is additionally
 type-checked and exercised by the library's own tests.
 
 `@sqlite.org/sqlite-wasm` is a **devDependency** used only here — the library itself has no browser
@@ -22,26 +22,23 @@ Reads a Microsoft Teams cache **entirely in the browser** via `libzaungast/web`:
 `…indexeddb.leveldb` folder → decode → build a wasm SQLite store → query it (conversations, messages,
 people, events, calls, topics, FTS search). Nothing is uploaded.
 
-Build both outputs (build the library first):
+Build and serve it (the library first), starting from the repo root:
 
 ```sh
-# 1. build the library (run from the repo root)
-npm run build --workspace libzaungast
-# 2. build the demo (run from this directory, packages/libzaungast/examples/)
-node browser-demo/build.mjs
+npm run build --workspace libzaungast   # 1. build the library (from the repo root)
+
+cd packages/libzaungast/examples        # 2. the examples dir is the demo's working dir
+npm run build                           # 3. build the demo → browser-demo/dist/
+npm run serve                           # 4. serve over http, then open the printed URL
 ```
 
-`build.mjs` emits two shapes into `browser-demo/dist/` (gitignored):
+`npm run build` runs `browser-demo/build.mjs`, emitting into `browser-demo/dist/` (gitignored):
+`index.html` + `main.js` + `worker.js` + `sqlite3.wasm`. The build runs in a **Web Worker**, so the UI
+stays responsive and shows **live** per-file + per-phase progress. It must be served over http
+(Workers/modules/wasm-fetch don't work from `file://`) — `npm run serve` as above, or VS Code Live
+Server, GitHub Pages, etc.
 
-- **Hosted** — `index.html` + `main.js` + `worker.js` + `sqlite3.wasm`. Runs the build in a **Web
-  Worker**, so the UI stays responsive and shows **live** per-file + per-phase progress. Must be served
-  over http (Workers/modules/wasm-fetch don't work from `file://`): `node browser-demo/serve.mjs`, VS
-  Code Live Server, GitHub Pages, etc.
-- **Standalone** — a single self-contained `standalone.html` you can **double-click** (`file://`, no
-  server). No Worker, so the tab is unresponsive for the few seconds the build takes and phase timings
-  appear at the end; everything (JS + wasm) is inlined.
-
-Both expose a "Self-test (no data)" button that only exercises the wasm driver, and a "Pick Teams cache
+The page has a "Self-test (no data)" button that only exercises the wasm driver, and a "Pick Teams cache
 folder…" button for a real run.
 
 ### Using this outside the monorepo
@@ -53,6 +50,7 @@ project, copy this whole `examples/` folder out (it ships a `package.json` for e
 it:
 
 ```sh
+# from the copied folder (its own project root):
 npm install     # pulls libzaungast (>= 0.5, the first release with ./web), @sqlite.org/sqlite-wasm, esbuild
 npm run build   # → browser-demo/dist
 npm run serve   # optional: serve the hosted build over http

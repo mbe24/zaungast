@@ -75,4 +75,4 @@ input.addEventListener('change', () => {
   clear();
   worker.postMessage({ kind: 'build', files: Array.from(input.files) });
 });
-log('ready. Run the self-test first, then pick your …indexeddb.leveldb folder.');
+log('ready. Run the self-test first, then pick your Teams cache folder.');

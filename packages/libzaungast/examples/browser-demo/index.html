@@ -28,14 +28,35 @@
       .note {
         color: #666;
       }
+      .path {
+        font-size: 12px;
+        padding: 0.5rem 0.75rem;
+        margin: 0.4rem 0;
+        word-break: break-all;
+      }
     </style>
   </head>
   <body>
     <h1>libzaungast/web — browser integration POC</h1>
     <p class="note">
-      Everything runs locally in your browser (in a Web Worker); nothing is uploaded. Point it at your
-      <code>…indexeddb.leveldb</code> folder — or a copy if Teams is running.
+      Everything runs locally in your browser (in a Web Worker); nothing is uploaded — pick a copy of
+      the folder if Teams is running.
     </p>
+    <div class="note">
+      <p>
+        Pick the folder ending in <code>.indexeddb.leveldb</code> (the one holding
+        <code>CURRENT</code>, <code>MANIFEST-*</code>, <code>*.ldb</code>/<code>*.log</code>) — not its
+        parent <code>IndexedDB</code> folder:
+      </p>
+      <p><strong>Windows</strong></p>
+      <pre class="path">C:\Users\&lt;you&gt;\AppData\Local\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\EBWebView\&lt;profile&gt;\IndexedDB\https_teams.microsoft.com_0.indexeddb.leveldb</pre>
+      <p><strong>macOS</strong></p>
+      <pre class="path">/Users/&lt;you&gt;/Library/Containers/com.microsoft.teams2/Data/Library/Application Support/Microsoft/MSTeams/EBWebView/&lt;profile&gt;/IndexedDB/https_teams.microsoft.com_0.indexeddb.leveldb</pre>
+      <p>
+        <code>&lt;you&gt;</code> is your account username; <code>&lt;profile&gt;</code> is your Teams
+        profile folder (usually <code>WV2Profile_tfw</code>).
+      </p>
+    </div>
 
     <div class="controls">
       <button id="selftest">Self-test (no data)</button>
