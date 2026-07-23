@@ -11,7 +11,9 @@ export default defineConfig({
 				// Force runes mode for the project, except for libraries. Can be removed in svelte 6.
 				runes: ({ filename }) => filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 			},
-			adapter: adapter({ fallback: '200.html' })
+			adapter: adapter({ fallback: '404.html' }),
+			// GitHub Pages serves a project site under /<repo>/. CI sets BASE_PATH=/zaungast; dev = ''.
+			paths: { base: process.env.BASE_PATH || '' }
 		})
 	],
 	// sqlite-wasm ships its own wasm glue; excluding it from Vite's dep pre-bundling keeps that intact.

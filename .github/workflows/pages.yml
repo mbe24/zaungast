@@ -1,0 +1,59 @@
+name: Deploy demo to GitHub Pages
+
+# Builds demo/ (SvelteKit static) and deploys it to GitHub Pages. Pages source must be set to
+# "GitHub Actions" in the repo settings. Manual only (Actions → "Run workflow") — no auto-deploy on push.
+on:
+  workflow_dispatch:
+
+# Least privilege for the Pages deploy (OIDC id-token + pages write).
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; a newer push supersedes an in-flight run.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      # The demo links libzaungast via `file:../packages/libzaungast`, so its dist/ must exist first.
+      - name: Install monorepo + build libzaungast
+        run: |
+          npm ci
+          npm run build --workspace libzaungast
+
+      # BASE_PATH = the project-site subpath (/<repo>); a user/org site would use "".
+      - name: Install + build the demo
+        working-directory: demo
+        env:
+          BASE_PATH: /${{ github.event.repository.name }}
+        run: |
+          npm ci
+          npm run build
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: demo/build
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
