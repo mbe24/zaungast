@@ -50,6 +50,11 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Browser bundle smoke (./web bundles for the browser with no node: builtins)
+        run: npm run check:web-bundle
+        # Tripwire: reintroduce node:fs/node:path anywhere reachable from the ./web entry and the
+        # browser bundle fails here (esbuild --platform=browser), long before a user's browser.
+
       - name: Unit tests
         run: npm test
 
@@ -71,6 +76,12 @@ jobs:
         # golden pins the fixture's schema fingerprint, so a change to the fingerprint algorithm
         # flips the hash and fails here — the drift signal that silently rotted a stale
         # knownFingerprint before. PII-free (synthetic); test:golden:real stays local (real cache).
+
+      - name: Browser-condition tests (happy-dom + web #bytes codec)
+        run: npm run test:browser
+        # Re-runs the codec vectors (bytes/hash) + seam-parity under resolve.conditions:['browser'],
+        # so `#bytes` binds to the hand-rolled web codec — catches a "green on Node, broken in the
+        # browser" divergence that the node-condition suites can't see.
 
   rust:
     name: Rust (fmt · clippy · unit)

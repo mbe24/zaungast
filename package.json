@@ -39,6 +39,8 @@
     "test:integration": "vitest run --project int",
     "test:golden": "vitest run --project golden",
     "test:golden:real": "vitest run --project real",
+    "test:browser": "vitest run --project browser",
+    "check:web-bundle": "node scripts/bundle-smoke.mjs",
     "assets": "node scripts/render-assets.mjs",
     "profile": "node --experimental-sqlite --expose-gc scripts/profile.mjs",
     "profile:native": "node scripts/profile-rust.mjs",
@@ -52,6 +54,8 @@
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
     "@types/node": "^26.1.1",
+    "esbuild": "^0.28.1",
+    "happy-dom": "^20.0.0",
     "prettier": "^3.9.5",
     "tsx": "^4.23.0",
     "typescript": "^7.0.2",

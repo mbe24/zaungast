@@ -14,8 +14,13 @@ const impls: ReadonlyArray<readonly [string, BytesCodec]> = [
   ['web', web],
 ];
 
-test('#bytes resolves to the node impl under the node/development condition', () => {
-  expect(viaImport.toHex).toBe(node.toHex);
+// #bytes resolution is condition-dependent: the default (Node) projects resolve the node impl; the
+// happy-dom `browser` project (plan A8, conditions:['browser']) resolves the web impl. happy-dom sets a
+// global `window`, so assert the environment-appropriate impl either way — this proves BOTH branches of
+// the imports map resolve to a real codec (and that the browser project's condition actually took).
+const inBrowserCondition = typeof (globalThis as { window?: unknown }).window !== 'undefined';
+test('#bytes resolves to the impl matching the active condition (node vs browser)', () => {
+  expect(viaImport.toHex).toBe(inBrowserCondition ? web.toHex : node.toHex);
 });
 
 test.each(impls)('%s: latin1 round-trips all 256 byte values (1:1, not windows-1252)', (_n, c) => {

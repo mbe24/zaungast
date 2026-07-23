@@ -24,6 +24,25 @@ export default defineConfig({
       role('unit'),
       role('fixture'),
       role('golden'),
+      // Browser-condition project (plan A8): happy-dom + resolve.conditions:['browser'] so `#bytes`
+      // resolves to the hand-rolled web codec (bytes-web). Re-runs the codec vectors (bytes/hash) and
+      // the seam-parity spec against that codec — the tripwire for a "green on Node, broken in the
+      // browser" divergence. The same files also run in their node projects (unit/fixture) under the
+      // node codec. `browser` must precede `development` so the `#bytes` imports map picks its
+      // browser→development branch (bytes-web), not the bare development one (bytes-node).
+      {
+        extends: true,
+        resolve: { conditions: ['browser', 'development'] },
+        test: {
+          name: 'browser',
+          environment: 'happy-dom',
+          include: [
+            'packages/libzaungast/test/bytes.unit.ts',
+            'packages/libzaungast/test/hash.unit.ts',
+            'packages/libzaungast/test/seam-parity.fixture.ts',
+          ],
+        },
+      },
       // Integration/real suites do real filesystem + SQLite work, and some assert on GLOBAL state
       // (e.g. "no leaked temp dirs in os.tmpdir()"). Run their files serially so concurrent workers'
       // fixtures can't pollute those observations — matching the old sequential integration harness.
