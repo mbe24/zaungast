@@ -62,8 +62,17 @@ class WasmDatabase implements SqlDatabase {
 }
 
 // Async once (WASM init), then a synchronous SqlDriver — matching ChatStore's sync constructor.
-export async function createSqliteWasmDriver(): Promise<SqlDriver> {
-  const sqlite3 = await sqlite3InitModule();
+// `initOptions` is passed straight to sqlite3InitModule (Emscripten module opts) — in a bundled browser
+// build, pass `{ locateFile }` so the glue can find sqlite3.wasm next to the bundle. Node needs none.
+export async function createSqliteWasmDriver(
+  initOptions?: Record<string, unknown>,
+): Promise<SqlDriver> {
+  // The shipped types declare sqlite3InitModule as taking no args; at runtime it accepts the standard
+  // Emscripten module options (locateFile, print, …). Widen the signature rather than cast the result,
+  // so the returned Sqlite3Static type is preserved.
+  const init: (opts?: Record<string, unknown>) => ReturnType<typeof sqlite3InitModule> =
+    sqlite3InitModule;
+  const sqlite3 = await init(initOptions);
   return {
     open(target, opts = {}) {
       // Browser has no file paths / deleteOnClose (that's the Node temp-file path) — `target` is
