@@ -53,6 +53,7 @@
   "license": "Apache-2.0",
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
+    "@sqlite.org/sqlite-wasm": "^3.53.0-build1",
     "@types/node": "^26.1.1",
     "esbuild": "^0.28.1",
     "happy-dom": "^20.0.0",
