@@ -44,14 +44,12 @@ self.onmessage = async (e: MessageEvent<In>) => {
     const isData = (n: string) => n.endsWith('.ldb') || n.endsWith('.log');
     const dataFiles = [...map.keys()].filter(isData);
     const otherFiles = [...map.keys()].filter((n) => !isData(n));
-    post({
-      type: 'progress',
-      msg:
-        `${dataFiles.length} data files (.ldb/.log) to decode` +
-        (otherFiles.length
-          ? `; ${otherFiles.length} leveldb metadata ignored (${otherFiles.join(', ')})`
-          : ''),
-    });
+    if (otherFiles.length)
+      post({
+        type: 'progress',
+        msg: `${otherFiles.length} leveldb metadata ignored (${otherFiles.join(', ')})`,
+      });
+    post({ type: 'progress', msg: `${dataFiles.length} data files (.ldb/.log) to decode` });
 
     // Progress-reporting SnapshotSource (the A5 seam): the decoder calls read() once per .ldb/.log, so
     // reporting there gives live per-file progress with NO library change.
