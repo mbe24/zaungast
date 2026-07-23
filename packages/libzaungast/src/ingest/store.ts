@@ -1,12 +1,11 @@
-import { readFileSync } from 'node:fs';
 import { makeHandle } from '../util/handles.js';
+import { SCHEMA_SQL } from './schema-sql.js';
 import type { SqlDatabase, SqlDriver, SqlStatement } from './sql-driver.js';
 
-// The ChatStore DDL, read from the single-source schema.sql (see that file's header). This is the
-// SAME string the native engine (libzaungast-native) execs verbatim, so the two engines' schemas
-// cannot drift. Resolved relative to this module: src/schema.sql in dev, dist/schema.sql in prod
-// (the build copies it — see package.json). FTS is created separately (conditional on fts5).
-export const SCHEMA_SQL = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
+// The ChatStore DDL lives in the single-source schema.sql; `SCHEMA_SQL` (imported above) is the
+// generated, browser-bundleable copy of it (see schema-sql.ts / gen-schema-sql.mjs). Same string the
+// native engine execs verbatim, so the two engines' schemas cannot drift. FTS is created separately
+// (conditional on fts5). Re-exported for the SPI from schema-sql.ts, not here.
 
 export interface StoreMeta {
   asOf: number; // ingest completion time (epoch ms)

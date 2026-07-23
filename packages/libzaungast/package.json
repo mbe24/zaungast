@@ -57,7 +57,8 @@
     "directory": "packages/libzaungast"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/copy-schema.mjs"
+    "build": "tsc -p tsconfig.json && node scripts/copy-schema.mjs",
+    "gen:schema-sql": "node scripts/gen-schema-sql.mjs"
   },
   "engines": {
     "node": ">=22.5.0"
