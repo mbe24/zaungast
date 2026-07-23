@@ -25,6 +25,11 @@
       "types": "./dist/engine-spi.d.ts",
       "default": "./dist/engine-spi.js"
     },
+    "./web": {
+      "development": "./src/web.ts",
+      "types": "./dist/web.d.ts",
+      "default": "./dist/web.js"
+    },
     "./schema/versions/*.json": {
       "development": "./src/schema/versions/*.json",
       "default": "./dist/schema/versions/*.json"
