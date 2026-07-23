@@ -9,7 +9,7 @@
 import { applyIncremental, ingest, type IngestState, type Ingested } from './ingest.js';
 import type { IngestEngine, RefreshResult } from './engine.js';
 import type { LdbCache } from '../format/types.js';
-import { loadSnapshotReuse } from '../format/chromium/indexeddb.js';
+import { loadSnapshotReuse } from '../format/chromium/node-source.js';
 
 // Reparse-incremental apply (mutate store + advance state in place), shared by `refresh` (a fresh
 // dir) and `reuseRefresh` (a pre-loaded reuse snapshot).

@@ -14,7 +14,7 @@ import {
   selectMapping,
   fingerprint,
 } from '../src/format/index.js';
-import { loadEntries } from '../src/format/chromium/indexeddb.js'; // internal (not public /format)
+import { loadEntries } from '../src/format/chromium/node-source.js'; // internal (not public /format)
 import { crc32c } from '../src/format/chromium/sstable.js';
 
 function maskCrc(c: number): number {

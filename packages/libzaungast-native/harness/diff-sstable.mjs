@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { readTable } from '../../libzaungast/dist/format/chromium/sstable.js';
+import { readTable } from '../../libzaungast/dist/format/chromium/node-source.js';
 
 const CRC32C = (() => {
   const t = new Uint32Array(256);

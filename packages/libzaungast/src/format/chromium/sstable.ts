@@ -1,6 +1,5 @@
 // Minimal read-only LevelDB SSTable (.ldb) parser.
 // Format ref: https://github.com/google/leveldb/blob/main/doc/table_format.md
-import fs from 'node:fs';
 import { alloc } from '#bytes';
 import * as Snappy from './snappy.js';
 import type { BlockHandle, BlockReadResult, TableEntry, TableReadResult } from '../types.js';
@@ -104,10 +103,8 @@ export function* parseBlock(data: Uint8Array): Generator<TableEntry> {
   }
 }
 
-export function readTable(path: string): TableReadResult {
-  // Read the whole (tmp-copy) file once: one syscall, no per-block zeroed Buffer.alloc + readSync.
+export function parseTable(file: Uint8Array): TableReadResult {
   // Blocks/values become views into this buffer; the entries returned pin it for their lifetime.
-  const file = fs.readFileSync(path);
   const fileSize = file.length;
   const footerOff = fileSize - 48;
   // 8-byte footer magic compared as two little-endian u32 halves (no BigInt): getUint32 reads the

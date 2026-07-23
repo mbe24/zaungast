@@ -6,7 +6,8 @@
 // both sides; array own-props ignored on both sides (see ssv.rs canonical()).
 //   node packages/libzaungast-native/harness/diff-ssv.mjs <leveldb-dir> [--rust <report.txt>]
 import fs from 'node:fs';
-import { loadSnapshot, decodeValue } from '../../libzaungast/dist/format/chromium/indexeddb.js';
+import { loadSnapshot } from '../../libzaungast/dist/format/chromium/node-source.js';
+import { decodeValue } from '../../libzaungast/dist/format/chromium/indexeddb.js';
 
 const CRC32C = (() => {
   const t = new Uint32Array(256);

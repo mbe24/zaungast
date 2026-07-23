@@ -4,7 +4,6 @@
 // A reassembled record is a WriteBatch:
 //   header: sequence(8 LE) + count(4 LE); then `count` ops:
 //     op: 1=kTypeValue -> key(varlen)+value(varlen); 0=kTypeDeletion -> key(varlen)
-import fs from 'node:fs';
 import { concat } from '#bytes';
 import { crc32c, unmaskCrc } from './sstable.js';
 import type { WalBatch, WalOp } from '../types.js';
@@ -26,8 +25,7 @@ function readVarint(buf: Uint8Array, off: number): [number, number] {
 }
 
 // Return array of {sequence, ops:[{type,key,value}]}
-export function parseWriteAheadLog(path: string): WalBatch[] {
-  const data = fs.readFileSync(path);
+export function parseWal(data: Uint8Array): WalBatch[] {
   // One cached DataView over the whole log for the multi-byte header reads in the loop below.
   const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
   const batches: WalBatch[] = [];

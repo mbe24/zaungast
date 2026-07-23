@@ -1,9 +1,7 @@
 // IndexedDB-on-LevelDB helpers: multi-sstable loader + Chromium key decoding.
-import fs from 'node:fs';
-import path from 'node:path';
 import { toLatin1, alloc } from '#bytes';
-import { readTable } from './sstable.js';
-import { parseWriteAheadLog } from './write-ahead-log.js';
+import { parseTable } from './sstable.js';
+import { parseWal } from './write-ahead-log.js';
 import { deserialize } from './structured-clone.js';
 import * as Snappy from './snappy.js';
 import { byCodeUnit } from '../../util/sort.js';
@@ -13,10 +11,12 @@ import type {
   SnapshotRecord,
   ExternalBlobMarker,
   LdbCache,
+  LiveSnapshotSource,
   LoadEntriesOptions,
   LoadEntriesResult,
   LoadEntriesReuseResult,
   Snapshot,
+  SnapshotSource,
   SsvValue,
   StoreBucket,
   TableReadResult,
@@ -61,7 +61,7 @@ function foldBatch(batch: WalBatch, consider: Consider): void {
 // copy-reuse would pin itself in a permanent lossy/stale state. Returns true if any file failed
 // to read or read lossily (caller marks the whole load lossy).
 function readTablesInto(
-  dir: string,
+  source: SnapshotSource | LiveSnapshotSource,
   files: string[],
   consider: Consider,
   cache?: LdbCache,
@@ -76,7 +76,7 @@ function readTablesInto(
     if (hit) {
       let curSize = -1;
       try {
-        curSize = fs.statSync(path.join(dir, f)).size;
+        curSize = (source as LiveSnapshotSource).stat(f).size;
       } catch {
         curSize = -1;
       }
@@ -85,7 +85,7 @@ function readTablesInto(
     let res = hit?.res;
     if (!res) {
       try {
-        res = readTable(path.join(dir, f));
+        res = parseTable(source.read(f));
       } catch (e) {
         console.error(`skip ${f}: ${(e as Error).message}`);
         lossy = true;
@@ -97,7 +97,7 @@ function readTablesInto(
       if (cache && !res.lossy) {
         let size = -1;
         try {
-          size = fs.statSync(path.join(dir, f)).size;
+          size = (source as LiveSnapshotSource).stat(f).size;
         } catch {
           size = -1;
         }
@@ -112,12 +112,12 @@ function readTablesInto(
 
 // Parse each `.log` file and fold its batches into `consider`. Returns true if any log failed to
 // parse (caller marks the whole load lossy).
-function readLogsInto(dir: string, logFiles: string[], consider: Consider): boolean {
+function readLogsInto(source: SnapshotSource, logFiles: string[], consider: Consider): boolean {
   let lossy = false;
   for (const lf of logFiles) {
     let batches: WalBatch[];
     try {
-      batches = parseWriteAheadLog(path.join(dir, lf));
+      batches = parseWal(source.read(lf));
     } catch (e) {
       console.error(`skip log ${lf}: ${(e as Error).message}`);
       lossy = true;
@@ -206,11 +206,11 @@ function collectSnapshot(map: Map<string, SnapshotRecord>, raw: number, lossy: b
 // Build the deduped `userKeyHex -> SnapshotRecord` map by scanning every .ldb table + the .log WAL.
 // Shared by loadEntries (→ flat live[]) and loadSnapshot (→ grouped buckets).
 function buildDedupMap(
-  dir: string,
+  source: SnapshotSource,
   { includeLog = true, seqCap }: LoadEntriesOptions = {},
 ): { map: Map<string, SnapshotRecord>; raw: number; lossy: boolean } {
-  const files = fs
-    .readdirSync(dir)
+  const files = source
+    .names()
     .filter((f) => f.endsWith('.ldb'))
     .sort(byCodeUnit);
   const map = new Map<string, SnapshotRecord>(); // userKeyHex -> { seq, type, key, value }
@@ -233,21 +233,24 @@ function buildDedupMap(
     }
   };
 
-  if (readTablesInto(dir, files, consider)) lossy = true;
+  if (readTablesInto(source, files, consider)) lossy = true;
   if (includeLog) {
     // Always read the WAL — a freshly-compacted or young DB can hold all its data in the
     // .log with no .ldb tables yet; gating on files.length would ingest it as empty.
-    const logFiles = fs
-      .readdirSync(dir)
+    const logFiles = source
+      .names()
       .filter((f) => f.endsWith('.log'))
       .sort(byCodeUnit);
-    if (readLogsInto(dir, logFiles, consider)) lossy = true;
+    if (readLogsInto(source, logFiles, consider)) lossy = true;
   }
   return { map, raw, lossy };
 }
 
-export function loadEntries(dir: string, opts: LoadEntriesOptions = {}): LoadEntriesResult {
-  const { map, raw, lossy } = buildDedupMap(dir, opts);
+export function loadEntriesFrom(
+  source: SnapshotSource,
+  opts: LoadEntriesOptions = {},
+): LoadEntriesResult {
+  const { map, raw, lossy } = buildDedupMap(source, opts);
   const { live, maxSeq } = collectLive(map);
   return { live, rawCount: raw, uniqueCount: map.size, maxSeq, lossy };
 }
@@ -255,8 +258,8 @@ export function loadEntries(dir: string, opts: LoadEntriesOptions = {}): LoadEnt
 // Engine-seam loader: same read+dedup as loadEntries, then one grouping pass → a `Snapshot`
 // (buckets + resolved db/store-name catalog). Consumers (fingerprint/entityTargets/extractEntity)
 // read the snapshot, never raw Chromium keys.
-export function loadSnapshot(dir: string, opts: LoadEntriesOptions = {}): Snapshot {
-  const { map, raw, lossy } = buildDedupMap(dir, opts);
+export function loadSnapshotFrom(source: SnapshotSource, opts: LoadEntriesOptions = {}): Snapshot {
+  const { map, raw, lossy } = buildDedupMap(source, opts);
   return collectSnapshot(map, raw, lossy);
 }
 
@@ -267,10 +270,10 @@ export function loadSnapshot(dir: string, opts: LoadEntriesOptions = {}): Snapsh
 // because compaction can elide tombstones (a deletion whose evidence is gone). Returns the same
 // shape as loadEntries plus `compacted`. Mutates ldbCache (adds new files, prunes removed).
 function buildReuseMap(
-  dir: string,
+  source: LiveSnapshotSource,
   ldbCache: LdbCache,
 ): { map: Map<string, SnapshotRecord>; raw: number; lossy: boolean; compacted: boolean } {
-  const all = fs.readdirSync(dir);
+  const all = source.names();
   const ldbNow = new Set(all.filter((f) => f.endsWith('.ldb')));
   const logNow = all.filter((f) => f.endsWith('.log')).sort(byCodeUnit);
 
@@ -301,28 +304,31 @@ function buildReuseMap(
   // H-B: only cache a CLEAN parse — a partial (res.lossy) parse must be retried next refresh, not
   // frozen in the cache (which would pin copy-reuse in a permanent lossy/stale state). Handled
   // inside readTablesInto, which also serves cache hits without touching disk.
-  if (readTablesInto(dir, [...ldbNow].sort(byCodeUnit), consider, ldbCache)) lossy = true;
+  if (readTablesInto(source, [...ldbNow].sort(byCodeUnit), consider, ldbCache)) lossy = true;
   // Prune cache entries for .ldb files no longer present (freed after compaction full-rebuild).
   // Snapshot the keys first: we delete from the map inside the loop.
   for (const f of [...ldbCache.keys()]) if (!ldbNow.has(f)) ldbCache.delete(f);
 
-  if (readLogsInto(dir, logNow, consider)) lossy = true;
+  if (readLogsInto(source, logNow, consider)) lossy = true;
   return { map, raw, lossy, compacted };
 }
 
-export function loadEntriesReuse(dir: string, ldbCache: LdbCache): LoadEntriesReuseResult {
-  const { map, lossy, compacted } = buildReuseMap(dir, ldbCache);
+export function loadEntriesReuseFrom(
+  source: LiveSnapshotSource,
+  ldbCache: LdbCache,
+): LoadEntriesReuseResult {
+  const { map, lossy, compacted } = buildReuseMap(source, ldbCache);
   const { live, maxSeq } = collectLive(map);
   return { live, maxSeq, lossy, compacted };
 }
 
 // Copy-reuse variant of loadSnapshot: same cached-`.ldb` reuse + compaction detection, grouped
 // into a Snapshot.
-export function loadSnapshotReuse(
-  dir: string,
+export function loadSnapshotReuseFrom(
+  source: LiveSnapshotSource,
   ldbCache: LdbCache,
 ): Snapshot & { compacted: boolean } {
-  const { map, raw, lossy, compacted } = buildReuseMap(dir, ldbCache);
+  const { map, raw, lossy, compacted } = buildReuseMap(source, ldbCache);
   return { ...collectSnapshot(map, raw, lossy), compacted };
 }
 

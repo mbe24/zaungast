@@ -22,8 +22,8 @@ import {
 } from '../src/format/index.js';
 // Internal Chromium byte readers / value decoder — not on the public /format surface; an in-package
 // test reaches them directly (relative), which is exactly why they can stay hidden from consumers.
+import { loadEntries } from '../src/format/chromium/node-source.js';
 import {
-  loadEntries,
   decodePrefix,
   readStringWithLength,
   readVarint,

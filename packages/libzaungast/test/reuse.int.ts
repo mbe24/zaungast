@@ -22,8 +22,8 @@ import {
   loadEntries,
   loadEntriesReuse,
   loadSnapshotReuse,
-  decodePrefix,
-} from '../src/format/chromium/indexeddb.js';
+} from '../src/format/chromium/node-source.js';
+import { decodePrefix } from '../src/format/chromium/indexeddb.js';
 import { crc32c } from '../src/format/chromium/sstable.js';
 import { byCodeUnit } from '../src/util/sort.js';
 

@@ -41,6 +41,16 @@ export interface WalBatch {
 
 // ---- idb.ts ----
 
+// Synchronous byte source for a leveldb dir. Base = enough to fully decode (browser + Node).
+export interface SnapshotSource {
+  names(): string[]; // file names in the dir (e.g. "000123.ldb", "000456.log")
+  read(name: string): Uint8Array; // full contents of one file
+}
+// Adds change-detection for the copy-reuse path. Node-only (browser MemorySource does NOT implement it).
+export interface LiveSnapshotSource extends SnapshotSource {
+  stat(name: string): { size: number; mtimeMs?: number };
+}
+
 // A single live (post-dedup) IndexedDB record, keyed by the raw Chromium
 // user-key (WITHOUT the 8-byte seq/type trailer) plus the winning sequence/type.
 export interface SnapshotRecord {

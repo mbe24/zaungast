@@ -24,7 +24,7 @@
 // the legacy/internal loaders (loadEntries/loadEntriesReuse/loadSnapshotReuse) are NOT exported —
 // they are engine-version-specific internals reachable only from within the package (relative
 // imports). Only loadSnapshot (the grouped Snapshot) is public.
-export { loadSnapshot } from './chromium/indexeddb.js';
+export { loadSnapshot } from './chromium/node-source.js';
 export { fingerprint } from './fingerprint.js';
 export {
   loadMapping,
