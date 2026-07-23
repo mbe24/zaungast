@@ -6,6 +6,7 @@
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { REPO, resolveLevelDbDir } from './native-runner.mjs';
+import { assertDistFresh } from './lib/dist-freshness.mjs';
 
 const ALL_LAYERS = ['sstable', 'snapshot', 'reuse', 'ssv', 'fp', 'extract', 'htmltext', 'store', 'incr'];
 const DEFAULT_LAYERS = ['store', 'incr'];
@@ -23,6 +24,17 @@ if (!dir) {
   console.error(dirInput ? `could not resolve a leveldb dir from "${dirInput}"` : 'no dir given');
   process.exit(2);
 }
+
+// Every layer's TS oracle imports libzaungast's BUILT dist while the native side is rebuilt each run
+// (cargo). Guard against comparing fresh-native vs stale-TS — a stale oracle can bless OLD behavior as
+// "0 differ". (The harness never loads zaungast, so only libzaungast is checked.)
+assertDistFresh([
+  {
+    label: 'libzaungast',
+    srcDir: path.join(REPO, 'packages', 'libzaungast', 'src'),
+    distDir: path.join(REPO, 'packages', 'libzaungast', 'dist'),
+  },
+]);
 
 const runJs = path.join(REPO, 'packages', 'libzaungast-native', 'harness', 'run.mjs');
 console.error(`[diff] dir=${dir}  layers=${layers.join(', ')}`);

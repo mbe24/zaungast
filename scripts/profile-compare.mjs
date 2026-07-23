@@ -85,6 +85,9 @@ const metricsOf = (j, includeExtra) => {
 const num = (x) => (x == null ? '—' : String(+x.toFixed(3)));
 const signed = (x) => (x >= 0 ? '+' : '') + +x.toFixed(3);
 const sha = (j) => `${(j.git?.sha || '???').slice(0, 7)}${j.git?.dirty ? '+' : ''}`;
+// TS runs stamp the dist they loaded (see timings-v1 envelope). Surfacing it makes a stale-dist run
+// visible in a comparison — the SHA alone can't, since dist is gitignored. Absent on native/older runs.
+const built = (j) => (j.distBuiltAt ? ` dist@${j.distBuiltAt}` : '');
 // Cross-engine, these two aren't commit-for-commit comparable (native wraps apply+recompute+fts in one
 // txn with the COMMIT in `fts`; TS commits per-phase) — flag them in the PARITY table only. Within a
 // same-engine regression they ARE comparable, so no mark there.
@@ -93,10 +96,10 @@ const mark = (k, approx) => (approx && APPROX.has(k) ? `${k} ~` : k);
 
 console.log(`mode: ${parity ? 'PARITY (cross-engine)' : 'REGRESSION (same-engine)'}`);
 console.log(
-  `  former:  ${L.engine.padEnd(7)} [${sha(L)}] ${L.when} ${L.host.platform}  (${leftPath})`,
+  `  former:  ${L.engine.padEnd(7)} [${sha(L)}] ${L.when} ${L.host.platform}${built(L)}  (${leftPath})`,
 );
 console.log(
-  `  current: ${R.engine.padEnd(7)} [${sha(R)}] ${R.when} ${R.host.platform}  (${rightPath})`,
+  `  current: ${R.engine.padEnd(7)} [${sha(R)}] ${R.when} ${R.host.platform}${built(R)}  (${rightPath})`,
 );
 console.log(
   `  dataset: fp ${L.dataset.fingerprint} · ${L.dataset.entries} entries · ${(L.dataset.bytes / 1048576).toFixed(1)} MB`,

@@ -57,12 +57,23 @@ export function provenance() {
   };
 }
 
-// Assemble the envelope. `metrics`/`engineExtra` are plain { name: metric } maps.
-export function envelope({ engine, dataset, mode, iters, metrics, engineExtra = {} }) {
+// Assemble the envelope. `metrics`/`engineExtra` are plain { name: metric } maps. `distBuiltAt` is an
+// optional ISO timestamp of the dist the run loaded (TS profiler only — native has no dist; omitted when
+// null so the shape is unchanged for engines that don't pass it).
+export function envelope({
+  engine,
+  dataset,
+  mode,
+  iters,
+  metrics,
+  engineExtra = {},
+  distBuiltAt = null,
+}) {
   return {
     schemaVersion: SCHEMA_VERSION,
     engine,
     ...provenance(),
+    ...(distBuiltAt ? { distBuiltAt } : {}),
     dataset,
     mode,
     iters,

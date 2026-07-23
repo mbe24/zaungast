@@ -52,6 +52,10 @@ directly comparable:
   Cross-engine parity requires both runs on the **same platform** (both WSL2); `--allow-cross-runner`
   downgrades that to a warning.
 
+`npm run profile` and the `npm run diff` TS oracle both load the built `dist`, so they **hard-fail if any
+loaded package's `src` is newer than its `dist`** — run `npm run build` first (the profiler also stamps the
+dist build time into its timings envelope, so a stale run stays detectable after the fact).
+
 The shared percentile definition (nearest-rank ceil-clamped + population stddev) is pinned by a test
 vector on both sides — `npm run test:schema` (TS, gated in CI) and the `percentile_vector_matches_ts`
 test in `src/bin/profile.rs` (native, gated via `cargo test --features harness --bin profile`).

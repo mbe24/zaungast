@@ -53,6 +53,18 @@ import {
   listCalls,
 } from 'zaungast/tools.js';
 import { metric, scalar, envelope } from './lib/timings-v1.mjs';
+import { assertDistFresh, distBuiltAt } from './lib/dist-freshness.mjs';
+
+// Every package this profiler loads from its BUILT dist (see header). Both dirs are repo-root-relative,
+// matching the cwd `npm run profile` runs in and the other paths in this file.
+const DIST_PACKAGES = [
+  {
+    label: 'libzaungast',
+    srcDir: 'packages/libzaungast/src',
+    distDir: 'packages/libzaungast/dist',
+  },
+  { label: 'zaungast', srcDir: 'packages/zaungast/src', distDir: 'packages/zaungast/dist' },
+];
 
 const gc = typeof global.gc === 'function' ? global.gc : null;
 
@@ -88,6 +100,11 @@ if (process.argv[2] === '--cold') {
   fs.writeFileSync(path.join(coldOut, 'cold-peak-rss.json'), JSON.stringify({ coldPeakRssMB }));
   process.exit(0);
 }
+
+// Fail fast if the built dist is older than its src — otherwise this run silently profiles OLD code
+// (the imports above already loaded dist, but the expensive work is still ahead). Only the parent
+// reaches here; the --cold child exits above, so it inherits the parent's already-verified dist.
+assertDistFresh(DIST_PACKAGES);
 
 // HEAVY vs LIGHT (see header): heavy is opt-in via `--heavy` or PROFILE_HEAVY=1; light is the
 // standard default. Only the iteration COUNTS differ — the metrics/percentiles are identical.
@@ -317,6 +334,7 @@ const env = envelope({
   iters: { full: N, tools: TOOL_ITERS, topics: TOPIC_ITERS, incremental: INC_ITERS },
   metrics,
   engineExtra: extra,
+  distBuiltAt: distBuiltAt(DIST_PACKAGES.map((p) => p.distDir)),
 });
 fs.writeFileSync(path.join(outDir, 'timings.json'), JSON.stringify(env, null, 2));
 

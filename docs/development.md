@@ -28,6 +28,10 @@ Requires Node.js ≥ 22.5.
 | `npm run dev` | Run the server from source via `tsx` (no build step). |
 | `npm run assets` | Re-render the SVG brand assets in `assets/` and `.github/` to PNG. |
 
+The profiling harness (`npm run profile`) and the byte-differential (`npm run diff`) run against the
+built `dist`, so they hard-fail if `src` is newer than `dist` — run `npm run build` after editing
+TypeScript.
+
 ## Code style
 
 Formatting is enforced by **Prettier** (`.prettierrc`: semicolons, single quotes, 100 columns);

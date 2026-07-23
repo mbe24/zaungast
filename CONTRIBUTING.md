@@ -46,7 +46,8 @@ Add tests as synthetic wherever possible — never commit a real Teams cache (PI
 Only relevant if you touch `packages/libzaungast-native`. It must stay **byte-identical** to the TS
 reference: run `npm run diff -- <leveldb-dir|date>` (every layer must report `0 differ`) and
 `npm run check:native` (Rust fmt + clippy; builds via cargo, auto-falling back to Docker where a
-native build is blocked).
+native build is blocked). `npm run diff` compares the Rust reader against the built `dist`, so it
+hard-fails if `src` is newer than `dist` — run `npm run build` after editing TypeScript.
 
 ## Commits & docs
 
