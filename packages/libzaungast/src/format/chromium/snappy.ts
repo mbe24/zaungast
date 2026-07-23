@@ -11,7 +11,9 @@
 // `scratch`, when given and large enough, receives the output (grow-only reuse across calls for
 // hot per-value decompression — see indexeddb.ts::decodeValue). Callers whose output must persist
 // (sstable block buffers) pass no scratch and get a fresh buffer.
-export function uncompress(input: Buffer, scratch?: Buffer): Buffer {
+import { alloc } from '#bytes';
+
+export function uncompress(input: Uint8Array, scratch?: Uint8Array): Uint8Array {
   let ip = 0;
   // uncompressed length (varint)
   let outLen = 0,
@@ -23,7 +25,7 @@ export function uncompress(input: Buffer, scratch?: Buffer): Buffer {
     shift += 7;
   }
 
-  const out = scratch && scratch.length >= outLen ? scratch : Buffer.allocUnsafe(outLen);
+  const out = scratch && scratch.length >= outLen ? scratch : alloc(outLen);
   let op = 0;
 
   while (ip < input.length) {
@@ -40,7 +42,7 @@ export function uncompress(input: Buffer, scratch?: Buffer): Buffer {
         for (let i = 0; i < nbytes; i++) l += input[ip++] * 2 ** (8 * i);
         len = l + 1;
       }
-      input.copy(out, op, ip, ip + len);
+      out.set(input.subarray(ip, ip + len), op);
       ip += len;
       op += len;
     } else {

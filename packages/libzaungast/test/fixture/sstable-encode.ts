@@ -19,8 +19,8 @@
 import { varint, crc32c, maskCrc } from './encode.js';
 
 export interface TableEntryIn {
-  key: Buffer;
-  value: Buffer;
+  key: Uint8Array;
+  value: Uint8Array;
 } // key = userKey ++ 8-byte trailer (already appended)
 interface BlockHandleOut {
   offset: number;
@@ -43,7 +43,7 @@ function blockHandleBytes(h: BlockHandleOut): Buffer {
 }
 
 // One block entry: shared=0 (no prefix compression — every entry carries its full key).
-function encodeBlockEntry(key: Buffer, value: Buffer): Buffer {
+function encodeBlockEntry(key: Uint8Array, value: Uint8Array): Buffer {
   return Buffer.concat([varint(0), varint(key.length), varint(value.length), key, value]);
 }
 
@@ -57,7 +57,7 @@ function blockTail(): Buffer {
 
 // Raw (uncompressed) contents of a block: all entries back-to-back + the tail. An empty entry
 // list yields just the 8-byte tail (the simplest valid block — e.g. an empty metaindex block).
-function buildBlockContents(entries: { key: Buffer; value: Buffer }[]): Buffer {
+function buildBlockContents(entries: { key: Uint8Array; value: Uint8Array }[]): Buffer {
   const parts: Buffer[] = entries.map((e) => encodeBlockEntry(e.key, e.value));
   parts.push(blockTail());
   return Buffer.concat(parts);

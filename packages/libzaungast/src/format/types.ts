@@ -13,13 +13,13 @@ export interface BlockHandle {
 
 // Result of reading one raw block (data or index) off disk.
 export interface BlockReadResult {
-  data: Buffer;
+  data: Uint8Array;
   compressionType: number;
   crcOk: boolean | null;
 }
 
 // One decoded (key, value) pair out of an SSTable, in on-disk order.
-export type TableEntry = [Buffer, Buffer];
+export type TableEntry = [Uint8Array, Uint8Array];
 
 export interface TableReadResult {
   entries: TableEntry[];
@@ -30,8 +30,8 @@ export interface TableReadResult {
 
 export interface WalOp {
   type: number;
-  key: Buffer;
-  value: Buffer | null;
+  key: Uint8Array;
+  value: Uint8Array | null;
 }
 
 export interface WalBatch {
@@ -46,8 +46,8 @@ export interface WalBatch {
 export interface SnapshotRecord {
   seq: number;
   type: number;
-  key: Buffer;
-  value: Buffer | null;
+  key: Uint8Array;
+  value: Uint8Array | null;
 }
 
 export interface LoadEntriesOptions {

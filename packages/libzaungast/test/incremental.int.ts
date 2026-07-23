@@ -30,7 +30,7 @@ function varint(n: number): Buffer {
   return Buffer.from(b);
 }
 // Craft a leveldb .log holding one WriteBatch that DELETES (tombstones) a user key.
-function craftDeletionLog(userKey: Buffer, seq: number): Buffer {
+function craftDeletionLog(userKey: Uint8Array, seq: number): Buffer {
   const batch = Buffer.concat([
     (() => {
       const s = Buffer.alloc(8);
@@ -195,12 +195,12 @@ test('D. deletion sweep: tombstone chains of size 1 / mid / max → count drops 
   // re-decode / indexId re-check is needed here (matches the old decodePrefix-filtered scan).
   const disc = ingest(dir);
   const owns = disc.store.db.prepare('select count(*) n from messages where chain_key=?');
-  const cands: { key: Buffer; n: number }[] = [];
+  const cands: { key: Uint8Array; n: number }[] = [];
   for (const sk of targets) {
     const b = snap.buckets.get(sk);
     if (!b) continue;
     for (const e of b.records) {
-      const n = (owns.get(e.key.toString('hex')) as any).n;
+      const n = (owns.get(Buffer.from(e.key).toString('hex')) as any).n;
       if (n > 0) cands.push({ key: e.key, n });
     }
   }
@@ -209,7 +209,7 @@ test('D. deletion sweep: tombstone chains of size 1 / mid / max → count drops 
   const multi = cands.filter((c) => c.n > 1);
   // size 1, a representative MULTI-message chain (median of the >1 set — NOT the numeric median,
   // which is 1 since ~98% of chains hold a single message), and the largest chain present.
-  const picks: [string, { key: Buffer; n: number }][] = [
+  const picks: [string, { key: Uint8Array; n: number }][] = [
     ['size-1', cands[0]],
     ['mid', multi[Math.floor(multi.length / 2)] ?? cands[cands.length - 1]],
     ['max', cands[cands.length - 1]],

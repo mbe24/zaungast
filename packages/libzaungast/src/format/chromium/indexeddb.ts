@@ -1,6 +1,7 @@
 // IndexedDB-on-LevelDB helpers: multi-sstable loader + Chromium key decoding.
 import fs from 'node:fs';
 import path from 'node:path';
+import { toLatin1, alloc } from '#bytes';
 import { readTable } from './sstable.js';
 import { parseWriteAheadLog } from './write-ahead-log.js';
 import { deserialize } from './structured-clone.js';
@@ -23,7 +24,7 @@ import type {
 } from '../types.js';
 
 // A sink for candidate records; the loaders below feed one of these while deduping by user key.
-type Consider = (userKey: Buffer, value: Buffer | null, seq: number, type: number) => void;
+type Consider = (userKey: Uint8Array, value: Uint8Array | null, seq: number, type: number) => void;
 
 // Split each entry's 8-byte LevelDB trailer (seq<<8 | type) and feed it to `consider`. Returns
 // true if any entry was too short to carry a trailer (garbage from a block that parsed but is
@@ -40,7 +41,10 @@ function foldTable(res: TableReadResult, consider: Consider): boolean {
     const type = ikey[n - 8];
     const seqHi = ikey[n - 1]; // top 8 bits of the 56-bit seq
     if (seqHi >= 0x20) throw new Error('leveldb seq exceeds 2^53 — widen seq handling'); // 0x20*2^48 == 2^53
-    const seq = seqHi * 0x1000000000000 + ikey.readUIntLE(n - 7, 6); // hi*2^48 + low 48 bits (exact, < 2^53)
+    // Low 48 bits via a per-key DataView: getUint32([n-7..n-4]) + getUint16([n-3..n-2])*2^32.
+    const dv = new DataView(ikey.buffer, ikey.byteOffset, ikey.byteLength);
+    const seqLow = dv.getUint32(n - 7, true) + dv.getUint16(n - 3, true) * 2 ** 32;
+    const seq = seqHi * 0x1000000000000 + seqLow; // hi*2^48 + low 48 bits (exact, < 2^53)
     consider(ikey.subarray(0, n - 8), value, seq, type);
   }
   return short;
@@ -218,7 +222,7 @@ function buildDedupMap(
   const consider: Consider = (userKey, value, seq, type) => {
     if (seqCap !== undefined && seq > seqCap) return;
     raw++;
-    const hex = userKey.toString('latin1');
+    const hex = toLatin1(userKey);
     const cur = map.get(hex);
     if (!cur) map.set(hex, { seq, type, key: userKey, value });
     else if (seq > cur.seq) {
@@ -283,7 +287,7 @@ function buildReuseMap(
     lossy = false;
   const consider: Consider = (userKey, value, seq, type) => {
     raw++;
-    const hex = userKey.toString('latin1');
+    const hex = toLatin1(userKey);
     const cur = map.get(hex);
     if (!cur) map.set(hex, { seq, type, key: userKey, value });
     else if (seq > cur.seq) {
@@ -323,7 +327,7 @@ export function loadSnapshotReuse(
 }
 
 // ---- Chromium IndexedDB key coding ----
-export function decodePrefix(buf: Buffer): DecodedPrefix {
+export function decodePrefix(buf: Uint8Array): DecodedPrefix {
   const b0 = buf[0];
   const dbBytes = ((b0 >> 5) & 0x07) + 1;
   const osBytes = ((b0 >> 2) & 0x07) + 1;
@@ -346,11 +350,11 @@ export function decodePrefix(buf: Buffer): DecodedPrefix {
 // (which is `Buffer | null` for the tombstone case) straight through without a guard, exactly
 // as the untyped original did. The cast below has no runtime effect — a null `buf` still
 // throws the same TypeError on first access as the original unguarded `buf[pos++]` did.
-export function readVarint(buf: Buffer | null, off: number): [number, number] {
+export function readVarint(buf: Uint8Array | null, off: number): [number, number] {
   let v = 0,
     shift = 0,
     pos = off;
-  const b = buf as Buffer;
+  const b = buf as Uint8Array;
   while (true) {
     const c = b[pos++];
     v += (c & 0x7f) * 2 ** shift;
@@ -361,7 +365,7 @@ export function readVarint(buf: Buffer | null, off: number): [number, number] {
 }
 
 // UTF-16BE string with varint length prefix (in code units)
-export function readStringWithLength(buf: Buffer, off: number): [string, number] {
+export function readStringWithLength(buf: Uint8Array, off: number): [string, number] {
   const [len, pos] = readVarint(buf, off);
   const chars: string[] = [];
   for (let i = 0; i < len; i++)
@@ -370,21 +374,21 @@ export function readStringWithLength(buf: Buffer, off: number): [string, number]
 }
 
 // Grow-only scratch for per-value Snappy decompression. Safe to reuse across calls because nothing
-// deserialize() returns retains a view into the decompressed buffer (strings → toString copy,
-// ArrayBuffers → Buffer.from copy; audited), and each decoded value is consumed synchronously
+// deserialize() returns retains a view into the decompressed buffer (strings → codec-decoded copy,
+// ArrayBuffers → .slice() copy; audited), and each decoded value is consumed synchronously
 // before the next decodeValue call. NOT used for sstable block decompression (those buffers must
 // persist as value backing). Bounded by the largest single value ever decompressed.
-let ssvScratch: Buffer = Buffer.allocUnsafe(0);
+let ssvScratch: Uint8Array = alloc(0);
 
 // Decode an IndexedDB object-store data VALUE into a JS object.
 // Format: varint value-version, then either the raw Blink/V8 blob, OR Chromium's
 // IndexedDB value-compression wrapper: header 0xFF 0x11 0x02 + a Snappy stream.
 export function decodeValue(
-  value: Buffer | null,
+  value: Uint8Array | null,
   opts: DeserializeOptions = {},
 ): SsvValue | ExternalBlobMarker {
   const [, vpos] = readVarint(value, 0);
-  let blob = (value as Buffer).subarray(vpos);
+  let blob = (value as Uint8Array).subarray(vpos);
   // Chromium IndexedDB value wrapper: 0xFF 0x11 <method>. method 0x02 = Snappy-compressed
   // inline; other methods (e.g. 0x01) = value stored in EXTERNAL .blob files (app images,
   // large binaries) — not recoverable from leveldb alone, so return a marker.
@@ -399,8 +403,8 @@ export function decodeValue(
 }
 
 // UTF-16BE string filling the whole buffer (no length prefix) — used in some values
-export function utf16be(buf: Buffer | null): string {
-  const b = buf as Buffer;
+export function utf16be(buf: Uint8Array | null): string {
+  const b = buf as Uint8Array;
   const chars: string[] = [];
   for (let i = 0; i + 1 < b.length; i += 2) chars.push(String.fromCharCode((b[i] << 8) | b[i + 1])); // NOSONAR S7758 — UTF-16 code units by design (see verify.ts round-trip)
   return chars.join('');

@@ -5,13 +5,14 @@
 //   header: sequence(8 LE) + count(4 LE); then `count` ops:
 //     op: 1=kTypeValue -> key(varlen)+value(varlen); 0=kTypeDeletion -> key(varlen)
 import fs from 'node:fs';
+import { concat } from '#bytes';
 import { crc32c, unmaskCrc } from './sstable.js';
 import type { WalBatch, WalOp } from '../types.js';
 
 const BLOCK = 32768;
 const HEADER = 7;
 
-function readVarint(buf: Buffer, off: number): [number, number] {
+function readVarint(buf: Uint8Array, off: number): [number, number] {
   let v = 0,
     shift = 0,
     pos = off;
@@ -27,9 +28,11 @@ function readVarint(buf: Buffer, off: number): [number, number] {
 // Return array of {sequence, ops:[{type,key,value}]}
 export function parseWriteAheadLog(path: string): WalBatch[] {
   const data = fs.readFileSync(path);
+  // One cached DataView over the whole log for the multi-byte header reads in the loop below.
+  const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
   const batches: WalBatch[] = [];
   let pos = 0;
-  let frag: Buffer[] | null = null; // {parts:[]}
+  let frag: Uint8Array[] | null = null; // {parts:[]}
 
   while (pos + HEADER <= data.length) {
     const blockOff = pos % BLOCK;
@@ -37,8 +40,8 @@ export function parseWriteAheadLog(path: string): WalBatch[] {
       pos += BLOCK - blockOff;
       continue;
     } // trailer padding
-    const storedCrc = data.readUInt32LE(pos);
-    const len = data.readUInt16LE(pos + 4);
+    const storedCrc = dv.getUint32(pos, true);
+    const len = dv.getUint16(pos + 4, true);
     const type = data[pos + 6];
     const dataStart = pos + HEADER;
     if (type === 0 && len === 0) {
@@ -68,21 +71,24 @@ export function parseWriteAheadLog(path: string): WalBatch[] {
     else if (type === 4) {
       if (frag) {
         frag.push(chunk);
-        emit(Buffer.concat(frag));
+        emit(concat(frag));
         frag = null;
       }
     } // LAST
   }
 
-  function emit(record: Buffer): void {
+  function emit(record: Uint8Array): void {
     if (record.length < 12) return;
-    const sequence = Number(record.readBigUInt64LE(0));
-    const count = record.readUInt32LE(8);
+    // Cached DataView per record. The 8-byte sequence is asserted < 2^53 (leveldb never nears it),
+    // so read it as two little-endian u32 halves and combine into a Number — no BigInt.
+    const rdv = new DataView(record.buffer, record.byteOffset, record.byteLength);
+    const sequence = rdv.getUint32(0, true) + rdv.getUint32(4, true) * 2 ** 32;
+    const count = rdv.getUint32(8, true);
     let p = 12;
     const ops: WalOp[] = [];
     for (let i = 0; i < count && p < record.length; i++) {
       const opType = record[p++];
-      let klen: number, vlen: number, key: Buffer, value: Buffer | undefined;
+      let klen: number, vlen: number, key: Uint8Array, value: Uint8Array | undefined;
       [klen, p] = readVarint(record, p);
       key = record.subarray(p, p + klen);
       p += klen;

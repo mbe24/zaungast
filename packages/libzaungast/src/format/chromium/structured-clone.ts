@@ -11,6 +11,7 @@
 //   'a' begin sparse array (+varint len), '@' end sparse array (+varint props,+varint len)
 //   ';' begin map, ':' end map ; '\'' begin set, ',' end set
 //   'R' regexp (str + varint flags)
+import { toLatin1, toUtf8, toUtf16le } from '#bytes';
 import type {
   ArrayBufferViewMarker,
   DeserializeOptions,
@@ -34,7 +35,10 @@ function setProp(target: object, key: unknown, val: unknown): void {
 }
 
 class Reader {
-  buf: Buffer;
+  buf: Uint8Array;
+  // One cached DataView over `buf` for the 8-byte double reads (see double()). Created once in the
+  // constructor — never per read (a fresh DataView per read is ~13× slower).
+  dv: DataView;
   pos: number;
   trace: string[] | null;
   // V8 assigns an incrementing id to every JS receiver (object/array/map/set/…) as it is
@@ -42,8 +46,9 @@ class Reader {
   // forward refs / cycles resolve. Primitives and strings get no id.
   objects: unknown[];
 
-  constructor(buf: Buffer, opts: DeserializeOptions = {}) {
+  constructor(buf: Uint8Array, opts: DeserializeOptions = {}) {
     this.buf = buf;
+    this.dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
     this.pos = 0;
     this.trace = opts.debug ? [] : null;
     this.objects = [];
@@ -92,11 +97,11 @@ class Reader {
     return v % 2 ? -(v + 1) / 2 : v / 2;
   }
   double(): number {
-    const d = this.buf.readDoubleLE(this.pos);
+    const d = this.dv.getFloat64(this.pos, true);
     this.pos += 8;
     return d;
   }
-  bytes(n: number): Buffer {
+  bytes(n: number): Uint8Array {
     const b = this.buf.subarray(this.pos, this.pos + n);
     this.pos += n;
     return b;
@@ -222,21 +227,21 @@ class Reader {
       case 0x22: {
         const n = this.varint();
         // Decode straight from the backing buffer (no intermediate subarray alloc).
-        const s = this.buf.toString('latin1', this.pos, this.pos + n);
+        const s = toLatin1(this.buf, this.pos, this.pos + n);
         this.pos += n;
         if (trace) this.log(`str1(${n}) ${JSON.stringify(s.slice(0, 24))}`);
         return s;
       }
       case 0x63: {
         const n = this.varint();
-        const s = this.buf.toString('utf16le', this.pos, this.pos + n);
+        const s = toUtf16le(this.buf, this.pos, this.pos + n);
         this.pos += n;
         if (trace) this.log(`str2(${n})`);
         return s;
       }
       case 0x53: {
         const n = this.varint();
-        const s = this.buf.toString('utf8', this.pos, this.pos + n);
+        const s = toUtf8(this.buf, this.pos, this.pos + n);
         this.pos += n;
         if (trace) this.log(`utf8(${n})`);
         return s;
@@ -283,11 +288,11 @@ class Reader {
     return bitfield & 1 ? -v : v;
   }
 
-  arrayBuffer(resizable = false): Buffer {
+  arrayBuffer(resizable = false): Uint8Array {
     const byteLength = this.varint();
     if (resizable) this.varint(); // maxByteLength
     const bytes = this.bytes(byteLength);
-    const buf = Buffer.from(bytes);
+    const buf = bytes.slice(); // own copy (bytes is a view into the stream)
     this.objects.push(buf); // ArrayBuffers get an object id
     if (this.trace) this.log(`arrayBuffer ${byteLength}B`);
     return buf;
@@ -399,7 +404,7 @@ class Reader {
   // way (same coding as the 'S' value tag). Used only for skipping/reading host-object strings.
   utf8String(): string {
     const n = this.varint();
-    const s = this.buf.toString('utf8', this.pos, this.pos + n);
+    const s = toUtf8(this.buf, this.pos, this.pos + n);
     this.pos += n;
     return s;
   }
@@ -444,7 +449,7 @@ class Reader {
   }
 }
 
-export function deserialize(buf: Buffer, opts: DeserializeOptions = {}): SsvValue {
+export function deserialize(buf: Uint8Array, opts: DeserializeOptions = {}): SsvValue {
   const r = new Reader(buf, opts);
   r.header();
   try {
@@ -465,7 +470,7 @@ export function deserialize(buf: Buffer, opts: DeserializeOptions = {}): SsvValu
 }
 
 // debug helper: returns {value?, error?, trace}
-export function deserializeDebug(buf: Buffer): {
+export function deserializeDebug(buf: Uint8Array): {
   value?: unknown;
   error?: string;
   trace?: string[] | null;

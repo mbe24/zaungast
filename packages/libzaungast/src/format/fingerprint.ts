@@ -58,10 +58,10 @@ export function fingerprint(
     const set = new Set<string>();
     const lim = Math.min(samplePerStore, bucket.records.length);
     for (let i = 0; i < lim; i++) {
-      const value = bucket.records[i].value; // non-tombstone → non-null; SnapshotRecord.value type is Buffer|null
+      const value = bucket.records[i].value; // non-tombstone → non-null; SnapshotRecord.value type is Uint8Array|null
       try {
         const [, vpos] = readVarint(value, 0);
-        const obj = deserialize((value as Buffer).subarray(vpos));
+        const obj = deserialize((value as Uint8Array).subarray(vpos));
         if (obj && typeof obj === 'object') for (const k of Object.keys(obj)) set.add(k);
       } catch {}
     }

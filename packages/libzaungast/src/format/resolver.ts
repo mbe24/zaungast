@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 // grouping, and the catalog are already resolved by the loader into the Snapshot; the only Chromium
 // call left here is value decoding (decodeValue), which is fine — macOS Teams uses the same Chromium
 // store, so there is no second value format to abstract for.
+import { toLatin1 } from '#bytes';
 import { decodeValue } from './chromium/indexeddb.js';
 import type {
   SnapshotRecord,
@@ -152,7 +153,7 @@ function recordsToRows(records: SnapshotRecord[], def: Mapping['entities'][strin
       continue;
     }
     decoded++;
-    rows.push(...rowsFromRecord(obj, rec.key.toString('latin1')));
+    rows.push(...rowsFromRecord(obj, toLatin1(rec.key)));
   }
   return { records: rows, decoded, dropped };
 }

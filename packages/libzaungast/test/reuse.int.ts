@@ -68,7 +68,7 @@ function varint(n: number): Buffer {
   b.push(n);
   return Buffer.from(b);
 }
-function craftDeletionLog(userKey: Buffer, seq: number): Buffer {
+function craftDeletionLog(userKey: Uint8Array, seq: number): Buffer {
   const batch = Buffer.concat([
     (() => {
       const s = Buffer.alloc(8);
@@ -91,7 +91,7 @@ function craftDeletionLog(userKey: Buffer, seq: number): Buffer {
   len.writeUInt16LE(batch.length);
   return Buffer.concat([crc, len, type, batch]);
 }
-function msgStoreKey(d: string): Buffer | null {
+function msgStoreKey(d: string): Uint8Array | null {
   const { live } = loadEntries(d);
   const snap = loadSnapshot(d);
   const mapping = selectMapping(fingerprint(snap), {

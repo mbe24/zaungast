@@ -398,7 +398,7 @@ export function removeLdb(dir: string, filename: string): void {
 // (readTable) so this stays a faithful "recompact" rather than a hand-rolled parse.
 export function rewriteLdbDropping(dir: string, filename: string, dropUserKey: Buffer): void {
   const { entries } = readTable(path.join(dir, filename));
-  const kept = entries.filter(([ikey]) => !ikey.subarray(0, -8).equals(dropUserKey));
+  const kept = entries.filter(([ikey]) => Buffer.compare(ikey.subarray(0, -8), dropUserKey) !== 0);
   fs.writeFileSync(
     path.join(dir, filename),
     encodeTable(kept.map(([key, value]) => ({ key, value }))),

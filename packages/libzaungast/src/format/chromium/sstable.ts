@@ -1,12 +1,16 @@
 // Minimal read-only LevelDB SSTable (.ldb) parser.
 // Format ref: https://github.com/google/leveldb/blob/main/doc/table_format.md
 import fs from 'node:fs';
+import { alloc } from '#bytes';
 import * as Snappy from './snappy.js';
 import type { BlockHandle, BlockReadResult, TableEntry, TableReadResult } from '../types.js';
 
-const MAGIC_HIGH = 0xdb4775248b80fb57n; // full 64-bit magic
+// Full 64-bit magic 0xdb4775248b80fb57, split into its little-endian u32 halves so the footer
+// check needs no BigInt (getUint32 reads the low word first, then the high word).
+const MAGIC_LO = 0x8b80fb57; // low 32 bits
+const MAGIC_HI = 0xdb477524; // high 32 bits
 
-function readVarint(buf: Buffer, off: number): [bigint, number] {
+function readVarint(buf: Uint8Array, off: number): [bigint, number] {
   let result = 0n;
   let shift = 0n;
   let pos = off;
@@ -18,12 +22,12 @@ function readVarint(buf: Buffer, off: number): [bigint, number] {
   }
   return [result, pos];
 }
-function readVarintNum(buf: Buffer, off: number): [number, number] {
+function readVarintNum(buf: Uint8Array, off: number): [number, number] {
   const [v, pos] = readVarint(buf, off);
   return [Number(v), pos];
 }
 
-function readBlockHandle(buf: Buffer, off: number): [BlockHandle, number] {
+function readBlockHandle(buf: Uint8Array, off: number): [BlockHandle, number] {
   let offset: number, size: number, pos: number;
   [offset, pos] = readVarintNum(buf, off);
   [size, pos] = readVarintNum(buf, pos);
@@ -40,7 +44,7 @@ const CRC32C_TABLE = (() => {
   }
   return t;
 })();
-export function crc32c(buf: Buffer, start: number, end: number): number {
+export function crc32c(buf: Uint8Array, start: number, end: number): number {
   let c = 0xffffffff;
   for (let i = start; i < end; i++) c = CRC32C_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
   return (c ^ 0xffffffff) >>> 0;
@@ -54,12 +58,13 @@ export function unmaskCrc(m: number): number {
 // Read a block's raw bytes from the in-memory file buffer, handling the 5-byte trailer +
 // compression. Uncompressed blocks are returned as a *view* into `file` (no copy) — the caller
 // must treat block/entry buffers as read-only (nothing in the reader mutates decoded buffers).
-function readBlock(file: Buffer, handle: BlockHandle, verifyCrc = false): BlockReadResult {
+function readBlock(file: Uint8Array, handle: BlockHandle, verifyCrc = false): BlockReadResult {
   const { offset, size } = handle;
   const compressionType = file[offset + size];
   let crcOk: boolean | null = null;
   if (verifyCrc) {
-    const stored = unmaskCrc(file.readUInt32LE(offset + size + 1));
+    const dv = new DataView(file.buffer, file.byteOffset, file.byteLength);
+    const stored = unmaskCrc(dv.getUint32(offset + size + 1, true));
     crcOk = crc32c(file, offset, offset + size + 1) === stored;
   }
   const contents = file.subarray(offset, offset + size);
@@ -71,13 +76,15 @@ function readBlock(file: Buffer, handle: BlockHandle, verifyCrc = false): BlockR
 export { readBlock, readBlockHandle };
 
 // Parse the entries of a data/index block (with restart-point prefix compression).
-export function* parseBlock(data: Buffer): Generator<TableEntry> {
+export function* parseBlock(data: Uint8Array): Generator<TableEntry> {
   const n = data.length;
-  // last 4 bytes = num_restarts
-  const numRestarts = data.readUInt32LE(n - 4);
+  // last 4 bytes = num_restarts. One cached DataView per block (reused would be moot here — a single
+  // multi-byte read — but keeps the per-buffer pattern).
+  const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const numRestarts = dv.getUint32(n - 4, true);
   const restartsStart = n - 4 - numRestarts * 4;
   let pos = 0;
-  let prevKey = Buffer.alloc(0);
+  let prevKey = alloc(0);
   while (pos < restartsStart) {
     let shared: number, nonShared: number, valueLen: number;
     [shared, pos] = readVarintNum(data, pos);
@@ -88,10 +95,10 @@ export function* parseBlock(data: Buffer): Generator<TableEntry> {
     const value = data.subarray(pos, pos + valueLen); // view into the block
     pos += valueLen;
     // Build the key with a single owned allocation (shared prefix + this entry's delta) instead of
-    // Buffer.concat's array literal + intermediate subarray.
-    const key = Buffer.allocUnsafe(shared + nonShared);
-    prevKey.copy(key, 0, 0, shared);
-    data.copy(key, shared, keyStart, keyStart + nonShared);
+    // concat's array literal + intermediate subarray.
+    const key = alloc(shared + nonShared);
+    key.set(prevKey.subarray(0, shared), 0);
+    key.set(data.subarray(keyStart, keyStart + nonShared), shared);
     prevKey = key;
     yield [key, value];
   }
@@ -103,9 +110,15 @@ export function readTable(path: string): TableReadResult {
   const file = fs.readFileSync(path);
   const fileSize = file.length;
   const footerOff = fileSize - 48;
-  const magic = file.readBigUInt64LE(fileSize - 8);
-  if (magic !== MAGIC_HIGH) {
-    console.error(`WARNING: bad magic ${magic.toString(16)} (expected ${MAGIC_HIGH.toString(16)})`);
+  // 8-byte footer magic compared as two little-endian u32 halves (no BigInt): getUint32 reads the
+  // low word at [fileSize-8], the high word at [fileSize-4].
+  const dv = new DataView(file.buffer, file.byteOffset, file.byteLength);
+  const magicLo = dv.getUint32(fileSize - 8, true);
+  const magicHi = dv.getUint32(fileSize - 4, true);
+  if (magicLo !== MAGIC_LO || magicHi !== MAGIC_HI) {
+    const got = magicHi.toString(16).padStart(8, '0') + magicLo.toString(16).padStart(8, '0');
+    const want = MAGIC_HI.toString(16).padStart(8, '0') + MAGIC_LO.toString(16).padStart(8, '0');
+    console.error(`WARNING: bad magic ${got} (expected ${want})`);
   }
   // metaindex handle (skipped), then index handle (varints at the start of the 48-byte footer)
   const [, p] = readBlockHandle(file, footerOff);

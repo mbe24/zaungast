@@ -6,6 +6,7 @@ import {
   extractRecords,
   entityTargets,
 } from '../format/index.js';
+import { fromLatin1, toHex } from '#bytes';
 import type { SnapshotRecord, Snapshot } from '../format/types.js';
 import { ChatStore, type StoreMeta } from './store.js';
 import { htmlToText, isSystemMessage, mentionedMris, hasAttachment } from '../util/text.js';
@@ -86,7 +87,7 @@ function applyMessages(store: ChatStore, msgRows: any[], selfMri: string | null)
       // truncates a TEXT value at the first NUL on read-back — so a raw latin1 chain_key reads back
       // as '' for essentially every real key. hex is NUL-free, round-trips, and the reconcile stays
       // correct as long as liveChainKeys/changedChainKeys use the same encoding (they do, below).
-      chainKey: Buffer.from(m.__key, 'latin1').toString('hex'),
+      chainKey: toHex(fromLatin1(m.__key)),
       version: Number(m.version) || 0,
       ts,
       senderMri,
@@ -516,7 +517,7 @@ export function applyIncremental(
     if (!b) continue;
     for (const rec of b.records) {
       // hex, matching the chain_key column encoding in applyMessages (NUL-safe read-back).
-      const hex = rec.key.toString('hex');
+      const hex = toHex(rec.key);
       liveChainKeys.add(hex);
       if (rec.seq > state.maxSeq) {
         changedChainKeys.add(hex);

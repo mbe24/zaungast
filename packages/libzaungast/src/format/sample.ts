@@ -26,7 +26,7 @@ export interface StoreFieldSample {
 
 // Decode one sampled record's value into `sample`'s field sets (record keys + threadProperties +
 // messageMap/messages first-3-sub-entry keys). Undecodable samples are skipped.
-function sampleRecordFields(sample: StoreFieldSample, value: Buffer | null): void {
+function sampleRecordFields(sample: StoreFieldSample, value: Uint8Array | null): void {
   try {
     const obj = decodeValue(value);
     if (!obj || typeof obj !== 'object') return;
