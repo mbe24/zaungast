@@ -50,7 +50,7 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Browser bundle smoke (./web bundles for the browser with no node: builtins)
+      - name: Browser bundle smoke (./web bundles for the browser with no node builtins)
         run: npm run check:web-bundle
         # Tripwire: reintroduce node:fs/node:path anywhere reachable from the ./web entry and the
         # browser bundle fails here (esbuild --platform=browser), long before a user's browser.
