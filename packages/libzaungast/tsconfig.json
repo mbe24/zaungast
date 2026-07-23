@@ -8,7 +8,11 @@
     // config (the private zaungast app doesn't need it). (§B)
     // NO declarationMap: files:["dist"] doesn't ship src/, so *.d.ts.map would dangle (point at
     // absent ../src). Half-shipped maps are the only wrong state — drop them (modernization #2).
-    "declaration": true
+    "declaration": true,
+    // A6: bundled-mappings.ts imports version JSONs with `with { type: 'json' }` so the browser build
+    // inlines them (no fs). resolveJsonModule types those imports; the .json themselves are copied to
+    // dist by copy-schema.mjs, so the emitted `./versions/*.json` imports resolve at runtime too.
+    "resolveJsonModule": true
   },
   "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "dist"]

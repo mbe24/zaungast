@@ -26,7 +26,7 @@ export type { StoreMeta } from './ingest/store.js';
 // Ingest INPUTS an engine feeds to its store builder: the reader's SQLite DDL + the bundled
 // schema-mapping texts (an array of JSON strings).
 export { SCHEMA_SQL } from './ingest/store.js';
-export { loadBundledMappingTexts } from './format/resolver.js';
+export { loadBundledMappingTexts } from './format/node-resolver.js';
 
 // The reader's conformance-contract version — an engine's addon must match it before its output is
 // trusted (the handshake the consumer enforces).
