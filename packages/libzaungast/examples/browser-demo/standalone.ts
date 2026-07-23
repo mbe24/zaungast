@@ -25,8 +25,14 @@ let driverPromise: ReturnType<typeof createSqliteWasmDriver> | null = null;
 const getDriver = () => (driverPromise ??= createSqliteWasmDriver({ wasmBinary }));
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+// Render meta's epoch-ms timestamps (asOf, earliestTs, lastFullAt) as local date/time — POC display
+// only; the library returns raw epoch ms. 0 (e.g. earliestTs with no messages) shows "(none)".
+function fmtMeta(m: any) {
+  const t = (ms: number) => (ms > 0 ? new Date(ms).toLocaleString() : '(none)');
+  return { ...m, asOf: t(m.asOf), earliestTs: t(m.earliestTs), lastFullAt: t(m.lastFullAt) };
+}
 function render(store: any) {
-  log('meta:', store.meta);
+  log('meta:', fmtMeta(store.meta));
   const convs = store.conversations.list({ n: 20 });
   log(`\nconversations (${convs.length} shown):`);
   for (const c of convs)
@@ -50,7 +56,7 @@ async function selfTest() {
   const driver = await getDriver();
   const store = openStoreFromSource(new MemorySource(new Map()), { driver });
   log('✓ wasm driver + openStoreFromSource OK');
-  log('  meta:', store.meta);
+  log('  meta:', fmtMeta(store.meta));
   store.close();
 }
 

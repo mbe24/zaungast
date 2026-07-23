@@ -28,15 +28,21 @@ const clear = () => {
 const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+// Render meta's three epoch-ms timestamps (asOf, earliestTs, lastFullAt) as local date/time — POC
+// display only; the library returns raw epoch ms. 0 (e.g. earliestTs with no messages) shows "(none)".
+function fmtMeta(m: any) {
+  const t = (ms: number) => (ms > 0 ? new Date(ms).toLocaleString() : '(none)');
+  return { ...m, asOf: t(m.asOf), earliestTs: t(m.earliestTs), lastFullAt: t(m.lastFullAt) };
+}
 function renderResult(d: any) {
   if (d.selfTest) {
     log('✓ wasm driver + openStoreFromSource OK');
-    log('  meta:', d.meta);
+    log('  meta:', fmtMeta(d.meta));
     log('  (empty source → schemaMatched:', d.meta.schemaMatched, ')');
     return;
   }
   log(`✓ built store in ${d.buildMs}ms\n`);
-  log('meta:', d.meta);
+  log('meta:', fmtMeta(d.meta));
   log(`\nconversations (${d.conversations.length} shown):`);
   for (const c of d.conversations)
     log(`  ${c.handle}  ${c.kind}  msgs=${c.msgCount}  ${c.topic ?? c.participantNames ?? ''}`);
