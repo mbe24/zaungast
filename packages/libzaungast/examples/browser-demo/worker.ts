@@ -8,6 +8,7 @@ import { createSqliteWasmDriver } from '../sqlite-wasm-driver.ts';
 type In = { kind: 'selftest' } | { kind: 'build'; files: File[] };
 type Out =
   | { type: 'progress'; msg: string }
+  | { type: 'decoding'; name: string; i: number; n: number }
   | { type: 'phase'; phase: string; ms: number }
   | { type: 'result'; data: unknown }
   | { type: 'error'; msg: string };
@@ -38,17 +39,29 @@ self.onmessage = async (e: MessageEvent<In>) => {
     const map = new Map<string, Uint8Array>();
     for (const f of files) map.set(f.name, new Uint8Array(await f.arrayBuffer()));
 
+    // The decoder only reads .ldb/.log; a folder pick also includes leveldb metadata files (CURRENT,
+    // MANIFEST-*, LOCK, LOG) that libzaungast never reads — report those so the file counts line up.
+    const isData = (n: string) => n.endsWith('.ldb') || n.endsWith('.log');
+    const dataFiles = [...map.keys()].filter(isData);
+    const otherFiles = [...map.keys()].filter((n) => !isData(n));
+    post({
+      type: 'progress',
+      msg:
+        `${dataFiles.length} data files (.ldb/.log) to decode` +
+        (otherFiles.length
+          ? `; ${otherFiles.length} leveldb metadata ignored (${otherFiles.join(', ')})`
+          : ''),
+    });
+
     // Progress-reporting SnapshotSource (the A5 seam): the decoder calls read() once per .ldb/.log, so
-    // reporting there gives live "decoding X (i of N)" with NO library change. N counts only the files
-    // the decoder reads (a folder pick also includes CURRENT/MANIFEST/LOCK/LOG, which are never read).
-    const dataFiles = [...map.keys()].filter((n) => n.endsWith('.ldb') || n.endsWith('.log'));
+    // reporting there gives live per-file progress with NO library change.
     let i = 0;
     const source: SnapshotSource = {
       names: () => [...map.keys()],
       read: (name) => {
         const f = map.get(name);
         if (!f) throw new Error(`no such file: ${name}`);
-        post({ type: 'progress', msg: `decoding ${name} (${++i} of ${dataFiles.length})` });
+        post({ type: 'decoding', name, i: ++i, n: dataFiles.length });
         return f;
       },
     };

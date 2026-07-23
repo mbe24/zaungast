@@ -48,12 +48,18 @@ folder…" button for a real run.
 
 The example imports `libzaungast/web` — a version-agnostic specifier. **Inside this repo it resolves to
 the local workspace build**, so the example always exercises the current source and catches regressions
-before a release; it is deliberately *not* pinned to a published version here. To run the demo as a
-standalone project, copy `browser-demo/` and `sqlite-wasm-driver.ts` out and install the dependencies —
-the imports don't change:
+before a release; it is deliberately *not* pinned to a published version here. To run it as a standalone
+project, copy this whole `examples/` folder out (it ships a `package.json` for exactly this) and, from
+it:
 
 ```sh
-npm install libzaungast@^0.5.0 @sqlite.org/sqlite-wasm esbuild   # 0.5.0 is the first release with ./web
-node build.mjs
+npm install     # pulls libzaungast (>= 0.5, the first release with ./web), @sqlite.org/sqlite-wasm, esbuild
+npm run build   # → browser-demo/dist
+npm run serve   # optional: serve the hosted build over http
 ```
+
+The imports don't change — copied out, `libzaungast/web` resolves to the installed package instead of
+the workspace. The `package.json` is copy-out scaffolding only: it's **not** a workspace member and is
+never installed in the monorepo (in-repo the examples use the root install — don't `npm install` inside
+`examples/`, since `libzaungast@^0.5.0` isn't published yet).
 

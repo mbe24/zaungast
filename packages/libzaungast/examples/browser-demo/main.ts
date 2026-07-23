@@ -2,11 +2,27 @@
 // output, and renders the result it posts back. All the heavy work (decode + wasm SQLite build) runs in
 // the worker, so clicking a button never freezes the page. Built to poc/dist/main.js.
 const out = document.getElementById('out') as HTMLPreElement;
-const log = (...xs: unknown[]) => {
-  out.textContent +=
-    xs.map((x) => (typeof x === 'string' ? x : JSON.stringify(x, null, 2))).join(' ') + '\n';
+// Output = committed lines + one optional transient "status" line (the current decode file), which
+// subsequent status() calls replace in place. A permanent log() finalizes/clears the status line.
+let committed = '';
+let live: string | null = null;
+const paint = () => {
+  out.textContent = committed + (live !== null ? live + '\n' : '');
 };
-const clear = () => (out.textContent = '');
+const log = (...xs: unknown[]) => {
+  committed += xs.map((x) => (typeof x === 'string' ? x : JSON.stringify(x, null, 2))).join(' ') + '\n';
+  live = null;
+  paint();
+};
+const status = (msg: string) => {
+  live = msg;
+  paint();
+};
+const clear = () => {
+  committed = '';
+  live = null;
+  paint();
+};
 
 // A module worker (needs http, not file://). Vite/esbuild emit worker.js next to main.js.
 const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
@@ -36,6 +52,7 @@ function renderResult(d: any) {
 worker.onmessage = (e: MessageEvent) => {
   const m = e.data;
   if (m.type === 'progress') log('› ' + m.msg);
+  else if (m.type === 'decoding') status(`  decoding ${m.name} (${m.i} of ${m.n})`); // single line, updates in place
   else if (m.type === 'phase') log(`  ✓ ${m.phase} ${m.ms}ms`);
   else if (m.type === 'error') log('✗ ' + m.msg);
   else if (m.type === 'result') renderResult(m.data);
