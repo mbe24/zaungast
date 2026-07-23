@@ -1,10 +1,10 @@
-import crypto from 'node:crypto';
 // Engine seam: fingerprinting is engine-agnostic in intent, but today it decodes raw
 // Chromium records inline. A second engine would instead hand this module already-decoded
 // records. See ./index.ts for the wider picture.
 import { readVarint } from './chromium/indexeddb.js';
 import { deserialize } from './chromium/structured-clone.js';
 import { byCodeUnit } from '../util/sort.js';
+import { sha256Hex } from '../util/hash.js';
 import type { Fingerprint, SchemaStore, Snapshot } from './types.js';
 
 // Build a stable, PII-free fingerprint of the Teams IndexedDB schema:
@@ -70,6 +70,6 @@ export function fingerprint(
 
   const stores = buildStores(snap.dbNames, snap.storeNames, sampleKeys);
   const canonical = JSON.stringify(stores.map((s) => [s.db, s.store, s.fields]));
-  const hash = crypto.createHash('sha256').update(canonical).digest('hex').slice(0, 16);
+  const hash = sha256Hex(canonical).slice(0, 16);
   return { hash, storeCount: stores.length, stores, dbCount: snap.dbNames.size };
 }
