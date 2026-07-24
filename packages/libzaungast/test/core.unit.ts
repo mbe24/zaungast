@@ -5,7 +5,12 @@ import { test, expect } from 'vitest';
 import * as Snappy from '../src/format/chromium/snappy.js';
 import { deserialize } from '../src/format/chromium/structured-clone.js';
 import { crc32c } from '../src/format/chromium/sstable.js';
-import { htmlToText, isSystemMessage, mentionedMris } from '../src/util/text.js';
+import {
+  htmlToText,
+  isSystemMessage,
+  mentionedMris,
+  resolveProfileName,
+} from '../src/util/text.js';
 import { makeHandle } from '../src/util/handles.js';
 import { makeExtractor } from '../src/util/topics.js';
 import { isBotMri } from '../src/ingest/store.js';
@@ -39,6 +44,54 @@ test('snappy', () => {
   // long literal (len-1 >= 60 → 1 extra length byte): 130 'z' bytes.
   const longLit = Buffer.concat([Buffer.from([0x82, 0x01, 0xf0, 0x81]), Buffer.alloc(130, 0x7a)]);
   expect(Snappy.uncompress(longLit).toString()).toEqual('z'.repeat(130));
+});
+
+test('resolveProfileName (federated externals recover given/surname from displayName)', () => {
+  // AD (internal) users: given/surname are correct → pass through untouched.
+  expect(
+    resolveProfileName({
+      displayName: 'Arkadiusz Apiecionek',
+      givenName: 'Arkadiusz',
+      surname: 'Apiecionek',
+      type: 'ADUser',
+    }),
+  ).toEqual({ givenName: 'Arkadiusz', surname: 'Apiecionek' });
+  // Even a federated user WITH a real surname is left alone (only the empty-surname case is recovered).
+  expect(
+    resolveProfileName({ displayName: 'X', givenName: 'g', surname: 'S', type: 'Federated' }),
+  ).toEqual({ givenName: 'g', surname: 'S' });
+
+  // Federated + empty surname: recover from "Surname, Given (Org)".
+  expect(
+    resolveProfileName({
+      displayName: 'Lieder, Elisabeth (AIFB)',
+      givenName: 'fd0317@kit.edu',
+      surname: '',
+      type: 'Federated',
+    }),
+  ).toEqual({ givenName: 'Elisabeth', surname: 'Lieder' });
+  // No org suffix.
+  expect(
+    resolveProfileName({
+      displayName: 'Bleischwitz, Peter',
+      givenName: 'peter.bleischwitz@dscsag.com',
+      surname: '',
+      type: 'Federated',
+    }),
+  ).toEqual({ givenName: 'Peter', surname: 'Bleischwitz' });
+  // Multi-word surname stays whole (comma is the only split point).
+  expect(
+    resolveProfileName({
+      displayName: 'von Neumann, John (IAS)',
+      givenName: '',
+      surname: '',
+      type: 'Federated',
+    }),
+  ).toEqual({ givenName: 'John', surname: 'von Neumann' });
+  // No comma → can't split; surname stays empty, given becomes the cleaned string (not the email).
+  expect(
+    resolveProfileName({ displayName: 'Jane Doe (Acme)', givenName: 'x@y.z', surname: '', type: 'Federated' }),
+  ).toEqual({ givenName: 'Jane Doe', surname: '' });
 });
 
 test('htmlToText (characterization — pins the tag/entity/whitespace transforms)', () => {

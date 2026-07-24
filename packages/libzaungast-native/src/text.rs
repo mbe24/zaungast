@@ -71,6 +71,32 @@ fn is_br(lower: &str) -> bool {
     t.is_empty() || t == "/"
 }
 
+/// Faithful port of util/text.ts::resolveProfileName. Internal (AD) users pass their given/surname
+/// through untouched; Federated externals with an empty surname have both recovered from displayName
+/// ("Surname, Given (Org)"): strip "(…)", collapse whitespace, split on the first comma (left =
+/// surname, right = given). Returns (given_name, surname). Verified against TS by the `store` diff.
+pub fn resolve_profile_name(
+    display_name: &str,
+    given: &str,
+    surname: &str,
+    ptype: &str,
+) -> (String, String) {
+    if ptype == "Federated" && surname.trim().is_empty() {
+        static PARENS: OnceLock<Regex> = OnceLock::new();
+        static WS: OnceLock<Regex> = OnceLock::new();
+        let parens = PARENS.get_or_init(|| Regex::new(r"\([^)]*\)").unwrap());
+        let ws = WS.get_or_init(|| Regex::new(r"\s+").unwrap());
+        let no_parens = parens.replace_all(display_name, "");
+        let collapsed = ws.replace_all(no_parens.as_ref(), " ");
+        let s = collapsed.trim();
+        if let Some(ci) = s.find(',') {
+            return (s[ci + 1..].trim().to_string(), s[..ci].trim().to_string());
+        }
+        return (s.to_string(), String::new());
+    }
+    (given.to_string(), surname.to_string())
+}
+
 pub fn html_to_text(html: &str) -> String {
     if html.is_empty() {
         return String::new();

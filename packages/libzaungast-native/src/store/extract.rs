@@ -15,7 +15,7 @@ use super::convert::{
     parse_iso8601_ms, recording_link_of, to_epoch_ms, to_js_string, to_num,
 };
 use crate::sha256::make_handle;
-use crate::text::html_to_text;
+use crate::text::{html_to_text, resolve_profile_name};
 use crate::value::Ssv;
 
 // ---- handle assignment (6-hex sha1, collision-extended; matches store.ts handleFor) ----
@@ -218,14 +218,29 @@ pub(crate) fn apply_messages(
 pub(crate) fn replace_profiles(conn: &Connection, rows: &[Ssv]) {
     conn.execute_batch("delete from profiles").unwrap();
     let mut stmt = conn
-        .prepare("insert or replace into profiles(mri,name) values(?,?)")
+        .prepare("insert or replace into profiles(mri,name,given_name,surname,type,org) values(?,?,?,?,?,?)")
         .unwrap();
     for r in rows {
         let mri = to_js_string(get(r, "mri")).unwrap_or_default();
         let name = to_js_string(get(r, "name")).unwrap_or_default();
-        if !mri.is_empty() && !name.is_empty() {
-            stmt.execute(params![mri, name]).unwrap();
+        if mri.is_empty() || name.is_empty() {
+            continue;
         }
+        // type defaults to "None" when absent (matches ingest-core.ts / the profiles column default).
+        let ptype = {
+            let t = to_js_string(get(r, "type")).unwrap_or_default();
+            if t.is_empty() {
+                "None".to_string()
+            } else {
+                t
+            }
+        };
+        let raw_given = to_js_string(get(r, "givenName")).unwrap_or_default();
+        let raw_surname = to_js_string(get(r, "surname")).unwrap_or_default();
+        let org = to_js_string(get(r, "org")).unwrap_or_default();
+        let (given, surname) = resolve_profile_name(&name, &raw_given, &raw_surname, &ptype);
+        stmt.execute(params![mri, name, given, surname, ptype, org])
+            .unwrap();
     }
 }
 

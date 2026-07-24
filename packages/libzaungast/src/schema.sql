@@ -24,7 +24,15 @@ create table people(
 -- rebuilds people from message senders only, so a reactor/mention who never posted has no
 -- people row — profiles fills that gap (26% of reactors in real data). Never cleared by the
 -- derived recompute; reconciled directly by the ingest profiles pass.
-create table profiles(mri text primary key, name text);
+-- name = Teams' raw displayName (faithful). given_name/surname are the structured parts: correct as-is
+-- for AD users; for Federated externals they're recovered from displayName (see resolveProfileName),
+-- since the raw givenName is the email and surname is empty. type = Teams' profile type (ADUser/
+-- Federated/…), defaulting to 'None' when absent (so a profile-less MRI reads as an unknown/guest).
+-- org = tenantName (the person's home organisation).
+create table profiles(
+  mri text primary key, name text,
+  given_name text, surname text, type text default 'None', org text
+);
 -- chain_key: the owning reply-chain record's leveldb key, HEX-encoded. It must be hex, not
 -- the raw latin1 bytes: leveldb keys contain embedded NUL bytes, and node:sqlite truncates a
 -- TEXT value at the first NUL on JS read-back (a plain SELECT would return '' for real keys).

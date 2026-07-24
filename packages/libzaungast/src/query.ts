@@ -477,7 +477,11 @@ export function convMessageStats(
 export interface Person {
   handle: string;
   mri: string;
-  name: string;
+  name: string; // Teams' raw displayName (unchanged)
+  givenName: string; // structured parts; recovered from displayName for Federated externals
+  surname: string;
+  type: string; // Teams profile type: 'ADUser' | 'Federated' | … ; 'None' when there's no profile
+  org: string | null; // home organisation (tenantName); null when unknown
   msgCount: number;
   lastTs: number;
   isBot: boolean; // sender MRI is in the Bot Framework namespace (28:) — absorbs the MCP's isBotMri use
@@ -493,6 +497,10 @@ const toPerson = (r: any): Person => ({
   handle: r.handle,
   mri: r.mri,
   name: r.name,
+  givenName: r.given_name ?? '',
+  surname: r.surname ?? '',
+  type: r.type ?? 'None',
+  org: r.org ?? null,
   msgCount: r.msg_count,
   lastTs: r.last_ts,
   isBot: isBotMri(r.mri),
@@ -506,13 +514,17 @@ export function queryPeople(
   opts: { query?: string; n?: number } = {},
 ): PeopleResult {
   const db = store.db;
-  const n = Math.min(Number(opts.n) || 8, 25); // n: default 8, documented maximum 25
+  const n = Number(opts.n) || 8; // default 8; explicit n uncapped (MCP's find_person schema caps at 25)
   const q = opts.query ? String(opts.query).trim() : '';
-  const cols = 'handle,mri,name,msg_count,last_ts';
+  // Rows carry the structured profile fields (given_name/surname/type/org) via a LEFT JOIN — the
+  // `people` table itself is untouched (message-derived), so this stays engine-byte-identical.
+  const cols =
+    'pe.handle,pe.mri,pe.name,pe.msg_count,pe.last_ts,pr.given_name,pr.surname,pr.type,pr.org';
+  const from = 'from people pe left join profiles pr on pr.mri=pe.mri';
   if (q.startsWith('p:')) {
-    const rows = (db.prepare(`select ${cols} from people where handle=?`).all(q) as any[]).map(
-      toPerson,
-    );
+    const rows = (
+      db.prepare(`select ${cols} ${from} where pe.handle=?`).all(q) as any[]
+    ).map(toPerson);
     return { mode: 'handle', query: q, total: rows.length, rows };
   }
   if (q) {
@@ -524,7 +536,7 @@ export function queryPeople(
     const rows = (
       db
         .prepare(
-          String.raw`select ${cols} from people where name like ? escape '\' order by msg_count desc limit ?`,
+          String.raw`select ${cols} ${from} where pe.name like ? escape '\' order by pe.msg_count desc limit ?`,
         )
         .all(`%${likeEscape(q)}%`, n) as any[]
     ).map(toPerson);
@@ -532,7 +544,7 @@ export function queryPeople(
   }
   const total = (db.prepare('select count(*) c from people').get() as any).c;
   const rows = (
-    db.prepare(`select ${cols} from people order by msg_count desc limit ?`).all(n) as any[]
+    db.prepare(`select ${cols} ${from} order by pe.msg_count desc limit ?`).all(n) as any[]
   ).map(toPerson);
   return { mode: 'roster', query: '', total, rows };
 }

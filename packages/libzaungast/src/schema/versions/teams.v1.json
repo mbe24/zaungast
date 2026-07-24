@@ -45,7 +45,11 @@
       "store": "profiles",
       "fields": {
         "mri": "mri",
-        "name": "displayName"
+        "name": "displayName",
+        "givenName": "givenName",
+        "surname": "surname",
+        "type": "type",
+        "org": "tenantName"
       }
     },
     "event": {

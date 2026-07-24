@@ -189,10 +189,22 @@ export class ChatStore {
 
   // Reconcile the profiles name-source: replace-all from the current live profiles rows. Cheap
   // (hundreds of rows) and idempotent, so both full and incremental paths just call it.
-  replaceProfiles(rows: { mri: string; name: string }[]) {
+  replaceProfiles(
+    rows: {
+      mri: string;
+      name: string;
+      givenName: string;
+      surname: string;
+      type: string;
+      org: string;
+    }[],
+  ) {
     this.db.exec('delete from profiles');
-    const ins = this.q('insert or replace into profiles(mri,name) values(?,?)');
-    for (const r of rows) if (r.mri && r.name) ins.run(r.mri, r.name);
+    const ins = this.q(
+      'insert or replace into profiles(mri,name,given_name,surname,type,org) values(?,?,?,?,?,?)',
+    );
+    for (const r of rows)
+      if (r.mri && r.name) ins.run(r.mri, r.name, r.givenName, r.surname, r.type, r.org);
   }
 
   // Whole-store replace for the calendar → events table, every ingest (full and incremental

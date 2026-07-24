@@ -9,7 +9,13 @@ import { fromLatin1, toHex } from '#bytes';
 import type { Snapshot } from '../format/types.js';
 import { ChatStore, type StoreMeta } from './store.js';
 import type { SqlDriver } from './sql-driver.js';
-import { htmlToText, isSystemMessage, mentionedMris, hasAttachment } from '../util/text.js';
+import {
+  htmlToText,
+  isSystemMessage,
+  mentionedMris,
+  hasAttachment,
+  resolveProfileName,
+} from '../util/text.js';
 
 export function convKind(id = ''): string {
   if (id.includes('@unq.gbl.spaces')) return '1:1';
@@ -114,10 +120,24 @@ export function applyMessages(
 // applyProfiles so a full ingest can extract every entity's rows BEFORE building the store, then
 // drop the snapshot (the extract-then-drop-snapshot ordering — see extractFromSnapshot()).
 function buildProfileRows(snap: Snapshot, mapping: any) {
-  return extractEntity(snap, mapping, 'profile').records.map((r: any) => ({
-    mri: String(r.mri ?? ''),
-    name: String(r.name ?? ''),
-  }));
+  return extractEntity(snap, mapping, 'profile').records.map((r: any) => {
+    const name = String(r.name ?? '');
+    const type = String(r.type ?? '') || 'None';
+    const parts = resolveProfileName({
+      displayName: name,
+      givenName: String(r.givenName ?? ''),
+      surname: String(r.surname ?? ''),
+      type,
+    });
+    return {
+      mri: String(r.mri ?? ''),
+      name,
+      givenName: parts.givenName,
+      surname: parts.surname,
+      type,
+      org: String(r.org ?? ''),
+    };
+  });
 }
 // Populate the profiles name-source. Whole-store replace each ingest.
 export function applyProfiles(store: ChatStore, snap: Snapshot, mapping: any) {

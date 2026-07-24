@@ -81,6 +81,30 @@ export function isSystemMessage(m: any): boolean {
   return false;
 }
 
+// Resolve a profile's structured name parts. Internal (AD) users have correct givenName/surname, so
+// they pass through untouched. Federated (external-tenant) users don't: their givenName is the email
+// and surname is empty — but their displayName is reliably "Surname, Given (Org)". So when a person is
+// Federated with an empty surname, we recover the parts from displayName: strip any "(Org)" suffix,
+// then split on the first comma (left = surname, right = given). Names without a comma can't be split,
+// so surname stays empty and the given name becomes the whole cleaned string (better than the email).
+export function resolveProfileName(p: {
+  displayName: string;
+  givenName: string;
+  surname: string;
+  type: string;
+}): { givenName: string; surname: string } {
+  if (p.type === 'Federated' && !p.surname.trim()) {
+    const s = p.displayName
+      .replace(/\([^)]*\)/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const ci = s.indexOf(',');
+    if (ci >= 0) return { surname: s.slice(0, ci).trim(), givenName: s.slice(ci + 1).trim() };
+    return { surname: '', givenName: s };
+  }
+  return { givenName: p.givenName, surname: p.surname };
+}
+
 // Does this message reference an attachment (image/file/card)? URL-only; we never fetch.
 // Accepts fields either directly (mapped row: m.files) or under m.properties.
 export function hasAttachment(m: any, contentHtml: string): boolean {
