@@ -90,7 +90,12 @@ test('resolveProfileName (federated externals recover given/surname from display
   ).toEqual({ givenName: 'John', surname: 'von Neumann' });
   // No comma → can't split; surname stays empty, given becomes the cleaned string (not the email).
   expect(
-    resolveProfileName({ displayName: 'Jane Doe (Acme)', givenName: 'x@y.z', surname: '', type: 'Federated' }),
+    resolveProfileName({
+      displayName: 'Jane Doe (Acme)',
+      givenName: 'x@y.z',
+      surname: '',
+      type: 'Federated',
+    }),
   ).toEqual({ givenName: 'Jane Doe', surname: '' });
 });
 

@@ -5,15 +5,15 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import Chart from '$lib/components/Chart.svelte';
 	import * as Plot from '@observablehq/plot';
-	import * as Comlink from 'comlink';
-	import { createTeams, type Progress } from '$lib/teams';
-	import type { WrappedData } from '$lib/wrapped';
+	import { app, build } from '$lib/app.svelte';
+	import { PALETTE } from '$lib/palette';
 
-	let phase = $state<'idle' | 'building' | 'ready' | 'error'>('idle');
-	let progress = $state('');
-	let error = $state('');
-	let data = $state<WrappedData | null>(null);
 	let fileInput = $state<HTMLInputElement>();
+	// Shared across pages (see $lib/app.svelte); aliased so the template + charts below read as before.
+	const phase = $derived(app.phase);
+	const progress = $derived(app.progress);
+	const error = $derived(app.error);
+	const data = $derived(app.data);
 
 	// Help dialog: where the Teams cache folder lives, per OS (system paths, not PII).
 	let helpOpen = $state(false);
@@ -32,11 +32,18 @@
 
 	// Display-time name shortening (until a real private mode): first name in full, each following
 	// name-part to its initial. "Firstname Lastname" → "Firstname L."; "Firstname de Surname" → "Firstname d. S.".
-	const abbrev = (name: string) => {
-		const parts = name.trim().split(/\s+/);
+	const abbrev = (raw: string) => {
+		const name = raw.replace(/\s*\([^)]*\)\s*$/, '').trim(); // drop a trailing "(Org)" federated suffix
+		if (name.includes(',')) {
+			// "Surname, Given …" — Teams' format for external/federated contacts → "Surname, G."
+			const [last, ...rest] = name.split(',');
+			const given = rest.join(',').trim().split(/\s+/).filter(Boolean);
+			return given.length ? `${last.trim()}, ${given[0][0]}.` : last.trim();
+		}
+		const parts = name.split(/\s+/).filter(Boolean);
 		if (parts.length <= 1) return name;
-		const [first, ...rest] = parts;
-		return `${first} ${rest.map((p) => p[0] + '.').join(' ')}`;
+		const [first, ...more] = parts;
+		return `${first} ${more.map((p) => p[0] + '.').join(' ')}`;
 	};
 
 	// Conversation-kind display labels ("1:1" → "Chat"; others capitalized).
@@ -75,31 +82,7 @@
 		return [0, ...anchors.slice(-count)];
 	}
 
-	const teams = createTeams();
-
-	async function onFiles() {
-		const files = fileInput?.files ? Array.from(fileInput.files) : [];
-		if (!files.length) return;
-		phase = 'building';
-		error = '';
-		data = null;
-		try {
-			await teams.build(
-				files,
-				Comlink.proxy((p: Progress) => {
-					if (p.type === 'reading') progress = `Reading ${p.total} files…`;
-					else if (p.type === 'decoding') progress = `Decoding ${p.name} (${p.i} of ${p.n})`;
-					else progress = `Building store — ${p.phase}…`;
-				}),
-			);
-			data = await teams.wrapped();
-			phase = 'ready';
-		} catch (e) {
-			error = (e as Error).message;
-			phase = 'error';
-		}
-	}
-
+	const onFiles = () => build(fileInput?.files ? Array.from(fileInput.files) : []);
 	const pick = () => fileInput?.click();
 
 	// Plot style string (reliably applied to the svg root so tick labels inherit the 16px size).
@@ -182,8 +165,11 @@
 				style: base,
 				x: { type: peopleScale, label: 'messages', labelOffset: 44, grid: true, ticks: peopleTicks },
 				y: { label: null, tickFormat: (n: string) => abbrev(n) },
+				// One palette colour per person, keyed by name in rank order — same mapping as the race
+				// bars (topPeople is already sorted by volume, so rank i → PALETTE[i]).
+				color: { domain: data.topPeople.map((p) => p.name), range: PALETTE },
 				marks: [
-					Plot.barX(data.topPeople, { x: 'messages', y: 'name', fill: 'var(--chart-2)', rx: 6, sort: { y: 'x', reverse: true } }),
+					Plot.barX(data.topPeople, { x: 'messages', y: 'name', fill: 'name', rx: 6, sort: { y: 'x', reverse: true } }),
 					Plot.ruleX([0]),
 				],
 			} as Parameters<typeof Plot.plot>[0]),

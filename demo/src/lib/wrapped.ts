@@ -17,6 +17,10 @@ export interface WrappedData {
 	longestStreak: number; // longest run of consecutive days with ≥1 message
 	firstMessage: { ts: number; senderName: string | null; content: string; where: string } | null;
 	convMix: { kind: string; count: number }[];
+	// Bar-chart-race data: a daily time axis + top 1:1 partners with their per-day message counts
+	// (both sides) aligned to it. The UI applies a rolling window frame-by-frame.
+	raceDays: number[]; // day-start epoch ms
+	racePeople: { name: string; daily: number[] }[];
 }
 
 const DAY = 86_400_000;
@@ -25,6 +29,15 @@ const BIG = 1_000_000; // effectively "all rows"
 export function computeWrapped(store: TeamsStore): WrappedData {
 	const meta = store.meta;
 	const convs = store.conversations.list({ n: BIG });
+
+	// Corrected display names. The library now recovers given/surname for federated externals (whose
+	// message senderName is the ugly "Surname, Given (Org)"), so compose the natural "Given Surname";
+	// fall back to whatever name we have when the structured parts are missing (guests, bots).
+	const displayNames = new Map<string, string>();
+	for (const p of store.people.find({ n: BIG }).rows)
+		displayNames.set(p.mri, p.givenName && p.surname ? `${p.givenName} ${p.surname}` : p.name);
+	const nameOf = (mri: string | null, fallback: string | null): string =>
+		(mri ? displayNames.get(mri) : undefined) || fallback || mri || '';
 
 	const perDay = new Map<number, number>();
 	// "Top people" = who you exchange the most DIRECT (1:1) messages with. NOT global authored count
@@ -35,10 +48,13 @@ export function computeWrapped(store: TeamsStore): WrappedData {
 	// ALSO posted (1:1s, group chats, channels). Requires your participation, so it's far below
 	// meta.counts.people (everyone who merely appears in the cache).
 	const talkedTo = new Set<string>();
+	// Per-1:1-partner daily message counts (both sides), for the bar-chart race.
+	const partnerDays = new Map<string, Map<number, number>>();
 	const hours = new Array(24).fill(0) as number[];
 	let reactions = 0;
 	let mine = 0;
-	let firstTs = Number.POSITIVE_INFINITY;
+	let firstTs = Number.POSITIVE_INFINITY; // earliest message involving you — anchors span + the race axis
+	let firstToMeTs = Number.POSITIVE_INFINITY; // earliest message addressed TO you — for the display card
 	let lastTs = 0;
 	let first: { ts: number; senderName: string | null; content: string; where: string } | null = null;
 
@@ -47,11 +63,16 @@ export function computeWrapped(store: TeamsStore): WrappedData {
 		if (!res.ok) continue;
 		const where = c.topic ?? c.participantNames ?? c.handle;
 		const oneToOne = c.kind === '1:1';
+		const isChannel = c.kind === 'channel';
+		// A real human conversation (not a Teams service thread like 48:calllogs, kind 'other'), so call
+		// logs / app notifications can't anchor "your first message".
+		const isReal = oneToOne || isChannel || c.kind === 'group' || c.kind === 'meeting';
 		// 1:1 volume (both sides) for top-people; co-participation for "people you talked to".
 		let convTotal = 0;
 		const convSenders = oneToOne ? new Map<string, { name: string; count: number }>() : null;
 		let youPosted = false;
 		const others = new Set<string>();
+		const mineIds = new Set<string>(); // your message ids in this conv → detect replies addressed to you
 		for (const m of res.rows) {
 			const d = new Date(m.ts);
 			const dayKey = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
@@ -61,12 +82,43 @@ export function computeWrapped(store: TeamsStore): WrappedData {
 			if (m.isMine) {
 				mine++;
 				youPosted = true;
-			}
-			if (m.ts < firstTs) {
-				firstTs = m.ts;
-				first = { ts: m.ts, senderName: m.senderName, content: m.content, where };
+				mineIds.add(m.id);
 			}
 			if (m.ts > lastTs) lastTs = m.ts;
+			// Span + race anchor: your earliest message in a real human conversation (sent, or received in
+			// a non-channel), with content — so call logs / app threads / system events don't anchor it and
+			// pre-join channel history is skipped.
+			if (isReal && (m.isMine || !isChannel) && m.content.trim() && m.ts < firstTs) firstTs = m.ts;
+			// "First cached message" (the card): the earliest message actually addressed TO you — a direct
+			// message (1:1), an @mention of you anywhere, or a reply in a channel thread you started — NOT a
+			// plain broadcast to a group/channel you merely belong to. res.rows is oldest→newest, so any
+			// thread root you authored is already in mineIds by the time its reply appears.
+			const toMe =
+				!m.isMine &&
+				m.content.trim().length > 0 &&
+				(oneToOne || m.mentionsMe || (m.rootId !== m.id && mineIds.has(m.rootId)));
+			if (toMe && m.ts < firstToMeTs) {
+				firstToMeTs = m.ts;
+				// A "burst": this message + the same sender's follow-ups sent within 60s of each other.
+				// People who press Enter mid-thought split one message across several lines; keep them as
+				// one entry so a short opener ("hi") doesn't leave the card looking empty.
+				const lines: string[] = [];
+				let prev = m.ts;
+				let started = false;
+				for (const n of res.rows) {
+					if (n.id === m.id) started = true;
+					if (!started) continue;
+					if (n.senderMri !== m.senderMri || n.ts - prev > 60_000) break;
+					if (n.content.trim()) lines.push(n.content);
+					prev = n.ts;
+				}
+				first = {
+					ts: m.ts,
+					senderName: nameOf(m.senderMri, m.senderName),
+					content: lines.join('\n'),
+					where,
+				};
+			}
 			const isOther = !m.senderIsBot && !!m.senderMri && m.senderMri !== meta.selfMri;
 			if (isOther) others.add(m.senderMri as string);
 			if (convSenders) {
@@ -75,7 +127,7 @@ export function computeWrapped(store: TeamsStore): WrappedData {
 					const mri = m.senderMri as string;
 					const cur = convSenders.get(mri);
 					if (cur) cur.count++;
-					else convSenders.set(mri, { name: m.senderName ?? store.people.nameFor(mri) ?? mri, count: 1 });
+					else convSenders.set(mri, { name: nameOf(mri, m.senderName ?? store.people.nameFor(mri) ?? mri), count: 1 });
 				}
 			}
 		}
@@ -90,6 +142,13 @@ export function computeWrapped(store: TeamsStore): WrappedData {
 				const existing = talk.get(partner.mri);
 				if (existing) existing.count += convTotal;
 				else talk.set(partner.mri, { name: partner.name, count: convTotal });
+				// Bucket this 1:1's messages (both sides) by day under the partner, for the race.
+				let dm = partnerDays.get(partner.mri);
+				if (!dm) partnerDays.set(partner.mri, (dm = new Map()));
+				for (const m of res.rows) {
+					const d = Math.floor(m.ts / DAY) * DAY;
+					dm.set(d, (dm.get(d) ?? 0) + 1);
+				}
 			}
 		}
 	}
@@ -121,6 +180,24 @@ export function computeWrapped(store: TeamsStore): WrappedData {
 		.slice(0, 10)
 		.map((p) => ({ name: p.name, messages: p.count }));
 
+	// Race: a daily axis over the cache span + the top partners' per-day counts aligned to it. We track
+	// far more than we ever show (10) so short-burst people — active intensely for a while, then gone —
+	// can still surface during their window even if their all-time total is modest. Cheap: it's just more
+	// day-arrays, and rolling/ranking happen client-side.
+	const RACE_PARTNERS = 100;
+	const raceDays: number[] = [];
+	if (lastTs > 0) {
+		const from = Math.floor((Number.isFinite(firstTs) ? firstTs : lastTs) / DAY) * DAY;
+		for (let d = from; d <= Math.floor(lastTs / DAY) * DAY; d += DAY) raceDays.push(d);
+	}
+	const racePeople = [...talk.entries()]
+		.sort((a, b) => b[1].count - a[1].count)
+		.slice(0, RACE_PARTNERS)
+		.map(([mri, info]) => {
+			const dm = partnerDays.get(mri) ?? new Map<number, number>();
+			return { name: info.name, daily: raceDays.map((d) => dm.get(d) ?? 0) };
+		});
+
 	const mix = new Map<string, number>();
 	for (const c of convs) mix.set(c.kind, (mix.get(c.kind) ?? 0) + 1);
 	const convMix = [...mix.entries()].sort((a, b) => b[1] - a[1]).map(([kind, count]) => ({ kind, count }));
@@ -143,5 +220,7 @@ export function computeWrapped(store: TeamsStore): WrappedData {
 		longestStreak,
 		firstMessage: first,
 		convMix,
+		raceDays,
+		racePeople,
 	};
 }

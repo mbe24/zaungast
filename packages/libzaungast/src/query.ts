@@ -522,9 +522,9 @@ export function queryPeople(
     'pe.handle,pe.mri,pe.name,pe.msg_count,pe.last_ts,pr.given_name,pr.surname,pr.type,pr.org';
   const from = 'from people pe left join profiles pr on pr.mri=pe.mri';
   if (q.startsWith('p:')) {
-    const rows = (
-      db.prepare(`select ${cols} ${from} where pe.handle=?`).all(q) as any[]
-    ).map(toPerson);
+    const rows = (db.prepare(`select ${cols} ${from} where pe.handle=?`).all(q) as any[]).map(
+      toPerson,
+    );
     return { mode: 'handle', query: q, total: rows.length, rows };
   }
   if (q) {
