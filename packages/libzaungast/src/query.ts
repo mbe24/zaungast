@@ -607,7 +607,10 @@ export function queryConversations(
   } = {},
 ): Conversation[] {
   const db = store.db;
-  const n = Math.min(Number(opts.n) || 12, 30); // n: default 12, documented maximum 30
+  // Default 12; honour an explicit n with no hard cap here. This is the data primitive — a caller that
+  // wants the whole store (e.g. a full read/analytics pass) can ask for everything. The MCP tool's
+  // "documented maximum 30" is enforced where it belongs: the list_conversations arg schema (n.max(30)).
+  const n = Number(opts.n) || 12;
   const where: string[] = [];
   const params: any[] = [];
   if (!opts.includeEmpty) where.push('msg_count>0'); // hide 0-message team roots by default
