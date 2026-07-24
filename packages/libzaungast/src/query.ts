@@ -829,7 +829,7 @@ export function queryEvents(
   } = {},
 ): CalendarEvent[] {
   const db = store.db;
-  const limit = Math.min(Number(opts.limit) || 30, 100); // limit: default 30, documented maximum 100
+  const limit = Number(opts.limit) || 30; // default 30; explicit limit uncapped (MCP list_events schema caps at 100)
   const where: string[] = [];
   const params: any[] = [];
   if (opts.sinceTs != null) {
