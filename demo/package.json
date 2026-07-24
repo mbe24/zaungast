@@ -35,6 +35,7 @@
 		"vite": "^8.0.16"
 	},
 	"dependencies": {
+		"@catppuccin/palette": "^1.8.0",
 		"@observablehq/plot": "^0.6.17",
 		"@sqlite.org/sqlite-wasm": "^3.53.0-build1",
 		"comlink": "^4.4.2",

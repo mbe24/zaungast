@@ -13,6 +13,13 @@ export interface WrappedData {
 	messagesPerDay: { date: number; count: number }[]; // date = epoch ms at local midnight
 	busiestDay: { date: number; count: number } | null;
 	hourHistogram: { hour: number; count: number }[]; // 24 buckets, local hour
+	// Bivariate weekly-rhythm heatmap: per Monday-anchored week, a flat 7×70 fine grid (cell = day*70 +
+	// fineSlot; day 0=Mon..6=Sun; fineSlot 0=night 23–02, 1..68=06:00..22:00 in 15-min steps, 69=early
+	// 02–06). A = human chat messages; B = calendar occupancy (meetings + calls). The page rolling-means
+	// over 4 weeks, convolves along the minute axis for soft transitions, and animates week by week.
+	rhythmWeeks: number[]; // Monday-midnight epoch ms per week
+	rhythmA: number[][]; // [weekIndex] → 126 chat-message counts
+	rhythmB: number[][]; // [weekIndex] → 126 calendar-occupancy counts
 	nightOwlPct: number; // share of messages sent 22:00–05:59
 	longestStreak: number; // longest run of consecutive days with ≥1 message
 	firstMessage: { ts: number; senderName: string | null; content: string; where: string } | null;
@@ -25,6 +32,26 @@ export interface WrappedData {
 
 const DAY = 86_400_000;
 const BIG = 1_000_000; // effectively "all rows"
+
+// Bivariate weekly-rhythm heatmap. The worker always emits all 7 days (Mon=0..Sun=6); the page chooses
+// how many to render. A (chat) counts human messages only unless A_INCLUDE_BOTS is flipped.
+const HOUR_QUARTERS = 4; // 15-min sub-hour resolution — the cell's vertical (minutes-within-hour) axis
+const QUARTER_MS = 15 * 60_000;
+// Per-day fine slots: 0 = night 23–02 (aggregate), 1..68 = 06:00..22:00 in 15-min steps, 69 = early
+// 02–06 (aggregate). The page renders each hour as its 4 quarter slots stacked top→bottom.
+const FINE_PER_DAY = 2 + 17 * HOUR_QUARTERS; // 70
+const RHYTHM_CELLS = 7 * FINE_PER_DAY;
+const A_INCLUDE_BOTS = false; // flip to true to fold bot messages into Activity A
+const fineOf = (dt: Date): number => {
+	const h = dt.getHours();
+	if (h >= 6 && h <= 22) return 1 + (h - 6) * HOUR_QUARTERS + Math.floor(dt.getMinutes() / 15);
+	return h >= 23 || h < 2 ? 0 : FINE_PER_DAY - 1; // night / early buffers
+};
+const cellOf = (dt: Date): number => ((dt.getDay() + 6) % 7) * FINE_PER_DAY + fineOf(dt);
+const mondayMs = (ts: number): number => {
+	const dt = new Date(ts);
+	return new Date(dt.getFullYear(), dt.getMonth(), dt.getDate() - ((dt.getDay() + 6) % 7)).getTime();
+};
 
 export function computeWrapped(store: TeamsStore): WrappedData {
 	const meta = store.meta;
@@ -51,6 +78,15 @@ export function computeWrapped(store: TeamsStore): WrappedData {
 	// Per-1:1-partner daily message counts (both sides), for the bar-chart race.
 	const partnerDays = new Map<string, Map<number, number>>();
 	const hours = new Array(24).fill(0) as number[];
+	// Per Monday-week rhythm grids (7×18 flat). A = chat, B = calendar occupancy.
+	const rhythmAMap = new Map<number, number[]>();
+	const rhythmBMap = new Map<number, number[]>();
+	const bumpRhythm = (map: Map<number, number[]>, ts: number): void => {
+		const wk = mondayMs(ts);
+		let arr = map.get(wk);
+		if (!arr) map.set(wk, (arr = new Array(RHYTHM_CELLS).fill(0)));
+		arr[cellOf(new Date(ts))]++;
+	};
 	let reactions = 0;
 	let mine = 0;
 	let firstTs = Number.POSITIVE_INFINITY; // earliest message involving you — anchors span + the race axis
@@ -78,6 +114,8 @@ export function computeWrapped(store: TeamsStore): WrappedData {
 			const dayKey = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 			perDay.set(dayKey, (perDay.get(dayKey) ?? 0) + 1);
 			hours[d.getHours()]++;
+			// Activity A: human chat messages in real conversations (bots excluded unless A_INCLUDE_BOTS).
+			if (isReal && (A_INCLUDE_BOTS || !m.senderIsBot)) bumpRhythm(rhythmAMap, m.ts);
 			for (const g of m.reactions) reactions += g.users.length;
 			if (m.isMine) {
 				mine++;
@@ -198,6 +236,36 @@ export function computeWrapped(store: TeamsStore): WrappedData {
 			return { name: info.name, daily: raceDays.map((d) => dm.get(d) ?? 0) };
 		});
 
+	// Activity B: calendar occupancy — meetings (not appointments / all-day / cancelled) + calls, each
+	// filling every hour slot it spans (a 2h meeting hits both hours; a missed/0-length call → its start
+	// hour). Guarded at 48 hours so a stray multi-day entry can't fill the whole grid.
+	const occupy = (start: number, end: number): void => {
+		if (!(start > 0)) return;
+		const t = new Date(start);
+		t.setMinutes(Math.floor(t.getMinutes() / 15) * 15, 0, 0); // snap to the quarter-hour
+		let cur = t.getTime();
+		let guard = 0;
+		do {
+			bumpRhythm(rhythmBMap, cur);
+			cur += QUARTER_MS;
+		} while (cur < end && ++guard < 200);
+	};
+	for (const e of store.events.list({ limit: BIG }))
+		if (e.kind === 'meeting' && !e.isCancelled && !e.isAllDay)
+			occupy(e.startTs, Math.max(e.endTs, e.startTs));
+	for (const c of store.calls.list({ limit: BIG })) occupy(c.startTs, c.startTs + (c.durationMs || 0));
+
+	// Weekly axis (Monday-anchored) over the message span; align both grids to it (empty weeks → zeros).
+	const rhythmWeeks: number[] = [];
+	if (lastTs > 0) {
+		const to = mondayMs(lastTs);
+		for (let wk = mondayMs(Number.isFinite(firstTs) ? firstTs : lastTs); wk <= to; wk = mondayMs(wk + 8 * DAY))
+			rhythmWeeks.push(wk);
+	}
+	const zeroCells = (): number[] => new Array(RHYTHM_CELLS).fill(0);
+	const rhythmA = rhythmWeeks.map((wk) => rhythmAMap.get(wk) ?? zeroCells());
+	const rhythmB = rhythmWeeks.map((wk) => rhythmBMap.get(wk) ?? zeroCells());
+
 	const mix = new Map<string, number>();
 	for (const c of convs) mix.set(c.kind, (mix.get(c.kind) ?? 0) + 1);
 	const convMix = [...mix.entries()].sort((a, b) => b[1] - a[1]).map(([kind, count]) => ({ kind, count }));
@@ -216,6 +284,9 @@ export function computeWrapped(store: TeamsStore): WrappedData {
 		messagesPerDay,
 		busiestDay,
 		hourHistogram: hours.map((count, hour) => ({ hour, count })),
+		rhythmWeeks,
+		rhythmA,
+		rhythmB,
 		nightOwlPct,
 		longestStreak,
 		firstMessage: first,

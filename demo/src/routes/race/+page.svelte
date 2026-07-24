@@ -205,7 +205,7 @@
 			y: { label: 'messages / day', grid: true, domain: [0, yMax] },
 			marks: [
 				Plot.areaY(shown, { x: 'day', y: 'count', fill: 'var(--chart-1)', fillOpacity: 0.18, curve: 'monotone-x', clip: true }),
-				Plot.lineY(shown, { x: 'day', y: 'count', stroke: 'var(--chart-1)', strokeWidth: 1.5, curve: 'monotone-x', clip: true }),
+				Plot.lineY(shown, { x: 'day', y: 'count', stroke: 'var(--chart-1)', strokeWidth: 2.5, curve: 'monotone-x', clip: true }),
 				Plot.ruleY([0]),
 			],
 		} as Parameters<typeof Plot.plot>[0];
@@ -259,7 +259,7 @@
 							? 0
 							: 1}"
 					>
-						<div class="text-muted-foreground w-36 shrink-0 truncate text-right text-sm">
+						<div class="text-muted-foreground w-28 shrink-0 truncate text-right text-sm">
 							{abbrev(p.name)}
 						</div>
 						<div class="min-w-0 flex-1">

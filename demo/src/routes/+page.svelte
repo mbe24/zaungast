@@ -149,7 +149,7 @@
 				y: { type: activityScale, label: 'messages', grid: true, axis: 'right', ticks: 5 },
 				marks: [
 					Plot.areaY(data.messagesPerDay, { x: (d: any) => new Date(d.date), y: 'count', fill: 'var(--chart-1)', fillOpacity: 0.2, curve: 'monotone-x', clip: true }),
-					Plot.lineY(data.messagesPerDay, { x: (d: any) => new Date(d.date), y: 'count', stroke: 'var(--chart-1)', strokeWidth: 1.5, curve: 'monotone-x', clip: true }),
+					Plot.lineY(data.messagesPerDay, { x: (d: any) => new Date(d.date), y: 'count', stroke: 'var(--chart-1)', strokeWidth: 2.5, curve: 'monotone-x', clip: true }),
 					Plot.ruleY([0]),
 				],
 			} as Parameters<typeof Plot.plot>[0]),

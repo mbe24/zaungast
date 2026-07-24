@@ -5,9 +5,14 @@
 	import { onMount } from 'svelte';
 	import { theme, themes, setTheme, type ThemeId } from '$lib/theme.svelte';
 	import { raceProgress, toggleRace } from '$lib/race.svelte';
+	import { rhythmProgress, toggleRhythm } from '$lib/rhythm.svelte';
 	import { app } from '$lib/app.svelte';
 
 	let { children } = $props();
+
+	// Build stamp — the short commit hash baked in at build time (vite.config.ts). 'dev' locally.
+	// Deliberately NOT linked to GitHub: local commits may sit unpushed for a while, so a link would 404.
+	const commit = __COMMIT__;
 
 	// Theme picker hidden for now — force Frappé as the standard theme (Fable defines the visual
 	// language next). The app.html pre-paint script sets it too, to avoid a flash.
@@ -15,21 +20,29 @@
 	const showThemePicker = false;
 	onMount(() => setTheme('frappe'));
 
-	// Story-style page bars (part of the sticky header). Basic links for now; auto-advance/timing later.
-	const pages = [
-		{ href: `${base}/`, label: 'Wrapped', race: false },
-		{ href: `${base}/race`, label: 'Over time', race: true },
+	// Story-style page bars (part of the sticky header). Animated pages carry a `progress` (0..1 fill)
+	// and a `toggle` (play/pause) so the active bar doubles as their transport; static pages leave both
+	// null (active → full bar, click → just navigate).
+	type StoryPage = {
+		href: string;
+		label: string;
+		progress: (() => number) | null;
+		toggle: (() => void) | null;
+	};
+	const pages: StoryPage[] = [
+		{ href: `${base}/`, label: 'Wrapped', progress: null, toggle: null },
+		{ href: `${base}/race`, label: 'Over time', progress: raceProgress, toggle: toggleRace },
+		{ href: `${base}/rhythms`, label: 'Rhythms', progress: rhythmProgress, toggle: toggleRhythm },
 	];
 	const norm = (s: string) => s.replace(/\/+$/, '') || '/';
 	const active = (href: string) => norm(page.url.pathname) === norm(href);
-	// Story-bar fill: active race bar tracks playback progress; other active bar is full; inactive empty.
-	const fill = (p: (typeof pages)[number]) =>
-		!active(p.href) ? 0 : p.race ? raceProgress() * 100 : 100;
-	// Clicking the race bar while on the race page controls playback instead of navigating.
-	const onBarClick = (e: MouseEvent, p: (typeof pages)[number]) => {
-		if (p.race && active(p.href)) {
+	// Story-bar fill: an active animated bar tracks its playback progress; other active bar is full; inactive empty.
+	const fill = (p: StoryPage) => (!active(p.href) ? 0 : p.progress ? p.progress() * 100 : 100);
+	// Clicking an animated page's bar while on it controls playback instead of navigating.
+	const onBarClick = (e: MouseEvent, p: StoryPage) => {
+		if (active(p.href) && p.toggle) {
 			e.preventDefault();
-			toggleRace();
+			p.toggle();
 		}
 	};
 </script>
@@ -110,4 +123,12 @@
 	<main class="mx-auto max-w-[1600px] px-8 py-8">
 		{@render children()}
 	</main>
+
+</div>
+
+<!-- Build stamp, pinned to the viewport corner (not in flow) so it never scrolls up over content. -->
+<div
+	class="text-muted-foreground/40 pointer-events-none fixed right-3 bottom-2 z-10 text-xs tabular-nums"
+>
+	{commit === 'dev' ? 'dev build' : `build ${commit}`}
 </div>
