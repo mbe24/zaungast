@@ -14,12 +14,12 @@ export interface WrappedData {
 	busiestDay: { date: number; count: number } | null;
 	hourHistogram: { hour: number; count: number }[]; // 24 buckets, local hour
 	// Bivariate weekly-rhythm heatmap: per Monday-anchored week, a flat 7×70 fine grid (cell = day*70 +
-	// fineSlot; day 0=Mon..6=Sun; fineSlot 0=night 23–02, 1..68=06:00..22:00 in 15-min steps, 69=early
+	// fineSlot; day 0=Sun..6=Sat; fineSlot 0=night 23–02, 1..68=06:00..22:00 in 15-min steps, 69=early
 	// 02–06). A = human chat messages; B = calendar occupancy (meetings + calls). The page rolling-means
 	// over 4 weeks, convolves along the minute axis for soft transitions, and animates week by week.
-	rhythmWeeks: number[]; // Monday-midnight epoch ms per week
-	rhythmA: number[][]; // [weekIndex] → 126 chat-message counts
-	rhythmB: number[][]; // [weekIndex] → 126 calendar-occupancy counts
+	rhythmWeeks: number[]; // Sunday-midnight (week start) epoch ms per week
+	rhythmA: number[][]; // [weekIndex] → 7×70 fine chat counts (day*70 + fineSlot)
+	rhythmB: number[][]; // [weekIndex] → 7×70 fine calendar-occupancy counts
 	nightOwlPct: number; // share of messages sent 22:00–05:59
 	longestStreak: number; // longest run of consecutive days with ≥1 message
 	firstMessage: { ts: number; senderName: string | null; content: string; where: string } | null;
@@ -33,7 +33,7 @@ export interface WrappedData {
 const DAY = 86_400_000;
 const BIG = 1_000_000; // effectively "all rows"
 
-// Bivariate weekly-rhythm heatmap. The worker always emits all 7 days (Mon=0..Sun=6); the page chooses
+// Bivariate weekly-rhythm heatmap. The worker always emits all 7 days (Sun=0..Sat=6); the page chooses
 // how many to render. A (chat) counts human messages only unless A_INCLUDE_BOTS is flipped.
 const HOUR_QUARTERS = 4; // 15-min sub-hour resolution — the cell's vertical (minutes-within-hour) axis
 const QUARTER_MS = 15 * 60_000;
@@ -47,10 +47,12 @@ const fineOf = (dt: Date): number => {
 	if (h >= 6 && h <= 22) return 1 + (h - 6) * HOUR_QUARTERS + Math.floor(dt.getMinutes() / 15);
 	return h >= 23 || h < 2 ? 0 : FINE_PER_DAY - 1; // night / early buffers
 };
-const cellOf = (dt: Date): number => ((dt.getDay() + 6) % 7) * FINE_PER_DAY + fineOf(dt);
-const mondayMs = (ts: number): number => {
+const cellOf = (dt: Date): number => dt.getDay() * FINE_PER_DAY + fineOf(dt); // day 0=Sun..6=Sat
+// Week anchored to SUNDAY (Sun→Sat), so the Sunday shown is the day BEFORE that week's Monday — the row
+// reads left→right chronologically and each week is one coherent smoothed/animated unit.
+const weekStartMs = (ts: number): number => {
 	const dt = new Date(ts);
-	return new Date(dt.getFullYear(), dt.getMonth(), dt.getDate() - ((dt.getDay() + 6) % 7)).getTime();
+	return new Date(dt.getFullYear(), dt.getMonth(), dt.getDate() - dt.getDay()).getTime();
 };
 
 export function computeWrapped(store: TeamsStore): WrappedData {
@@ -78,11 +80,11 @@ export function computeWrapped(store: TeamsStore): WrappedData {
 	// Per-1:1-partner daily message counts (both sides), for the bar-chart race.
 	const partnerDays = new Map<string, Map<number, number>>();
 	const hours = new Array(24).fill(0) as number[];
-	// Per Monday-week rhythm grids (7×18 flat). A = chat, B = calendar occupancy.
+	// Per Sunday-week fine rhythm grids (7×70). A = chat, B = calendar occupancy.
 	const rhythmAMap = new Map<number, number[]>();
 	const rhythmBMap = new Map<number, number[]>();
 	const bumpRhythm = (map: Map<number, number[]>, ts: number): void => {
-		const wk = mondayMs(ts);
+		const wk = weekStartMs(ts);
 		let arr = map.get(wk);
 		if (!arr) map.set(wk, (arr = new Array(RHYTHM_CELLS).fill(0)));
 		arr[cellOf(new Date(ts))]++;
@@ -258,8 +260,8 @@ export function computeWrapped(store: TeamsStore): WrappedData {
 	// Weekly axis (Monday-anchored) over the message span; align both grids to it (empty weeks → zeros).
 	const rhythmWeeks: number[] = [];
 	if (lastTs > 0) {
-		const to = mondayMs(lastTs);
-		for (let wk = mondayMs(Number.isFinite(firstTs) ? firstTs : lastTs); wk <= to; wk = mondayMs(wk + 8 * DAY))
+		const to = weekStartMs(lastTs);
+		for (let wk = weekStartMs(Number.isFinite(firstTs) ? firstTs : lastTs); wk <= to; wk = weekStartMs(wk + 8 * DAY))
 			rhythmWeeks.push(wk);
 	}
 	const zeroCells = (): number[] => new Array(RHYTHM_CELLS).fill(0);

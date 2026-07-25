@@ -5,47 +5,37 @@
 	import { base } from '$app/paths';
 	import { app } from '$lib/app.svelte';
 	import { rhythm, toggleRhythm } from '$lib/rhythm.svelte';
-	import { flavors } from '@catppuccin/palette';
+	import { colorRGB, CHAT, MEET, BOTH } from '$lib/rhythm-color';
 
-	// ---- config (all code-controlled; no user toggles) ----
-	const WEEKDAYS = 7; // 7 = Mon–Sun, 5 = Mon–Fri
-	const ROWS = 19; // grid rows: 0 = night, 1..17 = 06:00..22:00, 18 = early
-	const QUARTERS = 4; // 15-min segments per hour cell — the vertical minutes-within-hour axis
-	const FINE = 70; // fine slots per day in the worker data (must match wrapped.ts FINE_PER_DAY)
+	// ---- config ----
+	const WEEKDAYS = 7;
+	const ROWS = 19; // 0 = night, 1..17 = 06:00..22:00, 18 = early
+	const FINE = 70; // fine slots per day in the worker data (matches wrapped.ts FINE_PER_DAY)
 	const SMOOTH_WEEKS = 4; // rolling window along the animation (week) axis
-	const KERNEL = [1, 2, 3, 2, 1]; // convolution along the minute axis → soft quarter/hour transitions
-	const TICK_MS = 450; // one week per tick
-	const GAMMA = 0.65; // intensity emphasis
-	const MORPH_MS = 500; // per-segment colour transition (week-to-week morph)
+	// Gaussian convolution along the minute axis. Wider sigma → softer active↔empty edges (the sharp
+	// starts/stops of a block fade over ±~3σ quarter-hours). Bump CONV_SIGMA for more melt.
+	const CONV_SIGMA = 2; // in quarter-hours (2 ≈ ±1.5h fade)
+	const KERNEL = ((sigma: number): number[] => {
+		const r = Math.max(1, Math.round(sigma * 3));
+		const k: number[] = [];
+		for (let i = -r; i <= r; i++) k.push(Math.exp(-(i * i) / (2 * sigma * sigma)));
+		return k;
+	})(CONV_SIGMA);
+	const WEEK_MS = 450; // display time per week (autoplay speed)
+	const ROW_PX = 34; // cell row height (css px)
+	const FEATHER = 0.5; // 0..1 horizontal feather between day columns (softens the vertical cuts; 0 = off)
+	const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']; // Sunday-anchored
 
-	// Colours from the official @catppuccin/palette (Frappé).
-	const F = flavors.frappe.colors;
-	const CHAT = F.blue.hex; // chat (A)
-	const MEET = F.maroon.hex; // meetings (B)
-	const RAMP0 = F.surface1.hex; // zero-intensity end of the ramp
-	const EMPTY = F.surface0.hex; // a truly-empty slot
-	const GRIDLINE = F.surface2.hex; // shared hairline between cells
-	const BOTH_SWATCH = F.mauve.hex; // caption "both" swatch
-
-	const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 	const fmtWeek = (ms: number) => (ms > 0 ? new Date(ms).toLocaleDateString() : '');
 	const slotLabel = (row: number) => {
 		if (row < 1 || row > 17) return ''; // buffer rows unlabeled
 		const hh = row + 5; // 6..22
-		return `${hh % 12 === 0 ? 12 : hh % 12} ${hh < 12 ? 'AM' : 'PM'}`; // 6 AM … 10 PM
-	};
-	// Fine-slot indices (0..69 within a day) a grid row occupies: buffers = 1, hours = their 4 quarters.
-	const fineIndices = (row: number): number[] => {
-		if (row === 0) return [0]; // night buffer
-		if (row === 18) return [FINE - 1]; // early buffer
-		const b = 1 + (row - 1) * QUARTERS;
-		return [b, b + 1, b + 2, b + 3];
+		return `${hh % 12 === 0 ? 12 : hh % 12} ${hh < 12 ? 'AM' : 'PM'}`;
 	};
 
 	const data = $derived(app.data);
 	const weeks = $derived(data?.rhythmWeeks ?? []);
 
-	// Rolling mean along the WEEK axis (per fine cell) — stabilises the pattern across the time-lapse.
 	function rollingMean(series: number[][], win: number): number[][] {
 		const cells = series[0]?.length ?? 0;
 		return series.map((_, i) => {
@@ -57,8 +47,7 @@
 			return out;
 		});
 	}
-	// Convolution along the MINUTE axis: smooth each day's contiguous hour-quarters (fine slots 1..68)
-	// so quarter- and hour-boundaries fade softly rather than stepping hard. Buffers (0, 69) untouched.
+	// Convolve each day's contiguous hour-quarters (fine slots 1..68) along the minute axis.
 	function convolveDay(week: number[]): number[] {
 		const half = KERNEL.length >> 1;
 		const out = week.slice();
@@ -78,7 +67,6 @@
 		}
 		return out;
 	}
-	// 95th percentile of nonzero smoothed values — per-metric normaliser (chat and meetings differ in scale).
 	function p95(series: number[][]): number {
 		const vals: number[] = [];
 		for (const row of series) for (const v of row) if (v > 0) vals.push(v);
@@ -92,53 +80,184 @@
 	const aP95 = $derived(p95(convA));
 	const bP95 = $derived(p95(convB));
 
-	const w = $derived(Math.min(rhythm.weekIndex, Math.max(0, weeks.length - 1)));
-	const frameA = $derived(convA[w] ?? []);
-	const frameB = $derived(convB[w] ?? []);
+	const curWeek = $derived(weeks[Math.round(Math.min(rhythm.pos, Math.max(0, weeks.length - 1)))] ?? 0);
 
-	// One fine slot → its blended colour: hue = chat-blue ↔ meeting-maroon by relative amount (OKLCH, so
-	// the balanced midpoint is purple, not mud); intensity ramps from the surface up to that hue.
-	function slotColor(aVal: number, bVal: number): string {
-		const aN = Math.min(1, aVal / aP95);
-		const bN = Math.min(1, bVal / bP95);
-		const sum = aN + bN;
-		if (sum <= 0) return EMPTY;
-		const ratio = ((bN / sum) * 100).toFixed(1); // 0% = all chat … 100% = all meetings
-		const t = (Math.pow(Math.max(aN, bN), GAMMA) * 100).toFixed(1);
-		const hue = `color-mix(in oklch, ${MEET} ${ratio}%, ${CHAT})`;
-		return `color-mix(in oklab, ${hue} ${t}%, ${RAMP0})`;
-	}
+	let canvasEl = $state<HTMLCanvasElement | null>(null);
 
-	// Playback (weekly) + grab-to-scrub — mirrors the race page.
 	onMount(() => {
 		rhythm.weeks = weeks.length;
-		rhythm.weekIndex = 0;
+		rhythm.pos = 0;
 		rhythm.playing = true;
+		const cv = canvasEl;
+		if (!cv) return;
+
+		const off = document.createElement('canvas'); // reusable 1×H strip (crisp per-day column)
+		const off2 = document.createElement('canvas'); // WEEKDAYS×H source for the horizontal feather
+		let raf = 0;
+		let last = 0;
+
+		const resize = () => {
+			const d = Math.max(1, window.devicePixelRatio || 1);
+			cv.width = Math.max(1, Math.round(cv.clientWidth * d));
+			cv.height = Math.max(1, Math.round(cv.clientHeight * d));
+		};
+		const ro = new ResizeObserver(resize);
+		ro.observe(cv);
+		resize();
+
+		const draw = () => {
+			const ctx = cv.getContext('2d');
+			if (!ctx) return;
+			const W = cv.width;
+			const H = cv.height;
+			ctx.clearRect(0, 0, W, H);
+			const A = convA;
+			const B = convB;
+			if (!A.length || W < 1 || H < 1) return;
+			const pos = Math.min(rhythm.pos, A.length - 1);
+			const w0 = Math.floor(pos);
+			const w1 = Math.min(w0 + 1, A.length - 1);
+			const f = pos - w0;
+			const A0 = A[w0];
+			const A1 = A[w1];
+			const B0 = B[w0];
+			const B1 = B[w1];
+			const pa = aP95;
+			const pb = bP95;
+			const colW = W / WEEKDAYS;
+			const rowH = H / ROWS;
+			// Fine-slot centre positions down the column, so night↔6 AM and 10 PM↔early blend across the
+			// buffer boundaries instead of cutting (the buffers aggregate 3–4h, so the blend is gentle).
+			const hourTop = rowH;
+			const hourBot = (ROWS - 1) * rowH;
+			const hourSpan = hourBot - hourTop;
+			const cNight = rowH * 0.5; // night-buffer centre
+			const c1 = hourTop + (0.5 / 68) * hourSpan; // 06:00 slot centre
+			const c68 = hourTop + (67.5 / 68) * hourSpan; // 22:45 slot centre
+			const cEarly = hourBot + rowH * 0.5; // early-buffer centre
+
+			off.width = 1;
+			off.height = H;
+			const octx = off.getContext('2d');
+			if (!octx) return;
+			const img = octx.createImageData(1, H);
+			const px = img.data;
+			off2.width = WEEKDAYS;
+			off2.height = H;
+			const octx2 = off2.getContext('2d');
+			if (!octx2) return;
+			const simg = octx2.createImageData(WEEKDAYS, H);
+			const spx = simg.data;
+			ctx.imageSmoothingEnabled = false;
+
+			for (let day = 0; day < WEEKDAYS; day++) {
+				const bse = day * FINE;
+				for (let y = 0; y < H; y++) {
+					let s0: number;
+					let s1: number;
+					let fr: number;
+					if (y <= cNight) {
+						s0 = s1 = bse; // flat above the night-buffer centre
+						fr = 0;
+					} else if (y < c1) {
+						s0 = bse; // night → 6 AM blend
+						s1 = bse + 1;
+						fr = (y - cNight) / (c1 - cNight);
+					} else if (y <= c68) {
+						const fp = ((y - c1) / (c68 - c1)) * 67; // across the 67 gaps between slots 1..68
+						const i = Math.min(66, Math.floor(fp));
+						fr = fp - i;
+						s0 = bse + 1 + i;
+						s1 = bse + 2 + i;
+					} else if (y < cEarly) {
+						s0 = bse + FINE - 2; // 10 PM → early blend (slot 68 → 69)
+						s1 = bse + FINE - 1;
+						fr = (y - c68) / (cEarly - c68);
+					} else {
+						s0 = s1 = bse + FINE - 1; // flat below the early-buffer centre
+						fr = 0;
+					}
+					// bilinear: interpolate between weeks (f), then between adjacent fine slots (fr).
+					const a0 = A0[s0] + (A1[s0] - A0[s0]) * f;
+					const a1 = A0[s1] + (A1[s1] - A0[s1]) * f;
+					const av = a0 + (a1 - a0) * fr;
+					const b0 = B0[s0] + (B1[s0] - B0[s0]) * f;
+					const b1 = B0[s1] + (B1[s1] - B0[s1]) * f;
+					const bv = b0 + (b1 - b0) * fr;
+					const aN = Math.min(1, Math.max(0, av) / pa);
+					const bN = Math.min(1, Math.max(0, bv) / pb);
+					const [r, g, b] = colorRGB(aN, bN);
+					const o = y * 4;
+					px[o] = r;
+					px[o + 1] = g;
+					px[o + 2] = b;
+					px[o + 3] = 255;
+					const so = (y * WEEKDAYS + day) * 4;
+					spx[so] = r;
+					spx[so + 1] = g;
+					spx[so + 2] = b;
+					spx[so + 3] = 255;
+				}
+				octx.putImageData(img, 0, 0);
+				ctx.drawImage(off, 0, 0, 1, H, Math.round(day * colW), 0, Math.ceil(colW), H);
+			}
+
+			// Subtle horizontal feather: overlay the columns bilinearly-blended at partial alpha, so the
+			// hard vertical cuts between days soften. Gridlines (below) stay crisp on top.
+			if (FEATHER > 0) {
+				octx2.putImageData(simg, 0, 0);
+				ctx.imageSmoothingEnabled = true;
+				ctx.globalAlpha = FEATHER;
+				ctx.drawImage(off2, 0, 0, WEEKDAYS, H, 0, 0, W, H);
+				ctx.globalAlpha = 1;
+				ctx.imageSmoothingEnabled = false;
+			}
+
+			// hairline grid on top (day + hour separators)
+			const line = Math.max(1, Math.round((window.devicePixelRatio || 1) * 1.5));
+			ctx.fillStyle = 'rgba(198, 208, 245, 0.13)';
+			for (let day = 1; day < WEEKDAYS; day++) ctx.fillRect(Math.round(day * colW) - (line >> 1), 0, line, H);
+			for (let row = 1; row < ROWS; row++) ctx.fillRect(0, Math.round(row * rowH) - (line >> 1), W, line);
+		};
+
+		const loop = (ts: number) => {
+			if (!last) last = ts;
+			const dt = ts - last;
+			last = ts;
+			if (rhythm.playing && rhythm.weeks > 1) {
+				rhythm.pos += dt / WEEK_MS;
+				if (rhythm.pos >= rhythm.weeks - 1) {
+					rhythm.pos = rhythm.weeks - 1;
+					rhythm.playing = false;
+				}
+			}
+			draw();
+			raf = requestAnimationFrame(loop);
+		};
+		raf = requestAnimationFrame(loop);
+		return () => {
+			cancelAnimationFrame(raf);
+			ro.disconnect();
+		};
 	});
-	$effect(() => {
-		if (!rhythm.playing || rhythm.weeks < 2) return;
-		const id = setInterval(() => {
-			if (rhythm.weekIndex >= rhythm.weeks - 1) rhythm.playing = false;
-			else rhythm.weekIndex++;
-		}, TICK_MS);
-		return () => clearInterval(id);
-	});
+
+	// Drag to scrub weeks; click to pause/resume.
 	let dragging = false;
 	let dragMoved = false;
 	let dragWasPlaying = false;
 	let dragStartX = 0;
-	let dragStartIndex = 0;
+	let dragStartPos = 0;
 	let dragWidth = 1;
-	function onGridPointerDown(e: PointerEvent): void {
+	function onDown(e: PointerEvent): void {
 		dragging = true;
 		dragMoved = false;
 		dragWasPlaying = rhythm.playing;
 		dragStartX = e.clientX;
-		dragStartIndex = rhythm.weekIndex;
+		dragStartPos = rhythm.pos;
 		dragWidth = (e.currentTarget as HTMLElement).clientWidth || 1;
 		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 	}
-	function onGridPointerMove(e: PointerEvent): void {
+	function onMove(e: PointerEvent): void {
 		if (!dragging) return;
 		const dx = e.clientX - dragStartX;
 		if (!dragMoved && Math.abs(dx) < 4) return;
@@ -146,10 +265,10 @@
 			dragMoved = true;
 			rhythm.playing = false;
 		}
-		const total = Math.max(1, weeks.length - 1);
-		rhythm.weekIndex = Math.max(0, Math.min(total, dragStartIndex + Math.round((dx / dragWidth) * total)));
+		const total = Math.max(1, rhythm.weeks - 1);
+		rhythm.pos = Math.max(0, Math.min(total, dragStartPos + (dx / dragWidth) * total));
 	}
-	function onGridPointerUp(e: PointerEvent): void {
+	function onUp(e: PointerEvent): void {
 		if (!dragging) return;
 		dragging = false;
 		(e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
@@ -175,57 +294,41 @@
 					<Card.Description>
 						A typical week over time — <span style="color:{CHAT}">chat</span> and
 						<span style="color:{MEET}">meetings</span>, blending to
-						<span style="color:{BOTH_SWATCH}">both at once</span>. Drag to scrub, tap to pause.
+						<span style="color:{BOTH}">both at once</span>. Drag to scrub, tap to pause.
 					</Card.Description>
 				</div>
-				<span class="font-heading text-2xl tabular-nums">{fmtWeek(weeks[w])}</span>
+				<span class="font-heading text-2xl tabular-nums">{fmtWeek(curWeek)}</span>
 			</div>
 		</Card.Header>
 		<Card.Content>
-			<div
-				class="w-full cursor-pointer touch-none select-none"
-				role="button"
-				tabindex="0"
-				aria-label="Pause or resume; drag to scrub weeks"
-				onpointerdown={onGridPointerDown}
-				onpointermove={onGridPointerMove}
-				onpointerup={onGridPointerUp}
-				onpointercancel={onGridPointerUp}
-			>
-				<!-- Shared-line grid: the container's colour shows through the 1px gaps between cells. -->
-				<div
-					class="grid gap-px"
-					style="grid-template-columns: 4.5rem repeat({WEEKDAYS}, minmax(0, 1fr)); background: {GRIDLINE};"
-				>
-					<div class="bg-card"></div>
-					{#each DAY_LABELS.slice(0, WEEKDAYS) as d (d)}
-						<div class="bg-card text-muted-foreground pb-1 text-center text-lg font-semibold tracking-wider uppercase">
+			<div class="grid w-full" style="grid-template-columns: 4.5rem 1fr;">
+				<div></div>
+				<div class="flex">
+					{#each DAY_LABELS as d (d)}
+						<div class="text-muted-foreground flex-1 pb-1 text-center text-lg font-semibold tracking-wider uppercase">
 							{d}
 						</div>
 					{/each}
+				</div>
+				<div class="flex flex-col" style="height: {ROWS * ROW_PX}px;">
 					{#each Array(ROWS) as _, row (row)}
-						{@const idx = fineIndices(row)}
-						<div class="bg-card text-muted-foreground/70 pr-2 text-right text-lg font-semibold leading-9 tabular-nums">
+						<div class="text-muted-foreground/70 flex flex-1 items-center justify-end pr-2 text-lg font-semibold tabular-nums">
 							{slotLabel(row)}
 						</div>
-						{#each Array(WEEKDAYS) as _, day (day)}
-							{#if idx.length === 1}
-								<div
-									class="h-9"
-									style="background: {slotColor(frameA[day * FINE + idx[0]] ?? 0, frameB[day * FINE + idx[0]] ?? 0)}; transition: background-color {MORPH_MS}ms ease;"
-								></div>
-							{:else}
-								<div class="grid h-9 grid-rows-4">
-									{#each idx as fi (fi)}
-										<div
-											style="background: {slotColor(frameA[day * FINE + fi] ?? 0, frameB[day * FINE + fi] ?? 0)}; transition: background-color {MORPH_MS}ms ease;"
-										></div>
-									{/each}
-								</div>
-							{/if}
-						{/each}
 					{/each}
 				</div>
+				<canvas
+					bind:this={canvasEl}
+					class="block w-full cursor-pointer touch-none select-none"
+					style="height: {ROWS * ROW_PX}px;"
+					role="button"
+					tabindex="0"
+					aria-label="Weekly rhythm heatmap — drag to scrub weeks, tap to pause"
+					onpointerdown={onDown}
+					onpointermove={onMove}
+					onpointerup={onUp}
+					onpointercancel={onUp}
+				></canvas>
 			</div>
 		</Card.Content>
 	</Card.Root>
