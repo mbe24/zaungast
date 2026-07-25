@@ -62,6 +62,22 @@ test('extractFromSnapshotAsync with no executor delegates to the serial path', a
   expect(await extractFromSnapshotAsync(snap)).toEqual(extractFromSnapshot(snap));
 });
 
+test('extract tasks survive structuredClone (the worker boundary) === serial', async () => {
+  // structuredClone(task) is exactly what postMessage to an extract worker does — the compacted
+  // records + bundled mapping cross by copy. Proves the returned rows are byte-identical.
+  const snap = loadSnapshotFrom(memSource());
+  const serial = extractFromSnapshot(snap);
+  const cloningExec: ExtractExecutor = async (task) => {
+    const t = structuredClone(task);
+    return extractRecords(t.records, t.mapping, t.entity);
+  };
+  const parallel = await extractFromSnapshotAsync(snap, {
+    runExtract: cloningExec,
+    chunkRecords: 4,
+  });
+  expect(parallel).toEqual(serial);
+});
+
 test('openStoreFromSnapshot (parallel extract) builds the same store as openStoreFromSource', async () => {
   const driver = await createSqliteWasmDriver();
   const serial = openStoreFromSource(memSource(), { driver });

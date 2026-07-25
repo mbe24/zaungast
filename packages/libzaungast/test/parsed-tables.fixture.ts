@@ -61,3 +61,14 @@ test('parsedTables omitted is exactly the inline path (unchanged default)', () =
   const viaEmpty = loadSnapshotFrom(memSourceFrom(), { parsedTables: new Map() });
   expect(viaEmpty).toEqual(baseline);
 });
+
+test('parsedTables survives structuredClone (the worker boundary) — byte-identical', () => {
+  // structuredClone is exactly the serialization a postMessage from a parse worker performs (minus
+  // transfer): entry views become copies over fresh buffers. Proves worker-parsed tables fold identically.
+  const baseline = loadSnapshotFrom(memSourceFrom());
+  const src = memSourceFrom();
+  const cloned = structuredClone(parseAllLdb(src));
+  const viaCloned = loadSnapshotFrom(src, { parsedTables: cloned });
+  expect(viaCloned).toEqual(baseline);
+  expect(fingerprint(viaCloned).hash).toBe(fingerprint(baseline).hash);
+});
