@@ -11,6 +11,7 @@ import {
 	type SnapshotSource,
 	type Snapshot,
 	type TableReadResult,
+	type EntityExtract,
 	type TeamsStore,
 	type StoreMeta,
 	type BuildPhase,
@@ -86,42 +87,57 @@ const api = {
 		let parseMs = 0;
 		let usedPool = false;
 		let snap: Snapshot | null = null;
-		if (pool) {
-			try {
-				const tParse = performance.now();
-				const parsed = new Map<string, TableReadResult>();
-				await Promise.all(
-					ldbNames.map(async (n) => {
-						const res = await pool!.run<TableReadResult>({ bytes: map.get(n)! });
-						parsed.set(n, res);
-						onProgress?.({ type: 'decoding', name: n, i: ++i, n: dataFiles.length });
-					}),
-				);
-				parseMs = performance.now() - tParse;
-				snap = loadSnapshotFrom(source, { parsedTables: parsed });
-				usedPool = true;
-			} catch (e) {
-				console.warn('[zaungast] parse pool failed → serial fallback', e);
-				snap = null;
-				usedPool = false;
-			} finally {
-				pool.destroy();
+		try {
+			if (pool) {
+				try {
+					const tParse = performance.now();
+					const parsed = new Map<string, TableReadResult>();
+					await Promise.all(
+						ldbNames.map(async (n) => {
+							const res = await pool!.run<TableReadResult>({ kind: 'parse', bytes: map.get(n)! });
+							parsed.set(n, res);
+							onProgress?.({ type: 'decoding', name: n, i: ++i, n: dataFiles.length });
+						}),
+					);
+					parseMs = performance.now() - tParse;
+					snap = loadSnapshotFrom(source, { parsedTables: parsed });
+					usedPool = true;
+				} catch (e) {
+					console.warn('[zaungast] parse pool failed → serial fallback', e);
+					snap = null;
+					usedPool = false;
+				}
 			}
-		}
 
-		if (usedPool && snap) {
-			// Dev-only: prove the parallel-folded Snapshot equals a serial one (on the user's real data).
-			if (import.meta.env.DEV) {
-				const ok = fingerprint(snap).hash === fingerprint(loadSnapshotFrom(source)).hash;
-				console.log(
-					ok
-						? '[zaungast verify] parallel snapshot == serial ✓'
-						: '[zaungast verify] ✗ FINGERPRINT MISMATCH',
-				);
+			if (usedPool && snap) {
+				// Dev-only: prove the parallel-folded Snapshot equals a serial one (on the user's real data).
+				if (import.meta.env.DEV) {
+					const ok = fingerprint(snap).hash === fingerprint(loadSnapshotFrom(source)).hash;
+					console.log(
+						ok
+							? '[zaungast verify] parallel snapshot == serial ✓'
+							: '[zaungast verify] ✗ FINGERPRINT MISMATCH',
+					);
+				}
+				// C4: fan the SSV extract out across the SAME pool (the library compacts records first, then
+				// concatenates results in dispatch order → byte-identical to serial).
+				store = await openStoreFromSnapshot(snap, {
+					driver,
+					deferFts: true,
+					onPhase,
+					runExtract: (task) =>
+						pool!.run<EntityExtract>({
+							kind: 'extract',
+							records: task.records,
+							mapping: task.mapping,
+							entity: task.entity,
+						}),
+				});
+			} else {
+				store = openStoreFromSource(source, { driver, deferFts: true, onPhase });
 			}
-			store = await openStoreFromSnapshot(snap, { driver, deferFts: true, onPhase });
-		} else {
-			store = openStoreFromSource(source, { driver, deferFts: true, onPhase });
+		} finally {
+			pool?.destroy();
 		}
 		const buildMs = performance.now() - tBuild;
 

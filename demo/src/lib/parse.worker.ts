@@ -1,11 +1,24 @@
-// Parse-worker: decode one `.ldb` file's bytes → TableReadResult, off the coordinator thread. The
-// coordinator folds the results into the Snapshot (deterministic order → byte-identical fingerprint).
-// Input bytes are CLONED in (the coordinator keeps its copy for the serial fallback / dev verify); the
-// parsed entry buffers are TRANSFERRED back (dedup — entries share per-block buffers) so no bytes copy.
-import { parseTable } from 'libzaungast/web';
+// Ingest worker for the pool: off-thread `.ldb` parse (kind 'parse') AND SSV extract (kind 'extract').
+// One worker script serves both cold-read phases so the pool is spawned once and reused.
+//  • parse:   bytes → TableReadResult; input CLONED in (coordinator keeps its copy for the serial
+//             fallback / dev verify), parsed entry buffers TRANSFERRED back (dedup — entries share
+//             per-block buffers) so no bytes are copied.
+//  • extract: (records, mapping, entity) → EntityExtract; records arrive compact-copied by the library.
+import { parseTable, extractRecords } from 'libzaungast/web';
 
-self.onmessage = (e: MessageEvent<{ bytes: Uint8Array }>) => {
-  const res = parseTable(e.data.bytes);
-  const transfer = [...new Set(res.entries.flatMap(([k, v]) => [k.buffer, v.buffer]))];
-  (self as unknown as Worker).postMessage(res, transfer as Transferable[]);
+type Msg =
+  | { kind: 'parse'; bytes: Uint8Array }
+  | { kind: 'extract'; records: unknown[]; mapping: unknown; entity: string };
+
+self.onmessage = (e: MessageEvent<Msg>) => {
+  const msg = e.data;
+  const post = self as unknown as Worker;
+  if (msg.kind === 'parse') {
+    const res = parseTable(msg.bytes);
+    const transfer = [...new Set(res.entries.flatMap(([k, v]) => [k.buffer, v.buffer]))];
+    post.postMessage(res, transfer as Transferable[]);
+  } else {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    post.postMessage(extractRecords(msg.records as any, msg.mapping as any, msg.entity));
+  }
 };
