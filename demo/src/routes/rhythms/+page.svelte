@@ -1,20 +1,20 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import * as Card from '$lib/components/ui/card';
-	import { Button } from '$lib/components/ui/button';
-	import { base } from '$app/paths';
+	import NoData from '$lib/components/NoData.svelte';
 	import { app } from '$lib/app.svelte';
 	import { rhythmPlayback } from '$lib/playback.svelte';
 	import { colorRGB, CHAT, MEET, BOTH } from '$lib/rhythm-color';
 	import { fmtDate } from '$lib/format';
 	import { scrub } from '$lib/scrub';
+	import { FINE_PER_DAY } from '$lib/wrapped';
 
 	const pb = rhythmPlayback; // { state: { pos, playing, frames }, progress, toggle, reset }
 
 	// ---- config ----
 	const WEEKDAYS = 7;
 	const ROWS = 19; // 0 = night, 1..17 = 06:00..22:00, 18 = early
-	const FINE = 70; // fine slots per day in the worker data (matches wrapped.ts FINE_PER_DAY)
+	const FINE = FINE_PER_DAY; // fine slots per day — single source of truth in wrapped.ts
 	const SMOOTH_WEEKS = 4; // rolling window along the animation (week) axis
 	// Gaussian convolution along the minute axis. Wider sigma → softer active↔empty edges (the sharp
 	// starts/stops of a block fade over ±~3σ quarter-hours). Bump CONV_SIGMA for more melt.
@@ -246,10 +246,7 @@
 </script>
 
 {#if !data}
-	<div class="flex min-h-[50vh] flex-col items-center justify-center gap-4 text-center">
-		<p class="text-muted-foreground text-lg">No data yet — pick your Teams cache folder first.</p>
-		<Button href="{base}/" variant="secondary">← Back to start</Button>
-	</div>
+	<NoData />
 {:else}
 	<Card.Root>
 		<Card.Header>

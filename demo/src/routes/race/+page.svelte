@@ -1,15 +1,15 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import * as Card from '$lib/components/ui/card';
-	import { Button } from '$lib/components/ui/button';
 	import Chart from '$lib/components/Chart.svelte';
+	import NoData from '$lib/components/NoData.svelte';
 	import * as Plot from '@observablehq/plot';
-	import { base } from '$app/paths';
 	import { app } from '$lib/app.svelte';
 	import { racePlayback } from '$lib/playback.svelte';
 	import { PALETTE } from '$lib/palette';
 	import { nf, fmtDate, abbrev } from '$lib/format';
 	import { scrub } from '$lib/scrub';
+	import { plotStyle, type PlotOptions } from '$lib/plot';
 
 	const pb = racePlayback; // { state: { pos, playing, frames }, progress, toggle, reset }
 
@@ -120,8 +120,7 @@
 		});
 	});
 
-	const base_style =
-		'background:transparent;color:var(--muted-foreground);font-family:inherit;font-size:14px;';
+	const base_style = plotStyle(14);
 
 	/* eslint-disable @typescript-eslint/no-explicit-any */
 	const curve = $derived.by(() => {
@@ -152,16 +151,13 @@
 				Plot.lineY(shown, { x: 'day', y: 'count', stroke: 'var(--chart-1)', strokeWidth: 2.5, curve: 'monotone-x', clip: true }),
 				Plot.ruleY([0]),
 			],
-		} as Parameters<typeof Plot.plot>[0];
+		} as PlotOptions;
 	});
 	/* eslint-enable @typescript-eslint/no-explicit-any */
 </script>
 
 {#if !data}
-	<div class="flex min-h-[50vh] flex-col items-center justify-center gap-4 text-center">
-		<p class="text-muted-foreground text-lg">No data yet — pick your Teams cache folder first.</p>
-		<Button href="{base}/" variant="secondary">← Back to start</Button>
-	</div>
+	<NoData />
 {:else}
 	<Card.Root>
 		<Card.Header>

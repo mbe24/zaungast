@@ -8,6 +8,7 @@
 	import { app, build } from '$lib/app.svelte';
 	import { PALETTE } from '$lib/palette';
 	import { nf, fmtDate, fmtDateTime, abbrev } from '$lib/format';
+	import { plotStyle, type PlotOptions } from '$lib/plot';
 
 	let fileInput = $state<HTMLInputElement>();
 	// Shared across pages (see $lib/app.svelte); aliased so the template + charts below read as before.
@@ -66,8 +67,8 @@
 	const onFiles = () => build(fileInput?.files ? Array.from(fileInput.files) : []);
 	const pick = () => fileInput?.click();
 
-	// Plot style string (reliably applied to the svg root so tick labels inherit the 16px size).
-	const base = 'background:transparent;color:var(--muted-foreground);font-family:inherit;font-size:16px;';
+	// Plot style (reliably applied to the svg root so tick labels inherit the 16px size).
+	const chartStyle = plotStyle(16);
 
 	// Scale types chosen from each chart's dynamic range (stable across panning — based on the full series).
 	const activityScale = $derived(data ? pickScaleType(data.messagesPerDay.map((d) => d.count)) : 'linear');
@@ -125,7 +126,7 @@
 				marginBottom: 40,
 				marginLeft: 16,
 				marginRight: 56,
-				style: base,
+				style: chartStyle,
 				x: { label: null, domain: [new Date(windowStart), new Date(windowEnd)] },
 				y: { type: activityScale, label: 'messages', grid: true, axis: 'right', ticks: 5 },
 				marks: [
@@ -133,7 +134,7 @@
 					Plot.lineY(data.messagesPerDay, { x: (d: any) => new Date(d.date), y: 'count', stroke: 'var(--chart-1)', strokeWidth: 2.5, curve: 'monotone-x', clip: true }),
 					Plot.ruleY([0]),
 				],
-			} as Parameters<typeof Plot.plot>[0]),
+			} as PlotOptions),
 	);
 
 	const people = $derived(
@@ -143,7 +144,7 @@
 				marginLeft: 130,
 				marginRight: 32,
 				marginBottom: 52,
-				style: base,
+				style: chartStyle,
 				x: { type: peopleScale, label: 'messages', labelOffset: 44, grid: true, ticks: peopleTicks },
 				y: { label: null, tickFormat: (n: string) => abbrev(n) },
 				// One palette colour per person, keyed by name in rank order — same mapping as the race
@@ -153,7 +154,7 @@
 					Plot.barX(data.topPeople, { x: 'messages', y: 'name', fill: 'name', rx: 6, sort: { y: 'x', reverse: true } }),
 					Plot.ruleX([0]),
 				],
-			} as Parameters<typeof Plot.plot>[0]),
+			} as PlotOptions),
 	);
 
 	const hourTotal = $derived(data ? data.hourHistogram.reduce((s, h) => s + h.count, 0) : 0);
@@ -164,7 +165,7 @@
 				marginLeft: 48,
 				marginTop: 30,
 				marginBottom: 40,
-				style: base,
+				style: chartStyle,
 				x: { label: 'hour of day', tickFormat: (h: number) => `${h}` },
 				y: { label: 'share of messages', grid: true, tickFormat: '%' },
 				marks: [
@@ -176,7 +177,7 @@
 					}),
 					Plot.ruleY([0]),
 				],
-			} as Parameters<typeof Plot.plot>[0]),
+			} as PlotOptions),
 	);
 	/* eslint-enable @typescript-eslint/no-explicit-any */
 

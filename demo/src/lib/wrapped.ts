@@ -39,7 +39,7 @@ const HOUR_QUARTERS = 4; // 15-min sub-hour resolution — the cell's vertical (
 const QUARTER_MS = 15 * 60_000;
 // Per-day fine slots: 0 = night 23–02 (aggregate), 1..68 = 06:00..22:00 in 15-min steps, 69 = early
 // 02–06 (aggregate). The page renders each hour as its 4 quarter slots stacked top→bottom.
-const FINE_PER_DAY = 2 + 17 * HOUR_QUARTERS; // 70
+export const FINE_PER_DAY = 2 + 17 * HOUR_QUARTERS; // 70 — the rhythm page imports this (single source)
 const RHYTHM_CELLS = 7 * FINE_PER_DAY;
 const A_INCLUDE_BOTS = false; // flip to true to fold bot messages into Activity A
 const fineOf = (dt: Date): number => {
