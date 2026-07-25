@@ -285,7 +285,7 @@
 					style="height: {ROWS * ROW_PX}px;"
 					role="button"
 					tabindex="0"
-					aria-label="Weekly rhythm heatmap — drag to scrub weeks, tap to pause"
+					aria-label="Weekly rhythm heatmap — drag or use arrow keys to scrub weeks; tap or Enter to pause"
 					use:scrub={{ playback: pb, sign: 1, round: false }}
 				></canvas>
 			</div>

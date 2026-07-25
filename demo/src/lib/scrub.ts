@@ -25,6 +25,10 @@ export function scrubPos(
 	return Math.max(0, Math.min(total, np));
 }
 
+// Pure: one keyboard step (±1 frame) from the current position, snapped to a whole frame and clamped.
+export const stepPos = (pos: number, dir: 1 | -1, total: number): number =>
+	Math.max(0, Math.min(total, Math.round(pos) + dir));
+
 export interface ScrubParams {
 	playback: Playback; // read/written position + playing; toggled on a plain click
 	sign: 1 | -1; // +1: drag right → forward (rhythm); -1: drag left → forward (race)
@@ -70,11 +74,27 @@ export const scrub: Action<HTMLElement, ScrubParams> = (node, params) => {
 			p.playback.toggle(); // a click (no drag) pauses / resumes (restarts at the end)
 		}
 	};
+	// Keyboard: the element is focusable, so make it operable. ←/→ step one frame (pausing playback, like
+	// starting a drag); Enter/Space toggle play/pause (like a tap). Arrows move by position, not drag
+	// direction — a plain slider convention (→ later, ← earlier), independent of `sign`.
+	const key = (e: KeyboardEvent) => {
+		if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+			const total = Math.max(1, p.playback.state.frames - 1);
+			const dir = e.key === 'ArrowRight' ? 1 : -1;
+			p.playback.state.playing = false;
+			p.playback.state.pos = stepPos(p.playback.state.pos, dir, total);
+			e.preventDefault();
+		} else if (e.key === 'Enter' || e.key === ' ') {
+			p.playback.toggle();
+			e.preventDefault();
+		}
+	};
 
 	node.addEventListener('pointerdown', down);
 	node.addEventListener('pointermove', move);
 	node.addEventListener('pointerup', up);
 	node.addEventListener('pointercancel', up);
+	node.addEventListener('keydown', key);
 	return {
 		update(next: ScrubParams) {
 			p = next;
@@ -84,6 +104,7 @@ export const scrub: Action<HTMLElement, ScrubParams> = (node, params) => {
 			node.removeEventListener('pointermove', move);
 			node.removeEventListener('pointerup', up);
 			node.removeEventListener('pointercancel', up);
+			node.removeEventListener('keydown', key);
 		},
 	};
 };

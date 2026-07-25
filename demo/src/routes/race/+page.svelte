@@ -216,7 +216,7 @@
 				class="cursor-grab touch-none select-none active:cursor-grabbing"
 				role="slider"
 				tabindex="0"
-				aria-label="Drag left or right to scrub the timeline"
+				aria-label="Drag, or use arrow keys, to scrub the timeline; Enter to pause"
 				aria-valuemin={0}
 				aria-valuemax={Math.max(0, days.length - 1)}
 				aria-valuenow={pb.state.pos}

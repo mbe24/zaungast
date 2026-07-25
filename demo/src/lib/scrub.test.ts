@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { scrubPos } from './scrub.ts';
+import { scrubPos, stepPos } from './scrub.ts';
 
 // Mirrors the exact expressions the two pages used before extraction:
 //   race:   dragStartIndex - Math.round((dx/width)*total)   → sign -1, round true
@@ -42,4 +42,13 @@ test('rhythm: matches the original fractional expression across a sweep', () => 
 test('clamps to [0, total] at both ends', () => {
 	assert.equal(scrubPos(0, -9999, 100, 10, 1, false), 0);
 	assert.equal(scrubPos(0, +9999, 100, 10, 1, false), 10);
+});
+
+test('stepPos: whole-frame keyboard steps, clamped', () => {
+	assert.equal(stepPos(4, 1, 10), 5);
+	assert.equal(stepPos(4, -1, 10), 3);
+	assert.equal(stepPos(0, -1, 10), 0); // clamp low
+	assert.equal(stepPos(10, 1, 10), 10); // clamp high
+	assert.equal(stepPos(4.6, -1, 10), 4); // fractional (rhythm) → snap to whole week, then step
+	assert.equal(stepPos(4.6, 1, 10), 6);
 });

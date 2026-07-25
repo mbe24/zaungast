@@ -321,6 +321,7 @@
 					onpointerdown={onDragStart}
 					onpointermove={onDragMove}
 					onpointerup={onDragEnd}
+					onpointercancel={onDragEnd}
 					onpointerleave={onDragEnd}
 					onkeydown={onPanKey}
 				>
