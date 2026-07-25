@@ -31,8 +31,13 @@ const api = {
 	async build(files: File[], onProgress?: (p: Progress) => void): Promise<StoreMeta> {
 		const driver = await getDriver();
 		onProgress?.({ type: 'reading', total: files.length });
+		// Read every file's bytes CONCURRENTLY (File.arrayBuffer() is async I/O). The serial
+		// `await` loop this replaces read one file at a time; Promise.all overlaps the disk reads.
+		const tRead = performance.now();
+		const buffers = await Promise.all(files.map((f) => f.arrayBuffer()));
 		const map = new Map<string, Uint8Array>();
-		for (const f of files) map.set(f.name, new Uint8Array(await f.arrayBuffer()));
+		files.forEach((f, idx) => map.set(f.name, new Uint8Array(buffers[idx])));
+		const readMs = performance.now() - tRead;
 
 		const dataFiles = [...map.keys()].filter(isData);
 		let i = 0;
@@ -47,9 +52,26 @@ const api = {
 		};
 
 		store?.close();
+		// Timing probe (durations only — no data): the sum of timed phases vs the whole build gives the
+		// untimed `load` (decode + dedup) share. Read it in the worker console to size the cold read.
+		const phaseMs: Record<string, number> = {};
+		const tBuild = performance.now();
 		store = openStoreFromSource(source, {
 			driver,
-			onPhase: (phase, ms) => onProgress?.({ type: 'phase', phase, ms: Math.round(ms) }),
+			deferFts: true, // demo never searches (yet) → build the FTS index lazily on the first search
+			onPhase: (phase, ms) => {
+				phaseMs[phase] = Math.round(ms);
+				onProgress?.({ type: 'phase', phase, ms: Math.round(ms) });
+			},
+		});
+		const buildMs = performance.now() - tBuild;
+		console.log('[zaungast cold-read ms]', {
+			fileRead: Math.round(readMs),
+			...phaseMs, // decode · extract · apply · recompute · (fts deferred)
+			buildTotal: Math.round(buildMs),
+			grandTotal: Math.round(readMs + buildMs),
+			files: files.length,
+			cores: (globalThis as { navigator?: Navigator }).navigator?.hardwareConcurrency ?? 0,
 		});
 		return store.meta;
 	},
