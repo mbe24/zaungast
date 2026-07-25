@@ -4,12 +4,16 @@
 // (activity/day, busiest day, hour histogram, night-owl, streak, first message). Runs in the worker,
 // where the store is resident; returns a plain, structured-clone-safe object.
 import type { TeamsStore, StoreMeta } from 'libzaungast/web';
+import { abbrev } from './format';
 
 export interface WrappedData {
 	meta: StoreMeta;
 	totals: { messages: number; people: number; conversations: number; reactions: number; mine: number };
 	span: { firstTs: number; lastTs: number };
-	topPeople: { name: string; messages: number }[];
+	// key = the person's MRI (stable, unique — used as the chart's category/colour key so same-named people
+	// never merge); label = the display name (given + abbreviated surname, or the raw name when there are
+	// no structured parts). Same shape for the race.
+	topPeople: { key: string; label: string; messages: number }[];
 	messagesPerDay: { date: number; count: number }[]; // date = epoch ms at local midnight
 	busiestDay: { date: number; count: number } | null;
 	hourHistogram: { hour: number; count: number }[]; // 24 buckets, local hour
@@ -22,12 +26,12 @@ export interface WrappedData {
 	rhythmB: number[][]; // [weekIndex] → 7×70 fine calendar-occupancy counts
 	nightOwlPct: number; // share of messages sent 22:00–05:59
 	longestStreak: number; // longest run of consecutive days with ≥1 message
-	firstMessage: { ts: number; senderName: string | null; content: string; where: string } | null;
+	firstMessage: { ts: number; senderLabel: string; content: string; where: string } | null;
 	convMix: { kind: string; count: number }[];
 	// Bar-chart-race data: a daily time axis + top 1:1 partners with their per-day message counts
 	// (both sides) aligned to it. The UI applies a rolling window frame-by-frame.
 	raceDays: number[]; // day-start epoch ms
-	racePeople: { name: string; daily: number[] }[];
+	racePeople: { key: string; label: string; daily: number[] }[];
 }
 
 const DAY = 86_400_000;
@@ -63,10 +67,21 @@ export function computeWrapped(store: TeamsStore): WrappedData {
 	// message senderName is the ugly "Surname, Given (Org)"), so compose the natural "Given Surname";
 	// fall back to whatever name we have when the structured parts are missing (guests, bots).
 	const displayNames = new Map<string, string>();
-	for (const p of store.people.find({ n: BIG }).rows)
+	// Structured name parts (given/surname) per MRI, so the UI can render "Given <surname-initials>" from
+	// real fields instead of parsing a display string. Empty parts → the caller falls back to the name.
+	const parts = new Map<string, { given: string; surname: string }>();
+	for (const p of store.people.find({ n: BIG }).rows) {
 		displayNames.set(p.mri, p.givenName && p.surname ? `${p.givenName} ${p.surname}` : p.name);
+		parts.set(p.mri, { given: p.givenName, surname: p.surname });
+	}
 	const nameOf = (mri: string | null, fallback: string | null): string =>
 		(mri ? displayNames.get(mri) : undefined) || fallback || mri || '';
+	// Display label: given name in full + abbreviated surname, from the structured parts. Falls back to the
+	// full display name when there's no surname (single-name guests, bots, profile-less senders).
+	const labelOf = (mri: string | null, fallback: string | null): string => {
+		const p = mri ? parts.get(mri) : undefined;
+		return p?.surname ? `${p.given} ${abbrev(p.surname)}`.trim() : nameOf(mri, fallback);
+	};
 
 	const perDay = new Map<number, number>();
 	// "Top people" = who you exchange the most DIRECT (1:1) messages with. NOT global authored count
@@ -94,7 +109,7 @@ export function computeWrapped(store: TeamsStore): WrappedData {
 	let firstTs = Number.POSITIVE_INFINITY; // earliest message involving you — anchors span + the race axis
 	let firstToMeTs = Number.POSITIVE_INFINITY; // earliest message addressed TO you — for the display card
 	let lastTs = 0;
-	let first: { ts: number; senderName: string | null; content: string; where: string } | null = null;
+	let first: WrappedData['firstMessage'] = null;
 
 	for (const c of convs) {
 		const res = store.messages.inConversation(c.id, { limit: BIG });
@@ -154,7 +169,7 @@ export function computeWrapped(store: TeamsStore): WrappedData {
 				}
 				first = {
 					ts: m.ts,
-					senderName: nameOf(m.senderMri, m.senderName),
+					senderLabel: labelOf(m.senderMri, m.senderName),
 					content: lines.join('\n'),
 					where,
 				};
@@ -215,10 +230,10 @@ export function computeWrapped(store: TeamsStore): WrappedData {
 	const nightOwl = hours.slice(0, 6).reduce((a, b) => a + b, 0) + hours.slice(22).reduce((a, b) => a + b, 0);
 	const nightOwlPct = totalMsgs ? nightOwl / totalMsgs : 0;
 
-	const topPeople = [...talk.values()]
-		.sort((a, b) => b.count - a.count)
+	const topPeople = [...talk.entries()]
+		.sort((a, b) => b[1].count - a[1].count)
 		.slice(0, 10)
-		.map((p) => ({ name: p.name, messages: p.count }));
+		.map(([mri, info]) => ({ key: mri, label: labelOf(mri, info.name), messages: info.count }));
 
 	// Race: a daily axis over the cache span + the top partners' per-day counts aligned to it. We track
 	// far more than we ever show (10) so short-burst people — active intensely for a while, then gone —
@@ -235,7 +250,7 @@ export function computeWrapped(store: TeamsStore): WrappedData {
 		.slice(0, RACE_PARTNERS)
 		.map(([mri, info]) => {
 			const dm = partnerDays.get(mri) ?? new Map<number, number>();
-			return { name: info.name, daily: raceDays.map((d) => dm.get(d) ?? 0) };
+			return { key: mri, label: labelOf(mri, info.name), daily: raceDays.map((d) => dm.get(d) ?? 0) };
 		});
 
 	// Activity B: calendar occupancy — meetings (not appointments / all-day / cancelled) + calls, each

@@ -7,7 +7,7 @@
 	import { app } from '$lib/app.svelte';
 	import { racePlayback } from '$lib/playback.svelte';
 	import { PALETTE } from '$lib/palette';
-	import { nf, fmtDate, abbrev } from '$lib/format';
+	import { nf, fmtDate } from '$lib/format';
 	import { scrub } from '$lib/scrub';
 	import { plotStyle, type PlotOptions } from '$lib/plot';
 	import { HysteresisRanker } from '$lib/ranker';
@@ -51,7 +51,8 @@
 	// Per-person rolling daily rate (precomputed once per dataset), stable colour by rank.
 	const series = $derived(
 		(data?.racePeople ?? []).map((p, i) => ({
-			name: p.name,
+			key: p.key, // MRI — stable identity (same-named people don't merge)
+			label: p.label,
 			color: PALETTE[i % PALETTE.length],
 			roll: rolling(p.daily),
 		})),
@@ -68,21 +69,22 @@
 	// transform — so a reorder glides on the compositor, immune to the volume chart's reflows (no flip).
 	const rows = $derived.by(() => {
 		const upto = Math.min(pb.state.pos, days.length - 1);
-		const items = series.map((s) => ({ name: s.name, value: s.roll[upto] ?? 0 }));
-		const val = new Map(items.map((i) => [i.name, i.value]));
+		const items = series.map((s) => ({ id: s.key, value: s.roll[upto] ?? 0 }));
+		const val = new Map(items.map((i) => [i.id, i.value]));
 		// Scale bars to the CURRENT frame's leader, not the all-time peak — so the chart stays full and
 		// "who's on top now" is legible; the volume chart below carries the absolute magnitude.
 		const frameMax = Math.max(1, ...val.values());
-		const names = ranker.order(items); // hysteresis ordering (stable within the margin)
+		const order = ranker.order(items); // hysteresis ordering (stable within the margin), by key
 		const rank = new Map<string, number>();
 		let r = 0;
-		for (const n of names) if ((val.get(n) ?? 0) > 0 && r < ROWS) rank.set(n, r++);
+		for (const id of order) if ((val.get(id) ?? 0) > 0 && r < ROWS) rank.set(id, r++);
 		// Emit in series' fixed order so the #each never reorders the DOM.
 		return series.map((s) => {
-			const value = val.get(s.name) ?? 0;
-			const rk = rank.get(s.name) ?? -1;
+			const value = val.get(s.key) ?? 0;
+			const rk = rank.get(s.key) ?? -1;
 			return {
-				name: s.name,
+				key: s.key,
+				label: s.label,
 				color: s.color,
 				value,
 				pct: (Math.sqrt(value) / Math.sqrt(frameMax)) * 100,
@@ -181,7 +183,7 @@
 					}
 				}}
 			>
-				{#each rows as p (p.name)}
+				{#each rows as p (p.key)}
 					<div
 						class="absolute inset-x-0 flex items-center gap-3 transition-[transform,opacity] duration-500 ease-in-out"
 						style="height: {ROW_REM}rem; transform: translateY({p.slot * ROW_REM}rem); opacity: {p.rank <
@@ -190,7 +192,7 @@
 							: 1}"
 					>
 						<div class="text-muted-foreground w-28 shrink-0 truncate text-right text-sm">
-							{abbrev(p.name)}
+							{p.label}
 						</div>
 						<div class="min-w-0 flex-1">
 							<div

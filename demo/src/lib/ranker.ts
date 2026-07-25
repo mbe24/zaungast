@@ -6,7 +6,7 @@
 // Construct one ranker per race (its memory resets with the component) and call order() each frame.
 
 export interface RankItem {
-	name: string;
+	id: string; // a stable unique key (the person's MRI) — NOT the display name (same-named people differ)
 	value: number;
 }
 
@@ -16,19 +16,19 @@ export class HysteresisRanker {
 	// `margin` — the relative lead a challenger needs to overtake a neighbour (e.g. 0.15 = 15%).
 	constructor(private readonly margin: number) {}
 
-	// Returns the names ordered for this frame; within the margin the comparator returns 0, so the JS
-	// stable sort keeps the prior order (that's the hysteresis). Mutates internal state for the next call.
+	// Returns the ids ordered for this frame; within the margin the comparator returns 0, so the JS stable
+	// sort keeps the prior order (that's the hysteresis). Mutates internal state for the next call.
 	order(items: RankItem[]): string[] {
-		const val = new Map(items.map((i) => [i.name, i.value]));
+		const val = new Map(items.map((i) => [i.id, i.value]));
 		// Seed with last frame's order (dropping anyone gone), then append newcomers — keeps order stable.
-		const names = this.prevOrder.filter((n) => val.has(n));
-		for (const i of items) if (!names.includes(i.name)) names.push(i.name);
-		names.sort((a, b) => {
+		const ids = this.prevOrder.filter((n) => val.has(n));
+		for (const i of items) if (!ids.includes(i.id)) ids.push(i.id);
+		ids.sort((a, b) => {
 			const va = val.get(a) ?? 0;
 			const vb = val.get(b) ?? 0;
 			return Math.abs(vb - va) < Math.max(va, vb, 1) * this.margin ? 0 : vb - va;
 		});
-		this.prevOrder = names;
-		return names;
+		this.prevOrder = ids;
+		return ids;
 	}
 }

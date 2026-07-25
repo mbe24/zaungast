@@ -12,18 +12,12 @@ export const fmtDate = (ms: number, empty = '—'): string =>
 export const fmtDateTime = (ms: number, empty = '—'): string =>
 	ms > 0 ? new Date(ms).toLocaleString() : empty;
 
-// Display-time name shortening (until a real private mode): first name in full, each following
-// name-part to its initial. "Firstname Lastname" → "Firstname L."; "Firstname de Surname" → "Firstname d. S.".
-export const abbrev = (raw: string): string => {
-	const name = raw.replace(/\s*\([^)]*\)\s*$/, '').trim(); // drop a trailing "(Org)" federated suffix
-	if (name.includes(',')) {
-		// "Surname, Given …" — Teams' format for external/federated contacts → "Surname, G."
-		const [last, ...rest] = name.split(',');
-		const given = rest.join(',').trim().split(/\s+/).filter(Boolean);
-		return given.length ? `${last.trim()}, ${given[0][0]}.` : last.trim();
-	}
-	const parts = name.split(/\s+/).filter(Boolean);
-	if (parts.length <= 1) return name;
-	const [first, ...more] = parts;
-	return `${first} ${more.map((p) => p[0] + '.').join(' ')}`;
-};
+// Abbreviate a surname to initials, keeping each part of a compound surname: "Lovelace" → "L.";
+// "de Lovelace" → "d. L." (case preserved). Empty → "". The worker composes a display label as
+// `given + abbrev(surname)` from the structured Person fields (see wrapped.ts) — we never parse names here.
+export const abbrev = (surname: string): string =>
+	surname
+		.split(/\s+/)
+		.filter(Boolean)
+		.map((p) => p[0] + '.')
+		.join(' ');

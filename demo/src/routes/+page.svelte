@@ -7,7 +7,7 @@
 	import * as Plot from '@observablehq/plot';
 	import { app, build } from '$lib/app.svelte';
 	import { PALETTE } from '$lib/palette';
-	import { nf, fmtDate, fmtDateTime, abbrev } from '$lib/format';
+	import { nf, fmtDate, fmtDateTime } from '$lib/format';
 	import { plotStyle, type PlotOptions } from '$lib/plot';
 
 	let fileInput = $state<HTMLInputElement>();
@@ -78,6 +78,9 @@
 		return s === 'symlog' ? 'sqrt' : s; // bars start at 0 → cap at sqrt (symlog crowds ticks near max)
 	});
 	const peopleTicks = $derived(niceTicks(data ? Math.max(0, ...data.topPeople.map((p) => p.messages)) : 0));
+	// Bar labels by the chart's category key (the person's MRI): the worker already composed the display
+	// label, so this is just the tickFormat lookup Plot needs (key → label).
+	const peopleLabel = $derived(new Map((data?.topPeople ?? []).map((p) => [p.key, p.label])));
 
 	// Activity shows a 6-month window; drag pans it across the full cached span (no squish).
 	const WINDOW_MS = 182 * 86_400_000; // ~6 months
@@ -146,12 +149,12 @@
 				marginBottom: 52,
 				style: chartStyle,
 				x: { type: peopleScale, label: 'messages', labelOffset: 44, grid: true, ticks: peopleTicks },
-				y: { label: null, tickFormat: (n: string) => abbrev(n) },
-				// One palette colour per person, keyed by name in rank order — same mapping as the race
-				// bars (topPeople is already sorted by volume, so rank i → PALETTE[i]).
-				color: { domain: data.topPeople.map((p) => p.name), range: PALETTE },
+				y: { label: null, tickFormat: (k: string) => peopleLabel.get(k) ?? k },
+				// One palette colour per person, keyed by MRI in rank order — same mapping as the race bars
+				// (topPeople is already sorted by volume, so rank i → PALETTE[i]).
+				color: { domain: data.topPeople.map((p) => p.key), range: PALETTE },
 				marks: [
-					Plot.barX(data.topPeople, { x: 'messages', y: 'name', fill: 'name', rx: 6, sort: { y: 'x', reverse: true } }),
+					Plot.barX(data.topPeople, { x: 'messages', y: 'key', fill: 'key', rx: 6, sort: { y: 'x', reverse: true } }),
 					Plot.ruleX([0]),
 				],
 			} as PlotOptions),
@@ -348,7 +351,7 @@
 				</Card.Header>
 				<Card.Content class="text-base">
 					<div class="text-muted-foreground mb-1 font-medium">
-						{abbrev(data.firstMessage.senderName ?? 'Someone')}
+						{data.firstMessage.senderLabel || 'Someone'}
 					</div>
 					<div class="max-h-48 overflow-y-auto pr-2 whitespace-pre-wrap [scrollbar-width:thin]">
 						{data.firstMessage.content || '(no text)'}

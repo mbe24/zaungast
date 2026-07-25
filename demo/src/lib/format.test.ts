@@ -28,27 +28,9 @@ test('fmtDateTime: empty fallback + real value', () => {
 	assert.equal(fmtDateTime(ms), new Date(ms).toLocaleString());
 });
 
-test('abbrev: "First Last" → "First L."', () => {
-	assert.equal(abbrev('Ada Lovelace'), 'Ada L.');
-});
-
-test('abbrev: multi-part surname initials each part', () => {
-	assert.equal(abbrev('Ada de Lovelace'), 'Ada d. L.');
-});
-
-test('abbrev: single name passes through', () => {
-	assert.equal(abbrev('Ada'), 'Ada');
-});
-
-test('abbrev: federated "Surname, Given" → "Surname, G."', () => {
-	assert.equal(abbrev('Lovelace, Ada'), 'Lovelace, A.');
-});
-
-test('abbrev: drops trailing "(Org)" federated suffix', () => {
-	assert.equal(abbrev('Lovelace, Ada (ACME)'), 'Lovelace, A.');
-	assert.equal(abbrev('Ada Lovelace (ACME)'), 'Ada L.');
-});
-
-test('abbrev: surname-only after comma', () => {
-	assert.equal(abbrev('Lovelace,'), 'Lovelace');
+test('abbrev: surname → initials, keeping compound parts', () => {
+	assert.equal(abbrev('Lovelace'), 'L.');
+	assert.equal(abbrev('de Lovelace'), 'd. L.'); // compound surname → each part, case preserved
+	assert.equal(abbrev('von der Berg'), 'v. d. B.');
+	assert.equal(abbrev(''), ''); // no surname → empty
 });
