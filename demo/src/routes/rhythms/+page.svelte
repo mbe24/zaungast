@@ -6,6 +6,7 @@
 	import { app } from '$lib/app.svelte';
 	import { rhythm, toggleRhythm } from '$lib/rhythm.svelte';
 	import { colorRGB, CHAT, MEET, BOTH } from '$lib/rhythm-color';
+	import { fmtDate } from '$lib/format';
 
 	// ---- config ----
 	const WEEKDAYS = 7;
@@ -26,7 +27,7 @@
 	const FEATHER = 0.5; // 0..1 horizontal feather between day columns (softens the vertical cuts; 0 = off)
 	const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']; // Sunday-anchored
 
-	const fmtWeek = (ms: number) => (ms > 0 ? new Date(ms).toLocaleDateString() : '');
+	const fmtWeek = (ms: number) => fmtDate(ms, ''); // rhythm labels use an empty fallback, not "—"
 	const slotLabel = (row: number) => {
 		if (row < 1 || row > 17) return ''; // buffer rows unlabeled
 		const hh = row + 5; // 6..22

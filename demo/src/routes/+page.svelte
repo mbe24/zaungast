@@ -7,6 +7,7 @@
 	import * as Plot from '@observablehq/plot';
 	import { app, build } from '$lib/app.svelte';
 	import { PALETTE } from '$lib/palette';
+	import { nf, fmtDate, fmtDateTime, abbrev } from '$lib/format';
 
 	let fileInput = $state<HTMLInputElement>();
 	// Shared across pages (see $lib/app.svelte); aliased so the template + charts below read as before.
@@ -25,26 +26,6 @@
 	let os = $state<'windows' | 'macos'>(detectOs());
 	const WIN_PATH = String.raw`C:\Users\<you>\AppData\Local\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\EBWebView\<profile>\IndexedDB\https_teams.microsoft.com_0.indexeddb.leveldb`;
 	const MAC_PATH = `/Users/<you>/Library/Containers/com.microsoft.teams2/Data/Library/Application Support/Microsoft/MSTeams/EBWebView/<profile>/IndexedDB/https_teams.microsoft.com_0.indexeddb.leveldb`;
-
-	const nf = new Intl.NumberFormat();
-	const fmtDate = (ms: number) => (ms > 0 ? new Date(ms).toLocaleDateString() : '—');
-	const fmtDateTime = (ms: number) => (ms > 0 ? new Date(ms).toLocaleString() : '—');
-
-	// Display-time name shortening (until a real private mode): first name in full, each following
-	// name-part to its initial. "Firstname Lastname" → "Firstname L."; "Firstname de Surname" → "Firstname d. S.".
-	const abbrev = (raw: string) => {
-		const name = raw.replace(/\s*\([^)]*\)\s*$/, '').trim(); // drop a trailing "(Org)" federated suffix
-		if (name.includes(',')) {
-			// "Surname, Given …" — Teams' format for external/federated contacts → "Surname, G."
-			const [last, ...rest] = name.split(',');
-			const given = rest.join(',').trim().split(/\s+/).filter(Boolean);
-			return given.length ? `${last.trim()}, ${given[0][0]}.` : last.trim();
-		}
-		const parts = name.split(/\s+/).filter(Boolean);
-		if (parts.length <= 1) return name;
-		const [first, ...more] = parts;
-		return `${first} ${more.map((p) => p[0] + '.').join(' ')}`;
-	};
 
 	// Conversation-kind display labels ("1:1" → "Chat"; others capitalized).
 	const prettyKind = (k: string) => (k === '1:1' ? 'Chat' : k.charAt(0).toUpperCase() + k.slice(1));

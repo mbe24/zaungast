@@ -8,28 +8,14 @@
 	import { app } from '$lib/app.svelte';
 	import { race, toggleRace } from '$lib/race.svelte';
 	import { PALETTE } from '$lib/palette';
+	import { nf, fmtDate, abbrev } from '$lib/format';
 
 	const DAY = 86_400_000;
 	const WINDOW = 35; // trailing days (~5 weeks) — smooths bursts/vacations (bigger = calmer, more sustained)
 	const VOL_WINDOW = 182 * DAY; // ~6-month visible window for the volume chart; it scrolls with time
 	const TICK_MS = 90; // one day per tick — fine steps keep both charts moving smoothly, without over-updating
 
-	const nf = new Intl.NumberFormat();
-	const fmtDay = (ms: number) => (ms > 0 ? new Date(ms).toLocaleDateString() : '');
-
-	const abbrev = (raw: string) => {
-		const name = raw.replace(/\s*\([^)]*\)\s*$/, '').trim(); // drop a trailing "(Org)" federated suffix
-		if (name.includes(',')) {
-			// "Surname, Given …" — Teams' format for external/federated contacts → "Surname, G."
-			const [last, ...rest] = name.split(',');
-			const given = rest.join(',').trim().split(/\s+/).filter(Boolean);
-			return given.length ? `${last.trim()}, ${given[0][0]}.` : last.trim();
-		}
-		const parts = name.split(/\s+/).filter(Boolean);
-		if (parts.length <= 1) return name;
-		const [first, ...more] = parts;
-		return `${first} ${more.map((p) => p[0] + '.').join(' ')}`;
-	};
+	const fmtDay = (ms: number) => fmtDate(ms, ''); // race labels use an empty fallback, not "—"
 
 	// Rolling window sum — messages in the trailing WINDOW days (a whole count, so the label matches the
 	// bar). Activity AT that time, not an all-time total, so bars rise and fall as who you talk to shifts.
