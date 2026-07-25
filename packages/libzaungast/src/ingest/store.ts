@@ -30,6 +30,7 @@ export function isBotMri(mri: string | null | undefined): boolean {
 export class ChatStore {
   db: SqlDatabase;
   ftsEnabled = false;
+  private ftsBuilt = false; // has the full FTS index been populated? (deferred builds start false)
   private readonly handleByFull = new Map<string, string>();
   private readonly usedHandles = new Set<string>();
 
@@ -412,6 +413,7 @@ export class ChatStore {
       this.db.exec(
         `insert into messages_fts(content,conv_id,id) select content,conv_id,id from messages where is_system=0 and content<>''`,
       );
+      this.ftsBuilt = true;
       return;
     }
     if (!changedIds.size) return;
@@ -425,6 +427,12 @@ export class ChatStore {
     this.db.exec('delete from messages_fts where id in (select id from _chg)');
     this.db.exec(`insert into messages_fts(content,conv_id,id)
       select content,conv_id,id from messages where id in (select id from _chg) and is_system=0 and content<>''`);
+  }
+
+  // Build the full FTS index on demand if it was deferred at ingest (deferFts) and not yet built.
+  // Idempotent + cheap after the first call — lets a static build skip FTS until the first search.
+  ensureFts(): void {
+    if (this.ftsEnabled && !this.ftsBuilt) this.refreshFts(null);
   }
 
   counts() {

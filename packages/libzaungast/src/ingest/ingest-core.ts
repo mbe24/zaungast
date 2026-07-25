@@ -423,7 +423,10 @@ export function extractFromSnapshot(
 export function buildStore(
   ex: FullExtract,
   driver: SqlDriver,
-  opts: { onPhase?: PhaseHook } = {},
+  // deferFts: skip the (eager) full FTS build — for one-shot static reads that may never search. The
+  // store builds it lazily on the first search via ChatStore.ensureFts(). Byte-neutral: the eventual
+  // index content is identical to an eager build.
+  opts: { onPhase?: PhaseHook; deferFts?: boolean } = {},
 ): Ingested {
   if (!ex.mapping) {
     const store = new ChatStore(driver);
@@ -460,9 +463,11 @@ export function buildStore(
   const tRecompute = opts.onPhase ? performance.now() : 0;
   store.recomputeDerived(ex.selfMri);
   opts.onPhase?.('recompute', performance.now() - tRecompute);
-  const tFts = opts.onPhase ? performance.now() : 0;
-  store.refreshFts(null);
-  opts.onPhase?.('fts', performance.now() - tFts);
+  if (!opts.deferFts) {
+    const tFts = opts.onPhase ? performance.now() : 0;
+    store.refreshFts(null);
+    opts.onPhase?.('fts', performance.now() - tFts);
+  }
 
   const meta = finalMeta(store, ex.fp, ex.mapping, 'full', Date.now(), ex.lossy, ex.selfMri);
   return {

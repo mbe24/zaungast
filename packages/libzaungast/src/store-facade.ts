@@ -201,6 +201,7 @@ export function makeApis(
   const messages: MessagesApi = {
     search: (opts = {}) => {
       const store = getStore();
+      store.ensureFts(); // build the FTS index now if it was deferred at ingest (no-op once built)
       const res = querySearch(store, {
         ...opts,
         limit: opts.limit ?? DEFAULT_SEARCH_LIMIT,
@@ -360,9 +361,12 @@ export function openStoreFromSource(
     driver: SqlDriver;
     extraStopwords?: Iterable<string>;
     onPhase?: (phase: BuildPhase, ms: number) => void;
+    // Skip the eager full-text index at build; it builds lazily on the first messages.search(). Good for
+    // a viz that may never search (the demo) — takes the whole `fts` phase off the cold-read path.
+    deferFts?: boolean;
   },
 ): TeamsStore {
   const ex = extractFromSource(source, opts.onPhase);
-  const ingested = buildStore(ex, opts.driver, { onPhase: opts.onPhase });
+  const ingested = buildStore(ex, opts.driver, { onPhase: opts.onPhase, deferFts: opts.deferFts });
   return new StaticTeamsStore(ingested, opts.extraStopwords);
 }
