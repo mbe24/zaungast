@@ -10,6 +10,7 @@
 	import { nf, fmtDate, abbrev } from '$lib/format';
 	import { scrub } from '$lib/scrub';
 	import { plotStyle, type PlotOptions } from '$lib/plot';
+	import { HysteresisRanker } from '$lib/ranker';
 
 	const pb = racePlayback; // { state: { pos, playing, frames }, progress, toggle, reset }
 
@@ -56,34 +57,23 @@
 		})),
 	);
 
-	// Hysteresis: carry the previous frame's order across ticks (plain, non-reactive) so near-ties don't
-	// swap places on daily noise. A bar only overtakes the one above it once it leads by HYSTERESIS —
-	// RELATIVE to the pair (not the global peak), so small values still order correctly (4 beats 2) while
-	// genuine near-ties at any scale stay put.
-	const HYSTERESIS = 0.15; // challenger must exceed a neighbour by this fraction of the larger to pass it
 	const ROWS = 10; // visible slots
 	const ROW_REM = 2.5; // vertical pitch per row (rem)
-	let prevOrder: string[] = [];
+	// Stable bar ordering: a challenger must lead a neighbour by 15% (of the larger) to overtake it, so
+	// daily noise doesn't make near-ties flicker. State + logic live in the ranker (see ranker.ts).
+	const ranker = new HysteresisRanker(0.15);
 
 	// One entry PER TRACKED PERSON, in a STABLE order (never reordered in the DOM). Each carries its
 	// current rank; the template positions rows by transform:translateY(rank·pitch) and animates only the
 	// transform — so a reorder glides on the compositor, immune to the volume chart's reflows (no flip).
 	const rows = $derived.by(() => {
 		const upto = Math.min(pb.state.pos, days.length - 1);
-		const val = new Map(series.map((s) => [s.name, s.roll[upto] ?? 0]));
+		const items = series.map((s) => ({ name: s.name, value: s.roll[upto] ?? 0 }));
+		const val = new Map(items.map((i) => [i.name, i.value]));
 		// Scale bars to the CURRENT frame's leader, not the all-time peak — so the chart stays full and
 		// "who's on top now" is legible; the volume chart below carries the absolute magnitude.
 		const frameMax = Math.max(1, ...val.values());
-		// Seed with last frame's order, then append anyone not yet placed — keeps the order stable.
-		const names = prevOrder.filter((n) => val.has(n));
-		for (const s of series) if (!names.includes(s.name)) names.push(s.name);
-		// Stable sort: within the (relative) margin the comparator returns 0, so JS keeps the prior order.
-		names.sort((a, b) => {
-			const va = val.get(a) ?? 0;
-			const vb = val.get(b) ?? 0;
-			return Math.abs(vb - va) < Math.max(va, vb, 1) * HYSTERESIS ? 0 : vb - va;
-		});
-		prevOrder = names;
+		const names = ranker.order(items); // hysteresis ordering (stable within the margin)
 		const rank = new Map<string, number>();
 		let r = 0;
 		for (const n of names) if ((val.get(n) ?? 0) > 0 && r < ROWS) rank.set(n, r++);
