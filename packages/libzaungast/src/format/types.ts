@@ -63,6 +63,11 @@ export interface SnapshotRecord {
 export interface LoadEntriesOptions {
   includeLog?: boolean;
   seqCap?: number;
+  // Pre-parsed `.ldb` tables by filename (e.g. from a browser parse-worker pool), consulted before
+  // reading+parsing each `.ldb`. A miss falls through to inline parse, so an absent/failed worker parse
+  // stays transparently correct; the fold order (and thus the fingerprint) is unaffected. No stat
+  // validation — this is a one-shot injected map, not the reuse cache.
+  parsedTables?: ReadonlyMap<string, TableReadResult>;
 }
 
 export interface LoadEntriesResult {

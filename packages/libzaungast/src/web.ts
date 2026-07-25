@@ -6,6 +6,9 @@
 // Exposed as the explicit "./web" subpath (NOT a `browser` condition on `./format`): a different
 // capability set deserves a distinct name, and `.`/`./format` stay exactly as they are.
 export { loadSnapshotFrom } from './format/chromium/indexeddb.js';
+// Per-file `.ldb` parse primitive — a parse-worker pool calls this, then feeds the results back to
+// loadSnapshotFrom via its `parsedTables` option (see LoadEntriesOptions). Parallel decode, one seam.
+export { parseTable } from './format/chromium/sstable.js';
 export { MemorySource } from './format/chromium/memory-source.js';
 export { fingerprint } from './format/fingerprint.js';
 export {

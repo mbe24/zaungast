@@ -65,43 +65,50 @@ function readTablesInto(
   files: string[],
   consider: Consider,
   cache?: LdbCache,
+  parsedTables?: ReadonlyMap<string, TableReadResult>,
 ): boolean {
   let lossy = false;
   for (const f of files) {
-    let hit = cache?.get(f);
-    // Self-validate a cache hit by on-disk size: `.ldb` are immutable by name, so a size change means
-    // the file was re-copied (H-A partial→complete, or the rare H-C filename reuse) → the cached parse
-    // is stale, drop it and re-read. (snapshotReuse still re-copies on a live-vs-snapshot size diff —
-    // that re-copy is what changes the size we re-stat here; the engine can't see the live file.)
-    if (hit) {
-      let curSize = -1;
-      try {
-        curSize = (source as LiveSnapshotSource).stat(f).size;
-      } catch {
-        curSize = -1;
-      }
-      if (curSize !== hit.size) hit = undefined;
-    }
-    let res = hit?.res;
+    // Injected pre-parsed table (e.g. a browser parse-worker pool) wins — no stat validation. A miss
+    // falls through to the normal read+parse, so an absent/failed worker parse stays transparently
+    // correct (identical lossy / short-entry semantics via foldTable below).
+    let res = parsedTables?.get(f);
     if (!res) {
-      try {
-        res = parseTable(source.read(f));
-      } catch (e) {
-        console.error(`skip ${f}: ${(e as Error).message}`);
-        lossy = true;
-        continue;
-      }
-      // Cache a CLEAN parse with its on-disk size (for the self-validation above). Only when a cache
-      // is in play — the non-reuse loadSnapshot path passes no cache and must not pay an extra stat.
-      // A stat failure just skips caching (the read itself already succeeded — never mark it lossy).
-      if (cache && !res.lossy) {
-        let size = -1;
+      let hit = cache?.get(f);
+      // Self-validate a cache hit by on-disk size: `.ldb` are immutable by name, so a size change means
+      // the file was re-copied (H-A partial→complete, or the rare H-C filename reuse) → the cached parse
+      // is stale, drop it and re-read. (snapshotReuse still re-copies on a live-vs-snapshot size diff —
+      // that re-copy is what changes the size we re-stat here; the engine can't see the live file.)
+      if (hit) {
+        let curSize = -1;
         try {
-          size = (source as LiveSnapshotSource).stat(f).size;
+          curSize = (source as LiveSnapshotSource).stat(f).size;
         } catch {
-          size = -1;
+          curSize = -1;
         }
-        if (size >= 0) cache.set(f, { res, size });
+        if (curSize !== hit.size) hit = undefined;
+      }
+      res = hit?.res;
+      if (!res) {
+        try {
+          res = parseTable(source.read(f));
+        } catch (e) {
+          console.error(`skip ${f}: ${(e as Error).message}`);
+          lossy = true;
+          continue;
+        }
+        // Cache a CLEAN parse with its on-disk size (for the self-validation above). Only when a cache
+        // is in play — the non-reuse loadSnapshot path passes no cache and must not pay an extra stat.
+        // A stat failure just skips caching (the read itself already succeeded — never mark it lossy).
+        if (cache && !res.lossy) {
+          let size = -1;
+          try {
+            size = (source as LiveSnapshotSource).stat(f).size;
+          } catch {
+            size = -1;
+          }
+          if (size >= 0) cache.set(f, { res, size });
+        }
       }
     }
     if (res.lossy) lossy = true;
@@ -207,7 +214,7 @@ function collectSnapshot(map: Map<string, SnapshotRecord>, raw: number, lossy: b
 // Shared by loadEntries (→ flat live[]) and loadSnapshot (→ grouped buckets).
 function buildDedupMap(
   source: SnapshotSource,
-  { includeLog = true, seqCap }: LoadEntriesOptions = {},
+  { includeLog = true, seqCap, parsedTables }: LoadEntriesOptions = {},
 ): { map: Map<string, SnapshotRecord>; raw: number; lossy: boolean } {
   const files = source
     .names()
@@ -233,7 +240,7 @@ function buildDedupMap(
     }
   };
 
-  if (readTablesInto(source, files, consider)) lossy = true;
+  if (readTablesInto(source, files, consider, undefined, parsedTables)) lossy = true;
   if (includeLog) {
     // Always read the WAL — a freshly-compacted or young DB can hold all its data in the
     // .log with no .ldb tables yet; gating on files.length would ingest it as empty.
