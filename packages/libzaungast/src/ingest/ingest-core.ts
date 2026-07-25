@@ -321,6 +321,8 @@ export function applyConversationMeta(store: ChatStore, convRows: any[]) {
   }
 }
 
+// Order-sensitive: ties break by first-insertion (msgRows order). MUST run on the coordinator over the
+// fully reassembled rows — never fold into a per-chunk reduce, or parallel completion order could flip it.
 function voteSelfMri(msgRows: any[]): string | null {
   const votes = new Map<string, number>();
   for (const m of msgRows)
@@ -444,9 +446,11 @@ export interface ExtractTask {
 export type ExtractExecutor = (task: ExtractTask) => Promise<EntityExtract>;
 
 // Standalone-buffer copy of a record's key AND value (both are views over big shared file buffers, so
-// cloning a view would drag the whole underlying ArrayBuffer across the worker boundary).
+// cloning a view would drag the whole underlying ArrayBuffer across the worker boundary). `new
+// Uint8Array(view)` ALWAYS allocates a fresh buffer — unlike `Buffer.prototype.slice` (Node), which
+// returns a view, so a plain `.slice()` would silently not compact on the node codec.
 function compactRecord(r: SnapshotRecord): SnapshotRecord {
-  return { ...r, key: r.key.slice(), value: r.value ? r.value.slice() : r.value };
+  return { ...r, key: new Uint8Array(r.key), value: r.value ? new Uint8Array(r.value) : r.value };
 }
 
 // Async sibling of extractFromSnapshot. With no `runExtract` it delegates to the serial path (one code
@@ -459,7 +463,8 @@ export async function extractFromSnapshotAsync(
   snap: Snapshot,
   opts: { runExtract?: ExtractExecutor; chunkRecords?: number; onPhase?: PhaseHook } = {},
 ): Promise<FullExtract> {
-  const { runExtract, chunkRecords = 4000, onPhase } = opts;
+  const { runExtract, onPhase } = opts;
+  const chunkRecords = Math.max(1, opts.chunkRecords ?? 4000); // clamp: a 0/neg would loop forever below
   if (!runExtract) return extractFromSnapshot(snap, { onPhase });
   const { maxSeq, lossy } = snap;
   const fp = fingerprint(snap);
