@@ -7,6 +7,7 @@
 	import { rhythmPlayback } from '$lib/playback.svelte';
 	import { colorRGB, CHAT, MEET, BOTH } from '$lib/rhythm-color';
 	import { fmtDate } from '$lib/format';
+	import { scrub } from '$lib/scrub';
 
 	const pb = rhythmPlayback; // { state: { pos, playing, frames }, progress, toggle, reset }
 
@@ -242,43 +243,6 @@
 		};
 	});
 
-	// Drag to scrub weeks; click to pause/resume.
-	let dragging = false;
-	let dragMoved = false;
-	let dragWasPlaying = false;
-	let dragStartX = 0;
-	let dragStartPos = 0;
-	let dragWidth = 1;
-	function onDown(e: PointerEvent): void {
-		dragging = true;
-		dragMoved = false;
-		dragWasPlaying = pb.state.playing;
-		dragStartX = e.clientX;
-		dragStartPos = pb.state.pos;
-		dragWidth = (e.currentTarget as HTMLElement).clientWidth || 1;
-		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-	}
-	function onMove(e: PointerEvent): void {
-		if (!dragging) return;
-		const dx = e.clientX - dragStartX;
-		if (!dragMoved && Math.abs(dx) < 4) return;
-		if (!dragMoved) {
-			dragMoved = true;
-			pb.state.playing = false;
-		}
-		const total = Math.max(1, pb.state.frames - 1);
-		pb.state.pos = Math.max(0, Math.min(total, dragStartPos + (dx / dragWidth) * total));
-	}
-	function onUp(e: PointerEvent): void {
-		if (!dragging) return;
-		dragging = false;
-		(e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
-		if (dragMoved) {
-			if (dragWasPlaying) pb.state.playing = true;
-		} else {
-			pb.toggle();
-		}
-	}
 </script>
 
 {#if !data}
@@ -325,10 +289,7 @@
 					role="button"
 					tabindex="0"
 					aria-label="Weekly rhythm heatmap — drag to scrub weeks, tap to pause"
-					onpointerdown={onDown}
-					onpointermove={onMove}
-					onpointerup={onUp}
-					onpointercancel={onUp}
+					use:scrub={{ playback: pb, sign: 1, round: false }}
 				></canvas>
 			</div>
 		</Card.Content>

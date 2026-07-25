@@ -9,6 +9,7 @@
 	import { racePlayback } from '$lib/playback.svelte';
 	import { PALETTE } from '$lib/palette';
 	import { nf, fmtDate, abbrev } from '$lib/format';
+	import { scrub } from '$lib/scrub';
 
 	const pb = racePlayback; // { state: { pos, playing, frames }, progress, toggle, reset }
 
@@ -45,47 +46,6 @@
 	});
 
 	const curDay = $derived(days[Math.min(pb.state.pos, Math.max(0, days.length - 1))] ?? 0);
-
-	// Grab-and-slide the volume chart to scrub time, OR click it to pause/resume. A real drag (pointer
-	// moved past a small threshold) pauses while dragging and resumes only if it was playing; a click (no
-	// drag) toggles play/pause. Drag left → forward, drag right → rewind — a full sweep covers the whole
-	// span. Bars, curve and the story bar all track pb.state.pos in lockstep.
-	let dragging = false;
-	let dragMoved = false;
-	let dragWasPlaying = false;
-	let dragStartX = 0;
-	let dragStartIndex = 0;
-	let dragWidth = 1;
-	function onChartPointerDown(e: PointerEvent): void {
-		dragging = true;
-		dragMoved = false;
-		dragWasPlaying = pb.state.playing;
-		dragStartX = e.clientX;
-		dragStartIndex = pb.state.pos;
-		dragWidth = (e.currentTarget as HTMLElement).clientWidth || 1;
-		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-	}
-	function onChartPointerMove(e: PointerEvent): void {
-		if (!dragging) return;
-		const dx = e.clientX - dragStartX;
-		if (!dragMoved && Math.abs(dx) < 4) return; // tolerate jitter so a click isn't read as a drag
-		if (!dragMoved) {
-			dragMoved = true;
-			pb.state.playing = false; // first real movement → yield control
-		}
-		const total = Math.max(1, days.length - 1);
-		pb.state.pos = Math.max(0, Math.min(total, dragStartIndex - Math.round((dx / dragWidth) * total)));
-	}
-	function onChartPointerUp(e: PointerEvent): void {
-		if (!dragging) return;
-		dragging = false;
-		(e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
-		if (dragMoved) {
-			if (dragWasPlaying) pb.state.playing = true; // resume after a scrub
-		} else {
-			pb.toggle(); // a click (no drag) pauses / resumes (restarts at the end)
-		}
-	}
 
 	// Per-person rolling daily rate (precomputed once per dataset), stable colour by rank.
 	const series = $derived(
@@ -265,7 +225,7 @@
 			<Card.Description>Messages per day (to + from you), 7-day average — scrolls with the race</Card.Description>
 		</Card.Header>
 		<Card.Content>
-			<!-- The chart IS the scrubber: grab and slide it to move through time. -->
+			<!-- The chart IS the scrubber: grab and slide it to move through time (drag left → forward). -->
 			<div
 				class="cursor-grab touch-none select-none active:cursor-grabbing"
 				role="slider"
@@ -274,10 +234,7 @@
 				aria-valuemin={0}
 				aria-valuemax={Math.max(0, days.length - 1)}
 				aria-valuenow={pb.state.pos}
-				onpointerdown={onChartPointerDown}
-				onpointermove={onChartPointerMove}
-				onpointerup={onChartPointerUp}
-				onpointercancel={onChartPointerUp}
+				use:scrub={{ playback: pb, sign: -1, round: true }}
 			>
 				{#if curve}<Chart options={curve} />{/if}
 			</div>
