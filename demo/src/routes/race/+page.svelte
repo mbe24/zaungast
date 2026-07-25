@@ -6,9 +6,11 @@
 	import * as Plot from '@observablehq/plot';
 	import { base } from '$app/paths';
 	import { app } from '$lib/app.svelte';
-	import { race, toggleRace } from '$lib/race.svelte';
+	import { racePlayback } from '$lib/playback.svelte';
 	import { PALETTE } from '$lib/palette';
 	import { nf, fmtDate, abbrev } from '$lib/format';
+
+	const pb = racePlayback; // { state: { pos, playing, frames }, progress, toggle, reset }
 
 	const DAY = 86_400_000;
 	const WINDOW = 35; // trailing days (~5 weeks) — smooths bursts/vacations (bigger = calmer, more sustained)
@@ -29,29 +31,25 @@
 	const data = $derived(app.data);
 	const days = $derived(data?.raceDays ?? []);
 
-	// Start/reset the race whenever this page mounts. (race.weeks/weekIndex are generic frame counters.)
-	onMount(() => {
-		race.weeks = days.length;
-		race.weekIndex = 0;
-		race.playing = true;
-	});
+	// Start/reset the race whenever this page mounts. (pos = current frame; frames = day count.)
+	onMount(() => pb.reset(days.length));
 
 	// Playback loop: one day per tick; stop at the end (the story bar restarts/pauses).
 	$effect(() => {
-		if (!race.playing || race.weeks < 2) return;
+		if (!pb.state.playing || pb.state.frames < 2) return;
 		const id = setInterval(() => {
-			if (race.weekIndex >= race.weeks - 1) race.playing = false;
-			else race.weekIndex++;
+			if (pb.state.pos >= pb.state.frames - 1) pb.state.playing = false;
+			else pb.state.pos++;
 		}, TICK_MS);
 		return () => clearInterval(id);
 	});
 
-	const curDay = $derived(days[Math.min(race.weekIndex, Math.max(0, days.length - 1))] ?? 0);
+	const curDay = $derived(days[Math.min(pb.state.pos, Math.max(0, days.length - 1))] ?? 0);
 
 	// Grab-and-slide the volume chart to scrub time, OR click it to pause/resume. A real drag (pointer
 	// moved past a small threshold) pauses while dragging and resumes only if it was playing; a click (no
 	// drag) toggles play/pause. Drag left → forward, drag right → rewind — a full sweep covers the whole
-	// span. Bars, curve and the story bar all track race.weekIndex in lockstep.
+	// span. Bars, curve and the story bar all track pb.state.pos in lockstep.
 	let dragging = false;
 	let dragMoved = false;
 	let dragWasPlaying = false;
@@ -61,9 +59,9 @@
 	function onChartPointerDown(e: PointerEvent): void {
 		dragging = true;
 		dragMoved = false;
-		dragWasPlaying = race.playing;
+		dragWasPlaying = pb.state.playing;
 		dragStartX = e.clientX;
-		dragStartIndex = race.weekIndex;
+		dragStartIndex = pb.state.pos;
 		dragWidth = (e.currentTarget as HTMLElement).clientWidth || 1;
 		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 	}
@@ -73,19 +71,19 @@
 		if (!dragMoved && Math.abs(dx) < 4) return; // tolerate jitter so a click isn't read as a drag
 		if (!dragMoved) {
 			dragMoved = true;
-			race.playing = false; // first real movement → yield control
+			pb.state.playing = false; // first real movement → yield control
 		}
 		const total = Math.max(1, days.length - 1);
-		race.weekIndex = Math.max(0, Math.min(total, dragStartIndex - Math.round((dx / dragWidth) * total)));
+		pb.state.pos = Math.max(0, Math.min(total, dragStartIndex - Math.round((dx / dragWidth) * total)));
 	}
 	function onChartPointerUp(e: PointerEvent): void {
 		if (!dragging) return;
 		dragging = false;
 		(e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
 		if (dragMoved) {
-			if (dragWasPlaying) race.playing = true; // resume after a scrub
+			if (dragWasPlaying) pb.state.playing = true; // resume after a scrub
 		} else {
-			toggleRace(); // a click (no drag) pauses / resumes (restarts at the end)
+			pb.toggle(); // a click (no drag) pauses / resumes (restarts at the end)
 		}
 	}
 
@@ -111,7 +109,7 @@
 	// current rank; the template positions rows by transform:translateY(rank·pitch) and animates only the
 	// transform — so a reorder glides on the compositor, immune to the volume chart's reflows (no flip).
 	const rows = $derived.by(() => {
-		const upto = Math.min(race.weekIndex, days.length - 1);
+		const upto = Math.min(pb.state.pos, days.length - 1);
 		const val = new Map(series.map((s) => [s.name, s.roll[upto] ?? 0]));
 		// Scale bars to the CURRENT frame's leader, not the all-time peak — so the chart stays full and
 		// "who's on top now" is legible; the volume chart below carries the absolute magnitude.
@@ -168,7 +166,7 @@
 	/* eslint-disable @typescript-eslint/no-explicit-any */
 	const curve = $derived.by(() => {
 		if (!perDay.length) return null;
-		const upto = Math.min(race.weekIndex, perDay.length - 1);
+		const upto = Math.min(pb.state.pos, perDay.length - 1);
 		const shown = perDay.slice(0, upto + 1); // reveal the curve up to the current day
 		const yMax = Math.max(1, ...perDay.map((d) => d.count));
 		const first = perDay[0].day.getTime();
@@ -229,11 +227,11 @@
 				role="button"
 				tabindex="0"
 				aria-label="Pause or resume the race"
-				onclick={() => toggleRace()}
+				onclick={() => pb.toggle()}
 				onkeydown={(e) => {
 					if (e.key === 'Enter' || e.key === ' ') {
 						e.preventDefault();
-						toggleRace();
+						pb.toggle();
 					}
 				}}
 			>
@@ -275,7 +273,7 @@
 				aria-label="Drag left or right to scrub the timeline"
 				aria-valuemin={0}
 				aria-valuemax={Math.max(0, days.length - 1)}
-				aria-valuenow={race.weekIndex}
+				aria-valuenow={pb.state.pos}
 				onpointerdown={onChartPointerDown}
 				onpointermove={onChartPointerMove}
 				onpointerup={onChartPointerUp}

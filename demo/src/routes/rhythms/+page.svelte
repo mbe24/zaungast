@@ -4,9 +4,11 @@
 	import { Button } from '$lib/components/ui/button';
 	import { base } from '$app/paths';
 	import { app } from '$lib/app.svelte';
-	import { rhythm, toggleRhythm } from '$lib/rhythm.svelte';
+	import { rhythmPlayback } from '$lib/playback.svelte';
 	import { colorRGB, CHAT, MEET, BOTH } from '$lib/rhythm-color';
 	import { fmtDate } from '$lib/format';
+
+	const pb = rhythmPlayback; // { state: { pos, playing, frames }, progress, toggle, reset }
 
 	// ---- config ----
 	const WEEKDAYS = 7;
@@ -81,14 +83,12 @@
 	const aP95 = $derived(p95(convA));
 	const bP95 = $derived(p95(convB));
 
-	const curWeek = $derived(weeks[Math.round(Math.min(rhythm.pos, Math.max(0, weeks.length - 1)))] ?? 0);
+	const curWeek = $derived(weeks[Math.round(Math.min(pb.state.pos, Math.max(0, weeks.length - 1)))] ?? 0);
 
 	let canvasEl = $state<HTMLCanvasElement | null>(null);
 
 	onMount(() => {
-		rhythm.weeks = weeks.length;
-		rhythm.pos = 0;
-		rhythm.playing = true;
+		pb.reset(weeks.length);
 		const cv = canvasEl;
 		if (!cv) return;
 
@@ -115,7 +115,7 @@
 			const A = convA;
 			const B = convB;
 			if (!A.length || W < 1 || H < 1) return;
-			const pos = Math.min(rhythm.pos, A.length - 1);
+			const pos = Math.min(pb.state.pos, A.length - 1);
 			const w0 = Math.floor(pos);
 			const w1 = Math.min(w0 + 1, A.length - 1);
 			const f = pos - w0;
@@ -123,8 +123,8 @@
 			const A1 = A[w1];
 			const B0 = B[w0];
 			const B1 = B[w1];
-			const pa = aP95;
-			const pb = bP95;
+			const p95a = aP95;
+			const p95b = bP95;
 			const colW = W / WEEKDAYS;
 			const rowH = H / ROWS;
 			// Fine-slot centre positions down the column, so night↔6 AM and 10 PM↔early blend across the
@@ -185,8 +185,8 @@
 					const b0 = B0[s0] + (B1[s0] - B0[s0]) * f;
 					const b1 = B0[s1] + (B1[s1] - B0[s1]) * f;
 					const bv = b0 + (b1 - b0) * fr;
-					const aN = Math.min(1, Math.max(0, av) / pa);
-					const bN = Math.min(1, Math.max(0, bv) / pb);
+					const aN = Math.min(1, Math.max(0, av) / p95a);
+					const bN = Math.min(1, Math.max(0, bv) / p95b);
 					const [r, g, b] = colorRGB(aN, bN);
 					const o = y * 4;
 					px[o] = r;
@@ -225,11 +225,11 @@
 			if (!last) last = ts;
 			const dt = ts - last;
 			last = ts;
-			if (rhythm.playing && rhythm.weeks > 1) {
-				rhythm.pos += dt / WEEK_MS;
-				if (rhythm.pos >= rhythm.weeks - 1) {
-					rhythm.pos = rhythm.weeks - 1;
-					rhythm.playing = false;
+			if (pb.state.playing && pb.state.frames > 1) {
+				pb.state.pos += dt / WEEK_MS;
+				if (pb.state.pos >= pb.state.frames - 1) {
+					pb.state.pos = pb.state.frames - 1;
+					pb.state.playing = false;
 				}
 			}
 			draw();
@@ -252,9 +252,9 @@
 	function onDown(e: PointerEvent): void {
 		dragging = true;
 		dragMoved = false;
-		dragWasPlaying = rhythm.playing;
+		dragWasPlaying = pb.state.playing;
 		dragStartX = e.clientX;
-		dragStartPos = rhythm.pos;
+		dragStartPos = pb.state.pos;
 		dragWidth = (e.currentTarget as HTMLElement).clientWidth || 1;
 		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 	}
@@ -264,19 +264,19 @@
 		if (!dragMoved && Math.abs(dx) < 4) return;
 		if (!dragMoved) {
 			dragMoved = true;
-			rhythm.playing = false;
+			pb.state.playing = false;
 		}
-		const total = Math.max(1, rhythm.weeks - 1);
-		rhythm.pos = Math.max(0, Math.min(total, dragStartPos + (dx / dragWidth) * total));
+		const total = Math.max(1, pb.state.frames - 1);
+		pb.state.pos = Math.max(0, Math.min(total, dragStartPos + (dx / dragWidth) * total));
 	}
 	function onUp(e: PointerEvent): void {
 		if (!dragging) return;
 		dragging = false;
 		(e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
 		if (dragMoved) {
-			if (dragWasPlaying) rhythm.playing = true;
+			if (dragWasPlaying) pb.state.playing = true;
 		} else {
-			toggleRhythm();
+			pb.toggle();
 		}
 	}
 </script>

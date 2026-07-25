@@ -4,8 +4,7 @@
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
 	import { theme, themes, setTheme, applyTheme, type ThemeId } from '$lib/theme.svelte';
-	import { raceProgress, toggleRace } from '$lib/race.svelte';
-	import { rhythmProgress, toggleRhythm } from '$lib/rhythm.svelte';
+	import { racePlayback, rhythmPlayback } from '$lib/playback.svelte';
 	import { app } from '$lib/app.svelte';
 
 	let { children } = $props();
@@ -32,8 +31,8 @@
 	};
 	const pages: StoryPage[] = [
 		{ href: `${base}/`, label: 'Wrapped', progress: null, toggle: null },
-		{ href: `${base}/race`, label: 'Over time', progress: raceProgress, toggle: toggleRace },
-		{ href: `${base}/rhythms`, label: 'Rhythms', progress: rhythmProgress, toggle: toggleRhythm },
+		{ href: `${base}/race`, label: 'Over time', progress: racePlayback.progress, toggle: racePlayback.toggle },
+		{ href: `${base}/rhythms`, label: 'Rhythms', progress: rhythmPlayback.progress, toggle: rhythmPlayback.toggle },
 	];
 	const norm = (s: string) => s.replace(/\/+$/, '') || '/';
 	const active = (href: string) => norm(page.url.pathname) === norm(href);
