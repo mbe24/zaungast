@@ -7,37 +7,55 @@
 import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
 import type { SqlDatabase, SqlDriver, SqlParam, SqlStatement } from '../src/ingest/sql-driver.js';
 
-// The minimal oo1 shapes used here (the package's own types are broad). oo1's `exec` with rowMode
-// 'object' + resultRows is the confirmed way to collect rows; `changes()` gives the affected-row count.
+// The minimal oo1 shapes used here (the package's own types are broad). We reuse a compiled `Stmt`
+// across calls (bind/step/reset) instead of oo1's convenience `exec()` — `exec()` prepares AND finalizes
+// on EVERY call (dist/index.mjs: `const stmt = db.prepare(sql); … stmt.finalize()`), so routing the hot
+// per-row upserts through it re-parses the same SQL thousands of times. `ChatStore` caches the wrapper
+// per SQL, so one compiled statement now lives for the store's lifetime (freed on `DB.close()`).
+interface Oo1Stmt {
+  bind(params: SqlParam[]): Oo1Stmt;
+  step(): boolean;
+  get(target: Record<string, unknown>): Record<string, unknown>;
+  reset(alsoClearBinds?: boolean): Oo1Stmt;
+  finalize(): void;
+}
 interface Oo1Db {
-  exec(
-    arg: string | { sql: string; bind?: SqlParam[]; rowMode?: string; resultRows?: unknown[] },
-  ): void;
+  exec(sql: string): void;
+  prepare(sql: string): Oo1Stmt;
   changes(): number;
   pointer: number;
   close(): void;
 }
 
-// A statement keyed by its SQL: each call re-execs through oo1 (which caches the compiled statement
-// internally). The prepared-statement cache in ChatStore still avoids re-building these wrapper objects.
 class WasmStatement implements SqlStatement {
   constructor(
     private readonly db: Oo1Db,
-    private readonly sql: string,
+    private readonly stmt: Oo1Stmt, // compiled once; reused
     private readonly lastRowid: () => number | bigint,
   ) {}
+  // reset(true) clears the previous call's bindings; rebind (positional array); trailing reset() releases
+  // the statement (a SELECT that returned a row is otherwise left mid-iteration).
+  private prime(params: SqlParam[]): void {
+    this.stmt.reset(true);
+    if (params.length) this.stmt.bind(params);
+  }
   run(...params: SqlParam[]): { changes: number | bigint; lastInsertRowid: number | bigint } {
-    this.db.exec({ sql: this.sql, bind: params.length ? params : undefined });
+    this.prime(params);
+    this.stmt.step();
+    this.stmt.reset();
     return { changes: this.db.changes(), lastInsertRowid: this.lastRowid() };
   }
   get(...params: SqlParam[]): unknown {
-    const rows: unknown[] = [];
-    this.db.exec({ sql: this.sql, bind: params.length ? params : undefined, rowMode: 'object', resultRows: rows });
-    return rows[0];
+    this.prime(params);
+    const row = this.stmt.step() ? this.stmt.get({}) : undefined;
+    this.stmt.reset();
+    return row;
   }
   all(...params: SqlParam[]): unknown[] {
+    this.prime(params);
     const rows: unknown[] = [];
-    this.db.exec({ sql: this.sql, bind: params.length ? params : undefined, rowMode: 'object', resultRows: rows });
+    while (this.stmt.step()) rows.push(this.stmt.get({}));
+    this.stmt.reset();
     return rows;
   }
 }
@@ -52,12 +70,12 @@ class WasmDatabase implements SqlDatabase {
     this.db.exec(sql);
   }
   prepare(sql: string): SqlStatement {
-    return new WasmStatement(this.db, sql, () =>
+    return new WasmStatement(this.db, this.db.prepare(sql), () =>
       this.sqlite3.capi.sqlite3_last_insert_rowid(this.db.pointer),
     );
   }
   close(): void {
-    this.db.close();
+    this.db.close(); // oo1 DB.close() finalizes any open statements
   }
 }
 
