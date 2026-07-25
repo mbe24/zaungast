@@ -59,6 +59,7 @@ const api = {
 		};
 
 		store?.close();
+		store = null; // so a failed build below leaves `wrapped()` with the clean "no store" error, not a closed handle
 		const phaseMs: Record<string, number> = {};
 		const onPhase = (phase: BuildPhase, ms: number) => {
 			phaseMs[phase] = Math.round(ms);
@@ -73,11 +74,12 @@ const api = {
 		let pool: Pool | null = null;
 		try {
 			const cores = self.navigator?.hardwareConcurrency || 4;
-			const size = Math.min(ldbNames.length, Math.max(1, cores - 1));
-			if (ldbNames.length > 1 && size > 1)
+			// Size by cores, NOT by .ldb count: parse uses at most one worker per .ldb, but EXTRACT chunks
+			// scale to the whole pool — so a fully-compacted single-.ldb store still parallelizes extract.
+			if (cores > 1)
 				pool = createPool(
 					() => new Worker(new URL('./parse.worker.ts', import.meta.url), { type: 'module' }),
-					size,
+					Math.max(1, cores - 1),
 				);
 		} catch {
 			pool = null;
@@ -106,33 +108,44 @@ const api = {
 					console.warn('[zaungast] parse pool failed → serial fallback', e);
 					snap = null;
 					usedPool = false;
+					pool.destroy(); // don't let stragglers contend with the serial re-parse
+					pool = null;
+				}
+			}
+
+			// Dev-only: prove the parallel-folded Snapshot equals a serial one (on the user's real data). A
+			// mismatch means the parallel path is wrong — fall back to serial rather than build from it.
+			if (usedPool && snap && import.meta.env.DEV) {
+				if (fingerprint(snap).hash === fingerprint(loadSnapshotFrom(source)).hash) {
+					console.log('[zaungast verify] parallel snapshot == serial ✓');
+				} else {
+					console.error('[zaungast verify] ✗ parallel snapshot MISMATCH → serial fallback');
+					usedPool = false;
+					snap = null;
 				}
 			}
 
 			if (usedPool && snap) {
-				// Dev-only: prove the parallel-folded Snapshot equals a serial one (on the user's real data).
-				if (import.meta.env.DEV) {
-					const ok = fingerprint(snap).hash === fingerprint(loadSnapshotFrom(source)).hash;
-					console.log(
-						ok
-							? '[zaungast verify] parallel snapshot == serial ✓'
-							: '[zaungast verify] ✗ FINGERPRINT MISMATCH',
-					);
-				}
 				// C4: fan the SSV extract out across the SAME pool (the library compacts records first, then
-				// concatenates results in dispatch order → byte-identical to serial).
-				store = await openStoreFromSnapshot(snap, {
-					driver,
-					deferFts: true,
-					onPhase,
-					runExtract: (task) =>
-						pool!.run<EntityExtract>({
-							kind: 'extract',
-							records: task.records,
-							mapping: task.mapping,
-							entity: task.entity,
-						}),
-				});
+				// concatenates results in dispatch order → byte-identical to serial). On ANY pool failure,
+				// fall back to a serial extract over the SAME snapshot (no re-parse) — extract is read-only.
+				try {
+					store = await openStoreFromSnapshot(snap, {
+						driver,
+						deferFts: true,
+						onPhase,
+						runExtract: (task) =>
+							pool!.run<EntityExtract>({
+								kind: 'extract',
+								records: task.records,
+								mapping: task.mapping,
+								entity: task.entity,
+							}),
+					});
+				} catch (e) {
+					console.warn('[zaungast] extract pool failed → serial extract', e);
+					store = await openStoreFromSnapshot(snap, { driver, deferFts: true, onPhase });
+				}
 			} else {
 				store = openStoreFromSource(source, { driver, deferFts: true, onPhase });
 			}

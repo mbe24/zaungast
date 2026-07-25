@@ -14,7 +14,15 @@ self.onmessage = (e: MessageEvent<Msg>) => {
   const msg = e.data;
   const post = self as unknown as Worker;
   if (msg.kind === 'parse') {
-    const res = parseTable(msg.bytes);
+    let res;
+    try {
+      res = parseTable(msg.bytes);
+    } catch {
+      // Mirror readTablesInto's inline catch: a corrupt table folds as lossy-empty (whole load marked
+      // lossy), never a pool-killing throw — so one bad `.ldb` can't force a full serial re-parse.
+      post.postMessage({ entries: [], lossy: true });
+      return;
+    }
     const transfer = [...new Set(res.entries.flatMap(([k, v]) => [k.buffer, v.buffer]))];
     post.postMessage(res, transfer as Transferable[]);
   } else {
