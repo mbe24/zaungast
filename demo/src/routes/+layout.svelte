@@ -3,7 +3,7 @@
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
-	import { theme, themes, setTheme, type ThemeId } from '$lib/theme.svelte';
+	import { theme, themes, setTheme, applyTheme, type ThemeId } from '$lib/theme.svelte';
 	import { raceProgress, toggleRace } from '$lib/race.svelte';
 	import { rhythmProgress, toggleRhythm } from '$lib/rhythm.svelte';
 	import { app } from '$lib/app.svelte';
@@ -15,10 +15,11 @@
 	const commit = __COMMIT__;
 
 	// Theme picker hidden for now — force Frappé as the standard theme (Fable defines the visual
-	// language next). The app.html pre-paint script sets it too, to avoid a flash.
-	// Flip this to true to bring the picker back.
+	// language next). The app.html pre-paint script sets it too, to avoid a flash. applyTheme (not
+	// setTheme) so forcing it here does NOT overwrite a saved preference — when the picker returns,
+	// its own setTheme calls persist again. Flip this to true to bring the picker back.
 	const showThemePicker = false;
-	onMount(() => setTheme('frappe'));
+	onMount(() => applyTheme('frappe'));
 
 	// Story-style page bars (part of the sticky header). Animated pages carry a `progress` (0..1 fill)
 	// and a `toggle` (play/pause) so the active bar doubles as their transport; static pages leave both

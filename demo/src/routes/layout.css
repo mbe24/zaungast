@@ -5,7 +5,6 @@
 @import "@fontsource-variable/playfair-display";
 
 @custom-variant dark (&:is(.dark *));
-@plugin '@tailwindcss/typography';
 
 :root {
 	--background: oklch(1 0 0);

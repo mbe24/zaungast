@@ -42,7 +42,7 @@ const LUT = (() => {
 	return lut;
 })();
 
-export const EMPTY_RGB = to255(rgb(EMPTY));
+const EMPTY_RGB = to255(rgb(EMPTY));
 
 // Normalized chat/meeting amounts (each already 0..1) → [r,g,b]. Empty (both 0) → the surface colour.
 export function colorRGB(aN: number, bN: number): [number, number, number] {

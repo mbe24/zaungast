@@ -29,14 +29,21 @@ function initial(): ThemeId {
 
 export const theme = $state<{ id: ThemeId }>({ id: initial() });
 
-export function setTheme(id: ThemeId): void {
+// Apply a theme to the DOM + in-memory state, WITHOUT persisting. Used to pin the currently-forced
+// standard theme on load so a hidden picker never clobbers a saved preference (see setTheme).
+export function applyTheme(id: ThemeId): void {
 	theme.id = id;
 	const def = themes.find((t) => t.id === id) ?? themes[0];
 	const root = document.documentElement;
 	root.setAttribute('data-theme', def.id);
 	root.classList.toggle('dark', def.dark);
+}
+
+// User-initiated theme change: apply AND persist the choice (the picker calls this).
+export function setTheme(id: ThemeId): void {
+	applyTheme(id);
 	try {
-		localStorage.setItem(STORAGE_KEY, def.id);
+		localStorage.setItem(STORAGE_KEY, id);
 	} catch {
 		/* localStorage unavailable — ignore */
 	}
