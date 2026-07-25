@@ -28,6 +28,7 @@ export type * from './format/types.js';
 // cost). The driver types let the consumer type the wasm driver they inject.
 export {
   openStoreFromSource,
+  openStoreFromSnapshot,
   type BuildPhase,
   type StoreView,
   type TeamsStore,
@@ -48,6 +49,9 @@ export {
   type ConvMessagesResult,
   type TopicsComputeResult,
 } from './store-facade.js';
+// Parallel-extract seam: a consumer supplies an ExtractExecutor (e.g. a worker pool running
+// extractRecords) to openStoreFromSnapshot; the library owns the ordering/reassembly.
+export type { ExtractExecutor, ExtractTask } from './ingest/ingest-core.js';
 export type { SqlDriver, SqlDatabase, SqlStatement, SqlParam } from './ingest/sql-driver.js';
 export type { StoreMeta } from './ingest/store.js';
 export type {

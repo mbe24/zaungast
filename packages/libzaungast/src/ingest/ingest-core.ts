@@ -6,7 +6,13 @@
 import { fingerprint } from '../format/fingerprint.js';
 import { selectMapping, extractEntity, entityTargets } from '../format/resolver.js';
 import { fromLatin1, toHex } from '#bytes';
-import type { Snapshot } from '../format/types.js';
+import type {
+  Snapshot,
+  SnapshotRecord,
+  Mapping,
+  EntityExtract,
+  EntityRecord,
+} from '../format/types.js';
 import { ChatStore, type StoreMeta } from './store.js';
 import type { SqlDriver } from './sql-driver.js';
 import {
@@ -119,8 +125,10 @@ export function applyMessages(
 // Extract the profiles name-source rows (mri → display name) from the snapshot. Split from
 // applyProfiles so a full ingest can extract every entity's rows BEFORE building the store, then
 // drop the snapshot (the extract-then-drop-snapshot ordering — see extractFromSnapshot()).
-function buildProfileRows(snap: Snapshot, mapping: any) {
-  return extractEntity(snap, mapping, 'profile').records.map((r: any) => {
+// Pure shape: decoded profile records → name-source rows. No snapshot/cross-record state, so it runs
+// identically whether the records were decoded serially or reassembled from parallel extract workers.
+function shapeProfileRows(records: any[]) {
+  return records.map((r: any) => {
     const name = String(r.name ?? '');
     const type = String(r.type ?? '') || 'None';
     const parts = resolveProfileName({
@@ -138,6 +146,9 @@ function buildProfileRows(snap: Snapshot, mapping: any) {
       org: String(r.org ?? ''),
     };
   });
+}
+function buildProfileRows(snap: Snapshot, mapping: any) {
+  return shapeProfileRows(extractEntity(snap, mapping, 'profile').records);
 }
 // Populate the profiles name-source. Whole-store replace each ingest.
 export function applyProfiles(store: ChatStore, snap: Snapshot, mapping: any) {
@@ -181,8 +192,7 @@ function compactAttendees(attendees: unknown): string | null {
 // Build the events table rows (calendar) from the snapshot. Split from applyEvents for the
 // extract-then-drop-snapshot ordering. `RecurringMaster` rows are series templates,
 // never rendered as an event, so they're dropped here rather than inserted and filtered later.
-function buildEventRows(snap: Snapshot, mapping: any) {
-  const rows = extractEntity(snap, mapping, 'event').records;
+function shapeEventRows(rows: any[]) {
   const out = [];
   for (const r of rows as any[]) {
     if (r.eventType === 'RecurringMaster') continue;
@@ -217,6 +227,9 @@ function buildEventRows(snap: Snapshot, mapping: any) {
     });
   }
   return out;
+}
+function buildEventRows(snap: Snapshot, mapping: any) {
+  return shapeEventRows(extractEntity(snap, mapping, 'event').records);
 }
 // Populate the events table — whole-store replace each ingest, exactly like applyProfiles
 // (see store.ts's replaceEvents doc).
@@ -255,8 +268,7 @@ function recordingLinkOf(r: any): string | null {
 // extract-then-drop-snapshot ordering.
 // `is_missed` maps ONLY callState==='Missed' (the real data's other observed value, 'Declined',
 // is a deliberate reject — not a miss).
-function buildCallRows(snap: Snapshot, mapping: any) {
-  const rows = extractEntity(snap, mapping, 'call').records;
+function shapeCallRows(rows: any[]) {
   const out = [];
   for (const r of rows as any[]) {
     const direction = r.callDirection != null ? String(r.callDirection) : null;
@@ -284,6 +296,9 @@ function buildCallRows(snap: Snapshot, mapping: any) {
     });
   }
   return out;
+}
+function buildCallRows(snap: Snapshot, mapping: any) {
+  return shapeCallRows(extractEntity(snap, mapping, 'call').records);
 }
 // Populate the calls table — whole-store replace each ingest, like applyEvents.
 export function applyCalls(store: ChatStore, snap: Snapshot, mapping: any) {
@@ -400,6 +415,97 @@ export function extractFromSnapshot(
   const callRows = buildCallRows(snap, mapping);
   // Matches native storeBuild.extract (the five extract_rows) — selfMri vote is timed OUT, as native does.
   opts.onPhase?.('extract', performance.now() - tExtract);
+  const selfMri = voteSelfMri(msgRows);
+  return {
+    fp,
+    mapping,
+    maxSeq,
+    lossy,
+    selfMri,
+    msgTargets,
+    convTargets,
+    msgRows,
+    convRows,
+    profileRows,
+    eventRows,
+    callRows,
+  };
+}
+
+// A unit of parallel extract work: one entity's mapping + a contiguous range of that entity's
+// target-bucket records, compact-copied (see compactRecord) so a structured-clone postMessage moves only
+// these bytes, not the shared decompressed block buffers the records were views into. The executor runs
+// `extractRecords(task.records, task.mapping, task.entity)` (e.g. in a Web Worker) and returns its result.
+export interface ExtractTask {
+  entity: string;
+  mapping: Mapping;
+  records: SnapshotRecord[];
+}
+export type ExtractExecutor = (task: ExtractTask) => Promise<EntityExtract>;
+
+// Standalone-buffer copy of a record's key AND value (both are views over big shared file buffers, so
+// cloning a view would drag the whole underlying ArrayBuffer across the worker boundary).
+function compactRecord(r: SnapshotRecord): SnapshotRecord {
+  return { ...r, key: r.key.slice(), value: r.value ? r.value.slice() : r.value };
+}
+
+// Async sibling of extractFromSnapshot. With no `runExtract` it delegates to the serial path (one code
+// path, zero drift). With one, it fans each entity's target-bucket records out in contiguous ranges via
+// the executor and reassembles rows in DISPATCH order — provably identical to the serial extract because
+// recordsToRows is a pure, order-preserving per-record map (rows(A)++rows(B) === rows(A++B), and chunk
+// boundaries may cross buckets harmlessly). `Promise.all` preserves array (dispatch) order regardless of
+// completion order, so `msgRows` order — and thus the `voteSelfMri` tie-break — is unaffected by timing.
+export async function extractFromSnapshotAsync(
+  snap: Snapshot,
+  opts: { runExtract?: ExtractExecutor; chunkRecords?: number; onPhase?: PhaseHook } = {},
+): Promise<FullExtract> {
+  const { runExtract, chunkRecords = 4000, onPhase } = opts;
+  if (!runExtract) return extractFromSnapshot(snap, { onPhase });
+  const { maxSeq, lossy } = snap;
+  const fp = fingerprint(snap);
+  const { mapping } = selectMapping(fp);
+  if (!mapping) return extractFromSnapshot(snap, { onPhase }); // returns the empty (no-schema) extract
+
+  // Flatten one entity's target buckets IN ORDER (target-set order, then bucket-record order — exactly
+  // extractEntity's traversal), chunk, dispatch, concatenate by range.
+  const extractPar = async (entity: string, targets: Set<string>): Promise<EntityExtract> => {
+    const all: SnapshotRecord[] = [];
+    for (const sk of targets) {
+      const b = snap.buckets.get(sk);
+      if (b) for (const r of b.records) all.push(r);
+    }
+    const parts: Promise<EntityExtract>[] = [];
+    for (let i = 0; i < all.length; i += chunkRecords)
+      parts.push(
+        runExtract({ entity, mapping, records: all.slice(i, i + chunkRecords).map(compactRecord) }),
+      );
+    const done = await Promise.all(parts);
+    const records: EntityRecord[] = [];
+    let decoded = 0;
+    let dropped = 0;
+    for (const p of done) {
+      for (const rec of p.records) records.push(rec);
+      decoded += p.decoded;
+      dropped += p.dropped;
+    }
+    return { records, decoded, dropped };
+  };
+
+  const tExtract = onPhase ? performance.now() : 0;
+  const msgTargets = entityTargets(snap, mapping, 'message');
+  const convTargets = entityTargets(snap, mapping, 'conversation');
+  const msgRows = (await extractPar('message', msgTargets)).records;
+  const convRows = (await extractPar('conversation', convTargets)).records;
+  const profileRows = shapeProfileRows(
+    (await extractPar('profile', entityTargets(snap, mapping, 'profile'))).records,
+  );
+  const eventRows = shapeEventRows(
+    (await extractPar('event', entityTargets(snap, mapping, 'event'))).records,
+  );
+  const callRows = shapeCallRows(
+    (await extractPar('call', entityTargets(snap, mapping, 'call'))).records,
+  );
+  onPhase?.('extract', performance.now() - tExtract);
   const selfMri = voteSelfMri(msgRows);
   return {
     fp,

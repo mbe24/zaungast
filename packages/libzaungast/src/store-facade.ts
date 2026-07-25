@@ -9,9 +9,15 @@
 // { ok: true, … }`; an INFALLIBLE one returns its rows/value directly. Never a silent fall-through.
 import type { ChatStore, StoreMeta } from './ingest/store.js';
 import type { SqlDriver } from './ingest/sql-driver.js';
-import type { SnapshotSource } from './format/types.js';
+import type { Snapshot, SnapshotSource } from './format/types.js';
 import { loadSnapshotFrom } from './format/chromium/indexeddb.js';
-import { buildStore, extractFromSnapshot, type Ingested } from './ingest/ingest-core.js';
+import {
+  buildStore,
+  extractFromSnapshot,
+  extractFromSnapshotAsync,
+  type ExtractExecutor,
+  type Ingested,
+} from './ingest/ingest-core.js';
 import {
   queryConversations,
   conversationById,
@@ -367,6 +373,32 @@ export function openStoreFromSource(
   },
 ): TeamsStore {
   const ex = extractFromSource(source, opts.onPhase);
+  const ingested = buildStore(ex, opts.driver, { onPhase: opts.onPhase, deferFts: opts.deferFts });
+  return new StaticTeamsStore(ingested, opts.extraStopwords);
+}
+
+// Build a store from an ALREADY-DECODED Snapshot (the browser parallel-ingest path: parse `.ldb`s in a
+// worker pool → fold the Snapshot on the coordinator → here). `runExtract` fans the per-entity SSV decode
+// out to the same pool (omit it for serial extract). No 'decode' phase — decoding happened upstream.
+// Async only because `runExtract` is; with it omitted the extract is synchronous under the hood.
+// The caller should drop its `snap` reference once this resolves (the extract-then-drop-snapshot RSS
+// discipline can't be enforced across this boundary).
+export async function openStoreFromSnapshot(
+  snap: Snapshot,
+  opts: {
+    driver: SqlDriver;
+    runExtract?: ExtractExecutor;
+    chunkRecords?: number;
+    extraStopwords?: Iterable<string>;
+    onPhase?: (phase: BuildPhase, ms: number) => void;
+    deferFts?: boolean;
+  },
+): Promise<TeamsStore> {
+  const ex = await extractFromSnapshotAsync(snap, {
+    runExtract: opts.runExtract,
+    chunkRecords: opts.chunkRecords,
+    onPhase: opts.onPhase,
+  });
   const ingested = buildStore(ex, opts.driver, { onPhase: opts.onPhase, deferFts: opts.deferFts });
   return new StaticTeamsStore(ingested, opts.extraStopwords);
 }
