@@ -7,7 +7,6 @@ import {
 	openStoreFromSource,
 	openStoreFromSnapshot,
 	loadSnapshotFrom,
-	fingerprint,
 	type SnapshotSource,
 	type Snapshot,
 	type TableReadResult,
@@ -32,12 +31,6 @@ let driverPromise: ReturnType<typeof createSqliteWasmDriver> | null = null;
 const getDriver = () => (driverPromise ??= createSqliteWasmDriver({ locateFile: () => sqlite3Url }));
 
 const isData = (n: string) => n.endsWith('.ldb') || n.endsWith('.log');
-
-// Opt-in canary: re-parse the store serially and assert the parallel-folded Snapshot's fingerprint
-// matches. OFF by default — the byte-identity is already covered by libzaungast's fixture +
-// structuredClone tests, and running it here would DOUBLE the cold-read decode (a full serial re-parse on
-// top of the parallel one), masking the speedup. Flip to true once to check correctness on real data.
-const VERIFY_PARALLEL = false;
 
 const api = {
 	// Build the store from a picked leveldb folder. Reports progress via the (optional) proxied callback.
@@ -116,20 +109,6 @@ const api = {
 					usedPool = false;
 					pool.destroy(); // don't let stragglers contend with the serial re-parse
 					pool = null;
-				}
-			}
-
-			// Opt-in canary (VERIFY_PARALLEL, off by default). Uses a PROGRESS-FREE source so the serial
-			// re-parse can't advance the decode counter (that was the "44 of 27" bug); a mismatch falls back
-			// to serial rather than building from a bad snapshot.
-			if (usedPool && snap && VERIFY_PARALLEL) {
-				const bare: SnapshotSource = { names: () => [...map.keys()], read: (n) => map.get(n)! };
-				if (fingerprint(snap).hash === fingerprint(loadSnapshotFrom(bare)).hash) {
-					console.log('[zaungast verify] parallel snapshot == serial ✓');
-				} else {
-					console.error('[zaungast verify] ✗ parallel snapshot MISMATCH → serial fallback');
-					usedPool = false;
-					snap = null;
 				}
 			}
 
