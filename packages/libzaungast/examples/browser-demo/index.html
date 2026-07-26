@@ -43,8 +43,22 @@ C:\Users\&lt;you&gt;\AppData\Local\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Mic
         <span
           class="db-pick"
           title="Query engine — SQLite (full, FTS5) or DuckDB (analytics; search via LIKE)"
+          aria-label="query engine"
         >
-          db
+          <!-- database (cylinder) -->
+          <svg class="ctl-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <ellipse cx="12" cy="5.5" rx="7" ry="2.8" stroke="currentColor" stroke-width="1.7" />
+            <path
+              d="M5 5.5v13c0 1.55 3.13 2.8 7 2.8s7-1.25 7-2.8v-13"
+              stroke="currentColor"
+              stroke-width="1.7"
+            />
+            <path
+              d="M5 12c0 1.55 3.13 2.8 7 2.8s7-1.25 7-2.8"
+              stroke="currentColor"
+              stroke-width="1.7"
+            />
+          </svg>
           <span class="pull">
             <select id="engine" aria-label="query engine">
               <option value="sqlite">SQLite</option>
@@ -58,8 +72,23 @@ C:\Users\&lt;you&gt;\AppData\Local\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Mic
           class="stepper"
           id="threads-stepper"
           title="Worker-pool size for parallel decode/extract"
+          aria-label="worker threads"
         >
-          threads
+          <!-- cpu / threads -->
+          <svg
+            class="ctl-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            aria-hidden="true"
+          >
+            <rect x="7" y="7" width="10" height="10" rx="2" />
+            <path
+              d="M10 3.5v3M14 3.5v3M10 17.5v3M14 17.5v3M3.5 10h3M3.5 14h3M17.5 10h3M17.5 14h3"
+            />
+          </svg>
           <span class="seg">
             <button type="button" id="thread-dec" class="step-btn" aria-label="fewer threads">
               −
@@ -71,8 +100,25 @@ C:\Users\&lt;you&gt;\AppData\Local\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Mic
           </span>
         </span>
         <!-- Build-mode toggle: on = parallel worker pool, off = serial. Label text first, switch after. -->
-        <label class="mode" title="Parse .ldb + run extract across a Web Worker pool">
-          parallel
+        <label
+          class="mode"
+          title="Parse .ldb + run extract across a Web Worker pool"
+          aria-label="parallel"
+        >
+          <!-- parallel lanes (two arrows) -->
+          <svg
+            class="ctl-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M3 8.5h13.5M13 5.5l3.5 3-3.5 3" />
+            <path d="M3 15.5h13.5M13 12.5l3.5 3-3.5 3" />
+          </svg>
           <span class="switch">
             <input id="parallel" type="checkbox" checked />
             <span class="slider"></span>

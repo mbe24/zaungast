@@ -35,6 +35,48 @@ pre {
   align-items: center;
   gap: 0.5rem;
 }
+/* iOS filled action buttons — Primary (pick) = blue, Secondary (self-test) = grey. Horizontal, sized to
+   content (not full-width). Overrides the plain global `button` rule for these two ids. */
+#pickBtn,
+#selftest {
+  font-weight: 600;
+  border: none;
+  border-radius: 999px;
+  padding: 0.5rem 1.15rem;
+  margin: 0;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+#pickBtn {
+  background: #0a84ff;
+  color: #fff;
+}
+#pickBtn:hover {
+  background: #0071e3;
+}
+#selftest {
+  background: #e5e5ea;
+  color: #1c1c1e;
+}
+#selftest:hover {
+  background: #d8d8dd;
+}
+#pickBtn:active,
+#selftest:active {
+  transform: translateY(0.5px);
+}
+#pickBtn:focus-visible,
+#selftest:focus-visible {
+  outline: 2px solid #0a84ff;
+  outline-offset: 2px;
+}
+/* Monochrome control icons replacing the db/threads/parallel text labels (grey on white). */
+.ctl-icon {
+  width: 17px;
+  height: 17px;
+  color: #8e8e93;
+  flex: none;
+}
 /* Right-aligned cluster: the threads stepper then the parallel toggle (master switch stays rightmost). */
 .right-controls {
   margin-left: auto;
