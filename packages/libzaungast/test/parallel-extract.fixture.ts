@@ -14,6 +14,7 @@ import {
   type ExtractExecutor,
 } from '../src/ingest/ingest-core.js';
 import { extractRecords } from '../src/format/resolver.js';
+import { packRecords, unpackRecords } from '../src/format/table-transfer.js';
 import { openStoreFromSource, openStoreFromSnapshot } from '../src/store-facade.js';
 import { MemorySource } from '../src/format/chromium/memory-source.js';
 import { createSqliteWasmDriver } from '../examples/sqlite-wasm-driver.js';
@@ -62,17 +63,21 @@ test('extractFromSnapshotAsync with no executor delegates to the serial path', a
   expect(await extractFromSnapshotAsync(snap)).toEqual(extractFromSnapshot(snap));
 });
 
-test('extract tasks survive structuredClone (the worker boundary) === serial', async () => {
-  // structuredClone(task) is exactly what postMessage to an extract worker does — the compacted
-  // records + bundled mapping cross by copy. Proves the returned rows are byte-identical.
+test('extract tasks survive the PACKED worker boundary (packRecords→clone→unpack) === serial', async () => {
+  // Models the ACTUAL production wire: the executor receives LIVE records (views over shared buffers),
+  // packs them into transferable blobs (packRecords — the one copy), those cross by postMessage
+  // (structuredClone models it; a real transfer only skips the copy, same bytes), and the worker rebuilds
+  // them (unpackRecords) before extractRecords. Proves the returned rows are byte-identical AND exercises
+  // the tombstone (null value) sentinel end-to-end.
   const snap = loadSnapshotFrom(memSource());
   const serial = extractFromSnapshot(snap);
-  const cloningExec: ExtractExecutor = async (task) => {
-    const t = structuredClone(task);
-    return extractRecords(t.records, t.mapping, t.entity);
+  const packingExec: ExtractExecutor = async (task) => {
+    const wire = structuredClone(packRecords(task.records)); // coordinator packs → boundary
+    const records = unpackRecords(wire); // worker rebuilds views into the blobs
+    return extractRecords(records, task.mapping, task.entity);
   };
   const parallel = await extractFromSnapshotAsync(snap, {
-    runExtract: cloningExec,
+    runExtract: packingExec,
     chunkRecords: 4,
   });
   expect(parallel).toEqual(serial);

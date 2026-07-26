@@ -468,23 +468,22 @@ export function extractFromSnapshot(
 }
 
 // A unit of parallel extract work: one entity's mapping + a contiguous range of that entity's
-// target-bucket records, compact-copied (see compactRecord) so a structured-clone postMessage moves only
-// these bytes, not the shared decompressed block buffers the records were views into. The executor runs
-// `extractRecords(task.records, task.mapping, task.entity)` (e.g. in a Web Worker) and returns its result.
+// target-bucket records. The executor runs `extractRecords(task.records, task.mapping, task.entity)`
+// (e.g. in a Web Worker) and returns its result.
+//
+// CONTRACT — `records` are the LIVE SnapshotRecord objects from the snapshot: their `key`/`value` are
+// subarray VIEWS over the big shared decompressed-block buffers. An executor that crosses a worker
+// boundary MUST serialize them with `packRecords` (format/table-transfer) — which copies only the
+// record bytes into contiguous transferable blobs — and MUST NOT `structuredClone` them raw. Cloning a
+// raw view drags its ENTIRE underlying ArrayBuffer across the boundary (a silent perf cliff, not a
+// correctness bug). Executors must also treat the records as read-only (no mutation). Both in-repo
+// executors (the browser demo + Wrapped workers) pack; the serial path never uses an executor.
 export interface ExtractTask {
   entity: string;
   mapping: Mapping;
   records: SnapshotRecord[];
 }
 export type ExtractExecutor = (task: ExtractTask) => Promise<EntityExtract>;
-
-// Standalone-buffer copy of a record's key AND value (both are views over big shared file buffers, so
-// cloning a view would drag the whole underlying ArrayBuffer across the worker boundary). `new
-// Uint8Array(view)` ALWAYS allocates a fresh buffer — unlike `Buffer.prototype.slice` (Node), which
-// returns a view, so a plain `.slice()` would silently not compact on the node codec.
-function compactRecord(r: SnapshotRecord): SnapshotRecord {
-  return { ...r, key: new Uint8Array(r.key), value: r.value ? new Uint8Array(r.value) : r.value };
-}
 
 // Async sibling of extractFromSnapshot. With no `runExtract` it delegates to the serial path (one code
 // path, zero drift). With one, it fans each entity's target-bucket records out in contiguous ranges via
@@ -513,10 +512,10 @@ export async function extractFromSnapshotAsync(
       if (b) for (const r of b.records) all.push(r);
     }
     const parts: Promise<EntityExtract>[] = [];
+    // Hand the executor the live records (views into shared buffers); it packs them for the boundary
+    // (see the ExtractTask contract). No pre-copy here — packRecords is the single copy.
     for (let i = 0; i < all.length; i += chunkRecords)
-      parts.push(
-        runExtract({ entity, mapping, records: all.slice(i, i + chunkRecords).map(compactRecord) }),
-      );
+      parts.push(runExtract({ entity, mapping, records: all.slice(i, i + chunkRecords) }));
     const done = await Promise.all(parts);
     const records: EntityRecord[] = [];
     let decoded = 0;
