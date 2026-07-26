@@ -57,6 +57,11 @@ export class ChatStore {
       return;
     }
     this.db = driver.open(':memory:');
+    // Transient build DB (no durability needed): keep temp structures (recompute/FTS temp tables +
+    // sorters) in RAM and give the pager a roomier cache for the bulk insert + index maintenance.
+    // Perf-only + byte-neutral (the store dump is unchanged), so the TS↔native byte-diff is unaffected;
+    // the native engine sets its own. Only on the in-memory build path, not the read-only openFile path.
+    this.db.exec('PRAGMA temp_store=MEMORY; PRAGMA cache_size=-16384;');
     this.ftsEnabled = this.detectFts();
     this.db.exec(SCHEMA_SQL);
     if (this.ftsEnabled) {
