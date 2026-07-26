@@ -8,7 +8,7 @@ import {
   computeTopicRows,
   computeTopicsWindow,
   deriveTables,
-  makeExtractor,
+  makePhraseExtractor,
   type BaseTables,
   type Topic,
 } from 'libzaungast/web';
@@ -193,7 +193,7 @@ export async function buildDuckDbStore(
           .toLowerCase()
           .match(/[\p{L}\p{M}]{3,}/gu) ?? [])
           nameTokens.add(w);
-      const { phrases } = makeExtractor(nameTokens);
+      const { phrases } = makePhraseExtractor(nameTokens);
 
       const raw = await conn.query<Record<string, unknown>>(
         `select ts, sender_mri, content from messages where is_system = 0 and content <> ''`,

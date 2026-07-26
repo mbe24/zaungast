@@ -28,6 +28,9 @@ export { loadSnapshot } from './chromium/node-source.js';
 export { fingerprint } from './fingerprint.js';
 export { loadMapping } from './node-resolver.js';
 export { selectMapping, entityTargets, extractEntity, extractRecords } from './resolver.js';
+// Per-file `.ldb` parse primitive — parse one table's bytes, then hand results to loadSnapshotFrom via
+// its `parsedTables` option (a parse-worker pool's building block). Pairs with the transfer codec below.
+export { parseTable } from './chromium/sstable.js';
 // Parallel-ingest transfer codec (engine-agnostic): flatten a parsed `.ldb` table into 3 transferable
 // buffers so a worker pool (Web Worker or node:worker_threads) crosses the boundary cheaply. Non-web too
 // — the Node/MCP side can reuse it when it grows a parallel path.

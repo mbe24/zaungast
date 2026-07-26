@@ -173,9 +173,10 @@ export interface StoreView {
 // counts/…). Its `lastFullAt`/`refreshMode` fields are live-refresh diagnostics — static and
 // meaningless for a one-shot `openStore`/`openStoreFromSource`.
 export interface TeamsStore extends StoreView {
-  // Escape hatch: the underlying SqlDatabase, for custom READ-ONLY SQL or exporting the built tables to
-  // another engine (the DuckDB POC copies the base tables through this). The store owns its lifetime —
-  // don't mutate or close it here.
+  // @experimental escape hatch: the underlying SqlDatabase, for custom READ-ONLY SQL / analytics the
+  // namespace APIs don't cover, or exporting the built tables. NOT part of the stable contract; the store
+  // owns its lifetime — don't mutate or close it here. (Non-SQLite backends build from the engine-agnostic
+  // shapeBaseTables/deriveTables seam instead, not from this.)
   readonly rawDb: SqlDatabase;
   close(): void;
   [Symbol.dispose](): void;

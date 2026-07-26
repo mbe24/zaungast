@@ -10,6 +10,7 @@ import type {
   Snapshot,
   SnapshotRecord,
   Mapping,
+  Fingerprint,
   EntityExtract,
   EntityRecord,
 } from '../format/types.js';
@@ -413,8 +414,8 @@ function finalMeta(
 // Everything a full ingest extracts from a snapshot, as plain row arrays (no Buffer slices, no
 // snapshot references). `mapping` is null when no schema matched.
 export interface FullExtract {
-  fp: any;
-  mapping: any;
+  fp: Fingerprint;
+  mapping: Mapping | null;
   maxSeq: number;
   lossy: boolean;
   selfMri: string | null;
@@ -439,8 +440,8 @@ export interface BaseTables {
   events: FullExtract['eventRows'];
   calls: FullExtract['callRows'];
   selfMri: string | null;
-  fp: any;
-  mapping: any;
+  fp: Fingerprint;
+  mapping: Mapping | null;
   lossy: boolean;
   maxSeq: number;
 }

@@ -5,8 +5,10 @@
 // for power users (audience #2) is at 'libzaungast/format'; the format engine-seam types at
 // 'libzaungast/format/engine'; the ingest-engine SPI for engine authors (audience #3) at
 // 'libzaungast/engine-spi'. Everything else is INTERNAL and unreachable through the package's
-// exports map: the SQL query layer (query.ts), the SQLite ChatStore + its raw db handle, Session,
-// the ingest internals, and the Chromium byte readers / value decoder.
+// exports map: the SQL query layer (query.ts), the SQLite ChatStore internals, Session, the ingest
+// internals, and the Chromium byte readers / value decoder. The ONE reachable low-level handle is
+// `TeamsStore.rawDb` — a deliberate, @experimental, READ-ONLY escape hatch (see its doc), not part of
+// the stable contract.
 //
 // Guarantees (upheld by the API, enforced by the absence of any other surface): read-only (never
 // writes/locks/mmaps the Teams dir — it reads copies), offline (no network, zero runtime deps),
