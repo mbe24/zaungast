@@ -425,6 +425,38 @@ export interface FullExtract {
   callRows: ReturnType<typeof buildCallRows>;
 }
 
+// The engine-agnostic base tables: the fully-SHAPED rows a store loads, before any per-engine derivation
+// (people, conversation aggregates) or search index. Both the SQLite builder (buildStore) and any other
+// backend (e.g. the DuckDB demo) consume THIS — so their loaded data is identical by construction. Row
+// arrays are passed BY REFERENCE from the FullExtract (profiles/events/calls are already shaped at extract
+// time); only `messages` (folded winners) and `conversations` (meta) are shaped here.
+export interface BaseTables {
+  conversations: ConvMetaRow[];
+  messages: MessageInsert[];
+  profiles: FullExtract['profileRows'];
+  events: FullExtract['eventRows'];
+  calls: FullExtract['callRows'];
+  selfMri: string | null;
+  fp: any;
+  mapping: any;
+  lossy: boolean;
+  maxSeq: number;
+}
+export function shapeBaseTables(ex: FullExtract): BaseTables {
+  return {
+    conversations: shapeConversationMetaRows(ex.convRows),
+    messages: foldMessageWinners(ex.msgRows, ex.selfMri),
+    profiles: ex.profileRows,
+    events: ex.eventRows,
+    calls: ex.callRows,
+    selfMri: ex.selfMri,
+    fp: ex.fp,
+    mapping: ex.mapping,
+    lossy: ex.lossy,
+    maxSeq: ex.maxSeq,
+  };
+}
+
 // Opt-in profiling hook (dev only — see scripts/profile.mjs). Fires once per store-build phase with
 // its wall-clock in ms. PURE OBSERVATION: it never changes control flow or output and is a no-op in
 // production (a `performance.now()` pair runs only when a hook is supplied). Mirrors the native
@@ -629,16 +661,21 @@ export function buildStore(
 
   const store = new ChatStore(driver);
   const tApply = opts.onPhase ? performance.now() : 0;
+  // Shape the engine-agnostic base tables (message fold + conv-meta) — the SAME rows any other backend
+  // consumes. Computed inside the apply-timed window so the phase stays comparable with the native
+  // build_store_timed. The fold touches no DB state and allocates no handles, so per-table insert order
+  // and handle assignment are byte-identical to the old inline path.
+  const base = shapeBaseTables(ex);
   store.db.exec('BEGIN');
-  applyConversationMeta(store, ex.convRows);
-  bulkInsertMessages(store, ex.msgRows, ex.selfMri);
-  store.replaceProfiles(ex.profileRows);
-  store.replaceEvents(ex.eventRows);
-  store.replaceCalls(ex.callRows);
+  for (const c of base.conversations) store.upsertConversationMeta(c);
+  store.insertMessagesBulk(base.messages);
+  store.replaceProfiles(base.profiles);
+  store.replaceEvents(base.events);
+  store.replaceCalls(base.calls);
   store.db.exec('COMMIT');
   opts.onPhase?.('apply', performance.now() - tApply);
   const tRecompute = opts.onPhase ? performance.now() : 0;
-  store.recomputeDerived(ex.selfMri);
+  store.recomputeDerived(base.selfMri);
   opts.onPhase?.('recompute', performance.now() - tRecompute);
   if (!opts.deferFts) {
     const tFts = opts.onPhase ? performance.now() : 0;
