@@ -42,13 +42,12 @@ function renderResult(d: any) {
     log('  (empty source → schemaMatched:', d.meta.schemaMatched, ')');
     return;
   }
-  const parseLine =
-    d.parseMs != null ? `, parse-pool ${d.parseMs}ms over ${d.poolSize} workers` : '';
+  // parse-pool time is shown live as the `✓ decode …ms (using N workers)` phase line above.
   const warmLine =
     d.driverWait != null
       ? ` · driverWait ${d.driverWait}ms${d.prewarmed ? ' (pool prewarmed)' : ''}`
       : '';
-  log(`✓ built store in ${d.buildMs}ms  [${d.mode}${parseLine}]${warmLine}\n`);
+  log(`✓ built store in ${d.buildMs}ms  [${d.mode}]${warmLine}\n`);
   log('meta:', fmtMeta(d.meta));
   log(`\nconversations (${d.conversations.length} shown):`);
   for (const c of d.conversations)
@@ -73,7 +72,7 @@ worker.onmessage = (e: MessageEvent) => {
   if (m.type === 'progress') log('› ' + m.msg);
   else if (m.type === 'decoding')
     status(`  decoding ${m.name} (${m.i} of ${m.n})`); // single line, updates in place
-  else if (m.type === 'phase') log(`  ✓ ${m.phase} ${m.ms}ms`);
+  else if (m.type === 'phase') log(`  ✓ ${m.phase} ${m.ms}ms${m.note ? ' ' + m.note : ''}`);
   else if (m.type === 'error') log('✗ ' + m.msg);
   else if (m.type === 'result') {
     if (pickT0 && !m.data.selfTest)

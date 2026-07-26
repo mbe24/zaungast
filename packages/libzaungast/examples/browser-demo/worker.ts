@@ -29,7 +29,7 @@ type In =
 type Out =
   | { type: 'progress'; msg: string }
   | { type: 'decoding'; name: string; i: number; n: number }
-  | { type: 'phase'; phase: string; ms: number }
+  | { type: 'phase'; phase: string; ms: number; note?: string }
   | { type: 'result'; data: unknown }
   | { type: 'error'; msg: string };
 
@@ -138,14 +138,6 @@ self.onmessage = async (e: MessageEvent<In>) => {
     try {
       if (pool) {
         try {
-          const logCount = dataFiles.length - ldbNames.length; // the .log WAL(s) folded in after
-          post({
-            type: 'progress',
-            msg:
-              `parsing ${ldbNames.length} .ldb across ${poolSize} workers` +
-              (logCount ? ` (+${logCount} .log WAL folded after)` : '') +
-              '…',
-          });
           const tParse = performance.now();
           // R-B: dispatch every .ldb parse eagerly, then fold each via getTable in canonical order while
           // the pool parses the rest — the fold overlaps the parse (byte-identical; fold order unchanged).
@@ -162,6 +154,13 @@ self.onmessage = async (e: MessageEvent<In>) => {
             getTable: (name) => pending.get(name),
           });
           parseMs = performance.now() - tParse; // parse+fold overlap window
+          // Report parallel decode as a phase line aligned with serial's `✓ decode`, noting the pool.
+          post({
+            type: 'phase',
+            phase: 'decode',
+            ms: Math.round(parseMs),
+            note: `(using ${poolSize} workers)`,
+          });
           store = await openStoreFromSnapshot(snap, {
             driver,
             onPhase,
