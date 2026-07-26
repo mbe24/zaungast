@@ -13,7 +13,7 @@ import type {
   EntityExtract,
   EntityRecord,
 } from '../format/types.js';
-import { ChatStore, type StoreMeta } from './store.js';
+import { ChatStore, type StoreMeta, type MessageInsert } from './store.js';
 import type { SqlDriver } from './sql-driver.js';
 import {
   htmlToText,
@@ -76,6 +76,50 @@ export function compactReactions(emotions: any): string | null {
 }
 
 // Insert message rows (each carries __key = its reply-chain record key → chain_key).
+// Shape one decoded message record into a messages-table row. Pure function of (m, selfMri) — no
+// store/DB state — so it produces the identical row whether called per-row (applyMessages) or during
+// the full-build fold (bulkInsertMessages). Returns null for a record with no conversation id (the
+// same `if (!convId) continue` skip both paths apply). `version` is normalized here (Number||0) so a
+// downstream fold compares the SAME value the SQL upsert's version-guard does.
+function shapeMessageRow(m: any, selfMri: string | null): MessageInsert | null {
+  const convId = m.conversationId;
+  if (!convId) return null;
+  const ts = Number(m.time) || Date.parse(m.time) || Number(m.id) || 0;
+  const rawHtml = m.content || '';
+  const senderMri = m.senderId || '?';
+  const isMine = (selfMri && senderMri === selfMri) || m.isSentByCurrentUser ? 1 : 0;
+  const mentionsMe = selfMri && !isMine && mentionedMris(m.mentions).includes(selfMri) ? 1 : 0;
+  // Reply-chain root: Teams sets a root's parentMessageId to its own id, and each reply's
+  // parentMessageId to the root's id. So root_id = parent (when it's a real, different id) else
+  // self. Channels render threaded on this; 1:1/group messages are each their own root.
+  const idStr = String(m.id);
+  const parent = m.parentMessageId != null ? String(m.parentMessageId) : '';
+  const rootId = parent && parent !== idStr ? parent : idStr;
+  return {
+    convId,
+    id: idStr,
+    // hex-encode the chain key: it's a binary leveldb key (embedded NUL bytes), and node:sqlite
+    // truncates a TEXT value at the first NUL on read-back — so a raw latin1 chain_key reads back
+    // as '' for essentially every real key. hex is NUL-free, round-trips, and the reconcile stays
+    // correct as long as liveChainKeys/changedChainKeys use the same encoding (they do, below).
+    chainKey: toHex(fromLatin1(m.__key)),
+    version: Number(m.version) || 0,
+    ts,
+    senderMri,
+    senderName: m.senderName || '',
+    kind: convKind(convId),
+    isMine,
+    isSystem: isSystemMessage(m) ? 1 : 0,
+    hasAttach: hasAttachment(m, rawHtml) ? 1 : 0,
+    mentionsMe,
+    content: htmlToText(rawHtml),
+    reactions: compactReactions(m.reactions),
+    rootId,
+  };
+}
+
+// Per-row upsert path — used by the INCREMENTAL refresh, which must resolve newest-wins against rows
+// ALREADY committed in the DB (no in-memory fold can see those). Returns the changed message ids.
 export function applyMessages(
   store: ChatStore,
   msgRows: any[],
@@ -83,43 +127,32 @@ export function applyMessages(
 ): Set<string> {
   const changedIds = new Set<string>();
   for (const m of msgRows) {
-    const convId = m.conversationId;
-    if (!convId) continue;
-    const ts = Number(m.time) || Date.parse(m.time) || Number(m.id) || 0;
-    const rawHtml = m.content || '';
-    const senderMri = m.senderId || '?';
-    const isMine = (selfMri && senderMri === selfMri) || m.isSentByCurrentUser ? 1 : 0;
-    const mentionsMe = selfMri && !isMine && mentionedMris(m.mentions).includes(selfMri) ? 1 : 0;
-    // Reply-chain root: Teams sets a root's parentMessageId to its own id, and each reply's
-    // parentMessageId to the root's id. So root_id = parent (when it's a real, different id) else
-    // self. Channels render threaded on this; 1:1/group messages are each their own root.
-    const idStr = String(m.id);
-    const parent = m.parentMessageId != null ? String(m.parentMessageId) : '';
-    const rootId = parent && parent !== idStr ? parent : idStr;
-    store.insertMessage({
-      convId,
-      id: idStr,
-      // hex-encode the chain key: it's a binary leveldb key (embedded NUL bytes), and node:sqlite
-      // truncates a TEXT value at the first NUL on read-back — so a raw latin1 chain_key reads back
-      // as '' for essentially every real key. hex is NUL-free, round-trips, and the reconcile stays
-      // correct as long as liveChainKeys/changedChainKeys use the same encoding (they do, below).
-      chainKey: toHex(fromLatin1(m.__key)),
-      version: Number(m.version) || 0,
-      ts,
-      senderMri,
-      senderName: m.senderName || '',
-      kind: convKind(convId),
-      isMine,
-      isSystem: isSystemMessage(m) ? 1 : 0,
-      hasAttach: hasAttachment(m, rawHtml) ? 1 : 0,
-      mentionsMe,
-      content: htmlToText(rawHtml),
-      reactions: compactReactions(m.reactions),
-      rootId,
-    });
-    changedIds.add(idStr);
+    const row = shapeMessageRow(m, selfMri);
+    if (!row) continue;
+    store.insertMessage(row);
+    changedIds.add(row.id);
   }
   return changedIds;
+}
+
+// Full-build path — the table starts empty, so instead of ~116k version-guarded upserts we fold to the
+// winner PER (conv_id,id) in JS, then bulk-insert the unique winners. The fold is the SAME state machine
+// as the SQL upsert applied in order (accept iff `version >= current`; ties → later row), so the winning
+// row is identical for every input ordering — see Fable's equivalence proof. A flat Map keyed by an
+// INJECTIVE (length-prefixed, so no separator-collision) `${convId.length}:${convId}${id}` preserves
+// first-occurrence order, so winners insert in the exact rowid order the per-row upsert would produce —
+// keeping even the ORDER BY-id FTS dump bit-identical. Winners are PK-unique ⇒ the plain bulk INSERT
+// can't conflict, and any fold bug fails loud instead of silently diverging.
+export function bulkInsertMessages(store: ChatStore, msgRows: any[], selfMri: string | null): void {
+  const winners = new Map<string, MessageInsert>();
+  for (const m of msgRows) {
+    const row = shapeMessageRow(m, selfMri);
+    if (!row) continue;
+    const key = `${row.convId.length}:${row.convId}${row.id}`;
+    const cur = winners.get(key);
+    if (!cur || row.version >= cur.version) winners.set(key, row);
+  }
+  store.insertMessagesBulk([...winners.values()]);
 }
 
 // Extract the profiles name-source rows (mri → display name) from the snapshot. Split from
@@ -580,7 +613,7 @@ export function buildStore(
   const tApply = opts.onPhase ? performance.now() : 0;
   store.db.exec('BEGIN');
   applyConversationMeta(store, ex.convRows);
-  applyMessages(store, ex.msgRows, ex.selfMri);
+  bulkInsertMessages(store, ex.msgRows, ex.selfMri);
   store.replaceProfiles(ex.profileRows);
   store.replaceEvents(ex.eventRows);
   store.replaceCalls(ex.callRows);

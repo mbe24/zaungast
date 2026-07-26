@@ -1,6 +1,6 @@
 import { makeHandle } from '../util/handles.js';
 import { SCHEMA_SQL } from './schema-sql.js';
-import type { SqlDatabase, SqlDriver, SqlStatement } from './sql-driver.js';
+import type { SqlDatabase, SqlDriver, SqlStatement, SqlParam } from './sql-driver.js';
 
 // The ChatStore DDL lives in the single-source schema.sql; `SCHEMA_SQL` (imported above) is the
 // generated, browser-bundleable copy of it (see schema-sql.ts / gen-schema-sql.mjs). Same string the
@@ -25,6 +25,26 @@ export interface StoreMeta {
 // Read-time classification only — no stored column (see Fable review).
 export function isBotMri(mri: string | null | undefined): boolean {
   return typeof mri === 'string' && mri.startsWith('28:');
+}
+
+// The 15 columns of one messages row, in schema order. Shared by insertMessage (per-row upsert,
+// incremental path) and insertMessagesBulk (multi-row plain insert, full-build path).
+export interface MessageInsert {
+  convId: string;
+  id: string;
+  chainKey: string;
+  version: number;
+  ts: number;
+  senderMri: string;
+  senderName: string;
+  kind: string;
+  isMine: number;
+  isSystem: number;
+  hasAttach: number;
+  mentionsMe: number;
+  content: string;
+  reactions?: string | null;
+  rootId?: string | null;
 }
 
 export class ChatStore {
@@ -142,23 +162,7 @@ export class ChatStore {
     ).run(c.id, this.handleFor('c', c.id), c.kind, c.topic, c.teamId, c.threadType, c.metaLastTs);
   }
 
-  insertMessage(m: {
-    convId: string;
-    id: string;
-    chainKey: string;
-    version: number;
-    ts: number;
-    senderMri: string;
-    senderName: string;
-    kind: string;
-    isMine: number;
-    isSystem: number;
-    hasAttach: number;
-    mentionsMe: number;
-    content: string;
-    reactions?: string | null;
-    rootId?: string | null;
-  }) {
+  insertMessage(m: MessageInsert) {
     // The conflict path must update is_system/is_mine/kind too — soft-deletes are edits
     // that clear content and flip these flags. Version guard keeps newest-wins. Reactions ride the
     // same record (a reaction change rewrites the reply-chain record with a fresh seq), so the
@@ -191,6 +195,49 @@ export class ChatStore {
       m.reactions ?? null,
       m.rootId ?? m.id,
     );
+  }
+
+  // Bulk-insert already-deduped messages (full-build path). Callers MUST pass PK-unique rows (the
+  // fold in bulkInsertMessages guarantees this) — there is NO on-conflict clause, so a duplicate key
+  // fails LOUD (UNIQUE violation) rather than silently diverging from the per-row upsert. Multi-row
+  // VALUES collapses ~116k statement dispatches to a few hundred; N is kept well under the SQLite
+  // variable limit (15 cols × 256 = 3840 « 32766 on both node:sqlite and sqlite-wasm ≥3.32). The
+  // remainder (< N) reuses insertMessage — on a fresh unique key its upsert is a plain insert.
+  private static readonly BULK_MSG_ROWS = 256;
+  private static readonly MSG_COLS =
+    '(conv_id,id,chain_key,version,ts,sender_mri,sender_name,kind,is_mine,is_system,has_attach,mentions_me,content,reactions,root_id)';
+  insertMessagesBulk(rows: MessageInsert[]) {
+    const bind = (m: MessageInsert): SqlParam[] => [
+      m.convId,
+      m.id,
+      m.chainKey,
+      m.version,
+      m.ts,
+      m.senderMri,
+      m.senderName,
+      m.kind,
+      m.isMine,
+      m.isSystem,
+      m.hasAttach,
+      m.mentionsMe,
+      m.content,
+      m.reactions ?? null,
+      m.rootId ?? m.id,
+    ];
+    const N = ChatStore.BULK_MSG_ROWS;
+    let i = 0;
+    if (rows.length >= N) {
+      const oneRow = '(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)';
+      const stmt = this.q(
+        `insert into messages ${ChatStore.MSG_COLS} values ${Array(N).fill(oneRow).join(',')}`,
+      );
+      for (; i + N <= rows.length; i += N) {
+        const args: SqlParam[] = [];
+        for (let j = 0; j < N; j++) args.push(...bind(rows[i + j]));
+        stmt.run(...args);
+      }
+    }
+    for (; i < rows.length; i++) this.insertMessage(rows[i]);
   }
 
   // Reconcile the profiles name-source: replace-all from the current live profiles rows. Cheap
