@@ -7,9 +7,11 @@ import {
   openStoreFromSource,
   openStoreFromSnapshot,
   loadSnapshotFrom,
+  unpackTable,
   type SnapshotSource,
   type Snapshot,
   type TableReadResult,
+  type PackedTable,
   type EntityExtract,
   type TeamsStore,
   type StoreMeta,
@@ -103,8 +105,8 @@ const api = {
           const parsed = new Map<string, TableReadResult>();
           await Promise.all(
             ldbNames.map(async (n) => {
-              const res = await pool!.run<TableReadResult>({ kind: 'parse', bytes: map.get(n)! });
-              parsed.set(n, res);
+              const packed = await pool!.run<PackedTable>({ kind: 'parse', bytes: map.get(n)! });
+              parsed.set(n, unpackTable(packed));
               onProgress?.({ type: 'decoding', name: n, i: ++i, n: dataFiles.length });
             }),
           );

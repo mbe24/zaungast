@@ -12,9 +12,11 @@ import {
   openStoreFromSource,
   openStoreFromSnapshot,
   loadSnapshotFrom,
+  unpackTable,
   MemorySource,
   type SnapshotSource,
   type TableReadResult,
+  type PackedTable,
   type EntityExtract,
 } from 'libzaungast/web';
 import { createSqliteWasmDriver } from '../sqlite-wasm-driver.ts';
@@ -118,8 +120,8 @@ self.onmessage = async (e: MessageEvent<In>) => {
           const parsed = new Map<string, TableReadResult>();
           await Promise.all(
             ldbNames.map(async (n) => {
-              const res = await pool!.run<TableReadResult>({ kind: 'parse', bytes: map.get(n)! });
-              parsed.set(n, res);
+              const packed = await pool!.run<PackedTable>({ kind: 'parse', bytes: map.get(n)! });
+              parsed.set(n, unpackTable(packed));
               post({ type: 'decoding', name: n, i: ++i, n: dataFiles.length });
             }),
           );

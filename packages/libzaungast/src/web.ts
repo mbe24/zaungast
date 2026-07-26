@@ -9,6 +9,15 @@ export { loadSnapshotFrom } from './format/chromium/indexeddb.js';
 // Per-file `.ldb` parse primitive — a parse-worker pool calls this, then feeds the results back to
 // loadSnapshotFrom via its `parsedTables` option (see LoadEntriesOptions). Parallel decode, one seam.
 export { parseTable } from './format/chromium/sstable.js';
+// Transfer codec (M4a): the parse worker packs each result into 3 transferables (packTable +
+// packedTransferList) instead of N tiny per-entry buffers; the coordinator rebuilds it with unpackTable.
+// Engine-agnostic — also on the non-web ./format surface.
+export {
+  packTable,
+  unpackTable,
+  packedTransferList,
+  type PackedTable,
+} from './format/table-transfer.js';
 export { MemorySource } from './format/chromium/memory-source.js';
 export { fingerprint } from './format/fingerprint.js';
 export {

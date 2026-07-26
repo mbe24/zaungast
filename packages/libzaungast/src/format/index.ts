@@ -28,6 +28,10 @@ export { loadSnapshot } from './chromium/node-source.js';
 export { fingerprint } from './fingerprint.js';
 export { loadMapping } from './node-resolver.js';
 export { selectMapping, entityTargets, extractEntity, extractRecords } from './resolver.js';
+// Parallel-ingest transfer codec (engine-agnostic): flatten a parsed `.ldb` table into 3 transferable
+// buffers so a worker pool (Web Worker or node:worker_threads) crosses the boundary cheaply. Non-web too
+// — the Node/MCP side can reuse it when it grows a parallel path.
+export { packTable, unpackTable, packedTransferList, type PackedTable } from './table-transfer.js';
 export { discoverTeamsDbs } from './discover.js';
 // Structural field-sampler for schema recovery — reads field NAMES only, so the raw value decoder
 // stays internal (see sample.ts). This is what describe_schema-style consumers use.
