@@ -66,21 +66,22 @@ pre {
   pointer-events: none;
 }
 /* One stadium pill (fully rounded), no internal dividers — the iOS UIStepper look: bold −/value/+. */
+/* Sized to sit at the same height as the parallel toggle switch (~22px tall). */
 .stepper .seg {
   display: inline-flex;
   align-items: center;
-  border: 1.5px solid #c6c6c8;
+  border: 1px solid #c6c6c8;
   border-radius: 999px;
   background: #fff;
   overflow: hidden;
 }
 .stepper .step-btn {
   font: inherit;
-  font-size: 19px;
+  font-size: 15px;
   font-weight: 600;
   line-height: 1;
   margin: 0;
-  padding: 0.15rem 0.85rem;
+  padding: 0.1rem 0.55rem;
   border: none;
   background: transparent;
   color: #1c1c1e; /* dark neutral glyphs, matching the reference (not tinted blue) */
@@ -97,9 +98,9 @@ pre {
 }
 .stepper .step-val {
   min-width: 1.5ch;
-  padding: 0.15rem 0.1rem;
+  padding: 0.1rem 0.05rem;
   text-align: center;
-  font-size: 14px;
+  font-size: 12px;
   color: #1c1c1e;
   font-variant-numeric: tabular-nums;
 }
