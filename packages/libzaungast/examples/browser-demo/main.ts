@@ -47,21 +47,25 @@ function renderResult(d: any) {
     d.driverWait != null
       ? ` · driverWait ${d.driverWait}ms${d.prewarmed ? ' (pool prewarmed)' : ''}`
       : '';
-  log(`✓ built store in ${d.buildMs}ms  [${d.mode}]${warmLine}\n`);
+  const engineLine = d.engine ? ` · engine ${d.engine}` : '';
+  const duckLine = d.duckLoadMs != null ? ` · duckdb-load ${d.duckLoadMs}ms` : '';
+  // per-example query time (both engines) — the `· Nms` after each section header.
+  const qms = (k: string) => (d.queryMs?.[k] != null ? ` · ${d.queryMs[k]}ms` : '');
+  log(`✓ built store in ${d.buildMs}ms  [${d.mode}]${engineLine}${duckLine}${warmLine}\n`);
   log('meta:', fmtMeta(d.meta));
-  log(`\nconversations (${d.conversations.length} shown):`);
+  log(`\nconversations (${d.conversations.length} shown)${qms('conversations')}:`);
   for (const c of d.conversations)
     log(`  ${c.handle}  ${c.kind}  msgs=${c.msgCount}  ${c.topic ?? c.participantNames ?? ''}`);
-  log(`\npeople (total ${d.people.total}):`);
+  log(`\npeople (total ${d.people.total})${qms('people')}:`);
   for (const p of d.people.rows)
     log(`  ${p.handle}  ${p.name}${p.isBot ? ' [bot]' : ''}  msgs=${p.msgCount}`);
   log(
-    `\nsearch "the": ${d.search.ok ? `${d.search.rows.length} hits (order ${d.search.order})` : d.search.reason.reason}`,
+    `\nsearch "the"${qms('search')}: ${d.search.ok ? `${d.search.rows.length} hits (order ${d.search.order})` : d.search.reason.reason}`,
   );
   if (d.search.ok)
     for (const h of d.search.rows) log(`  [${h.senderName}] ${h.content.slice(0, 80)}`);
   log(
-    `\ntop topics (30d): ${d.topics.ok ? d.topics.rows.map((t: any) => t.phrase ?? JSON.stringify(t)).join(', ') : d.topics.reason.reason}`,
+    `\ntop topics (30d)${qms('topics')}: ${d.topics.ok ? d.topics.rows.map((t: any) => t.phrase ?? JSON.stringify(t)).join(', ') : d.topics.reason.reason}`,
   );
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -87,6 +91,8 @@ document.getElementById('selftest')!.addEventListener('click', () => {
 });
 const input = document.getElementById('pick') as HTMLInputElement;
 const parallelToggle = document.getElementById('parallel') as HTMLInputElement;
+// Query engine picker (iOS pull-down): SQLite (full, FTS5) vs DuckDB (analytics; search degrades to LIKE).
+const engineSel = document.getElementById('engine') as HTMLSelectElement;
 
 // Threads stepper: worker-pool size for parallel mode, 2 … min(10, cores), default 8. (10 not 8 so the
 // degradation past the sweet spot is visible.) Disabled when parallel is off.
@@ -129,6 +135,7 @@ input.addEventListener('change', () => {
     files: Array.from(input.files),
     parallel: parallelToggle.checked,
     threads,
+    engine: engineSel.value as 'sqlite' | 'duckdb',
   });
 });
 

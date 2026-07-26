@@ -8,11 +8,23 @@ import esbuild from 'esbuild';
 import { copyFileSync, mkdirSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 
+const require = createRequire(import.meta.url);
 const here = fileURLToPath(new URL('.', import.meta.url));
 const dist = `${here}dist`;
 // Resolve the wasm via the package's exports map (location-independent, hoisting-independent).
-const wasm = createRequire(import.meta.url).resolve('@sqlite.org/sqlite-wasm/sqlite3.wasm');
+const wasm = require.resolve('@sqlite.org/sqlite-wasm/sqlite3.wasm');
+// DuckDB-Wasm self-hosted assets (the engine picker's second backend): the wasm modules + their workers
+// live in @duckdb/duckdb-wasm/dist. Its exports map only exposes '.', so resolve the package's dist dir
+// off the main entry and copy the assets by name (duckdb-wasm-driver.ts loads them relative to worker.js).
+const duckdbDist = path.dirname(require.resolve('@duckdb/duckdb-wasm'));
+const duckdbAssets = [
+  'duckdb-eh.wasm',
+  'duckdb-mvp.wasm',
+  'duckdb-browser-eh.worker.js',
+  'duckdb-browser-mvp.worker.js',
+];
 rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
 
@@ -28,6 +40,7 @@ await esbuild.build({
   logLevel: 'info',
 });
 copyFileSync(wasm, `${dist}/sqlite3.wasm`);
+for (const a of duckdbAssets) copyFileSync(path.join(duckdbDist, a), `${dist}/${a}`);
 copyFileSync(`${here}index.html`, `${dist}/index.html`);
 copyFileSync(`${here}styles.css`, `${dist}/styles.css`);
 

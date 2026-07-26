@@ -38,6 +38,21 @@ C:\Users\&lt;you&gt;\AppData\Local\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Mic
       <input id="pick" type="file" webkitdirectory hidden />
       <!-- Right-aligned cluster: threads stepper (left) then the parallel master toggle (right). -->
       <div class="right-controls">
+        <!-- Query-engine pull-down (iOS pull-down button): SQLite (full, FTS5) vs DuckDB (analytics;
+             search degrades to a content LIKE scan — no FTS5). Picks which engine answers the queries. -->
+        <span
+          class="db-pick"
+          title="Query engine — SQLite (full, FTS5) or DuckDB (analytics; search via LIKE)"
+        >
+          db
+          <span class="pull">
+            <select id="engine" aria-label="query engine">
+              <option value="sqlite">SQLite</option>
+              <option value="duckdb">DuckDB</option>
+            </select>
+            <span class="chev" aria-hidden="true"></span>
+          </span>
+        </span>
         <!-- Thread-count stepper — pool size for parallel mode; disabled when parallel is off. -->
         <span
           class="stepper"

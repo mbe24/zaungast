@@ -15,11 +15,13 @@ import {
   type Pool,
 } from 'libzaungast/web';
 import { createSqliteWasmDriver } from 'libzaungast/web/sqlite-wasm-driver';
+import { buildDuckDbStore, type DuckDbStore } from './duckdb-store.ts';
 
+type Engine = 'sqlite' | 'duckdb';
 type In =
   | { kind: 'selftest' }
   | { kind: 'prewarm'; parallel: boolean; threads: number }
-  | { kind: 'build'; files: File[]; parallel: boolean; threads: number };
+  | { kind: 'build'; files: File[]; parallel: boolean; threads: number; engine: Engine };
 type Out =
   | { type: 'progress'; msg: string }
   | { type: 'decoding'; name: string; i: number; n: number }
@@ -89,7 +91,7 @@ self.onmessage = async (e: MessageEvent<In>) => {
       return;
     }
 
-    const { files, parallel, threads } = e.data;
+    const { files, parallel, threads, engine } = e.data;
     post({ type: 'progress', msg: `reading ${files.length} files…` });
     const map = new Map<string, Uint8Array>();
     for (const f of files) map.set(f.name, new Uint8Array(await f.arrayBuffer()));
@@ -152,20 +154,58 @@ self.onmessage = async (e: MessageEvent<In>) => {
       });
     const buildMs = Math.round(performance.now() - t);
 
+    // DuckDB engine: load the built (shaped) tables into DuckDB and query THERE. The SQLite store is
+    // always built first (it owns the SQLite-specific shaping); DuckDB adds a load step, timed separately.
+    let duck: DuckDbStore | null = null;
+    let duckLoadMs: number | null = null;
+    if (engine === 'duckdb') {
+      post({ type: 'progress', msg: 'loading tables into DuckDB…' });
+      const td = performance.now();
+      duck = await buildDuckDbStore(store);
+      duckLoadMs = Math.round(performance.now() - td);
+      post({ type: 'phase', phase: 'duckdb-load', ms: duckLoadMs });
+    }
+
+    // Run the four example queries on the chosen engine, timing each (SQLite is sync, DuckDB async —
+    // `await fn()` measures both correctly).
+    const queryMs: Record<string, number> = {};
+    const timed = async <T>(name: string, fn: () => T | Promise<T>): Promise<T> => {
+      const t0 = performance.now();
+      const r = await fn();
+      queryMs[name] = Math.round(performance.now() - t0);
+      return r;
+    };
+    const conversations = duck
+      ? await timed('conversations', () => duck!.conversations(20))
+      : await timed('conversations', () => store.conversations.list({ n: 20 }));
+    const people = duck
+      ? await timed('people', () => duck!.people(10))
+      : await timed('people', () => store.people.find({ n: 10 }));
+    const search = duck
+      ? await timed('search', () => duck!.search('the', 5))
+      : await timed('search', () => store.messages.search({ query: 'the', limit: 5 }));
+    const topics = duck
+      ? await timed('topics', () => duck!.topics('30d', 8))
+      : await timed('topics', () => store.topics.compute({ window: '30d', n: 8 }));
+    await duck?.close();
+
     post({
       type: 'result',
       data: {
+        engine,
         mode: usedPool ? 'parallel' : 'serial',
         poolSize: usedPool ? poolSize : 0,
         parseMs: usedPool ? Math.round(parseMs) : null,
         prewarmed,
         driverWait: Math.round(driverWaitMs),
         buildMs,
+        duckLoadMs,
+        queryMs,
         meta: store.meta,
-        conversations: store.conversations.list({ n: 20 }),
-        people: store.people.find({ n: 10 }),
-        search: store.messages.search({ query: 'the', limit: 5 }),
-        topics: store.topics.compute({ window: '30d', n: 8 }),
+        conversations,
+        people,
+        search,
+        topics,
       },
     });
     store.close();

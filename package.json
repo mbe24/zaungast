@@ -52,6 +52,7 @@
   },
   "license": "Apache-2.0",
   "devDependencies": {
+    "@duckdb/duckdb-wasm": "^1.33.1-dev57.0",
     "@resvg/resvg-js": "^2.6.2",
     "@sqlite.org/sqlite-wasm": "^3.53.0-build1",
     "@types/node": "^26.1.1",

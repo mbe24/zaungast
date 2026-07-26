@@ -51,6 +51,66 @@ pre {
   user-select: none;
   cursor: pointer;
 }
+/* Query-engine pull-down (iOS pull-down button): a rounded field showing the value + a trailing filled
+   chevron square. Sized to sit with the stepper + toggle. */
+.db-pick {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 13px;
+  color: #444;
+  user-select: none;
+}
+.db-pick .pull {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  border: 1px solid #c6c6c8;
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+.db-pick select {
+  appearance: none;
+  -webkit-appearance: none;
+  font: inherit;
+  font-size: 13px;
+  color: #1c1c1e;
+  border: none;
+  background: transparent;
+  margin: 0;
+  padding: 0 1.8rem 0 0.7rem; /* room for the trailing chevron square */
+  height: 100%;
+  line-height: 24px;
+  cursor: pointer;
+}
+.db-pick select:focus-visible {
+  outline: 2px solid #0a84ff;
+  outline-offset: 1px;
+}
+/* Trailing filled rounded square with a chevron — the iOS pull-down affordance. */
+.db-pick .chev {
+  position: absolute;
+  right: 3px;
+  top: 3px;
+  bottom: 3px;
+  width: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #0a84ff;
+  border-radius: 5px;
+  pointer-events: none;
+}
+.db-pick .chev::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-right: 1.6px solid #fff;
+  border-bottom: 1.6px solid #fff;
+  transform: translateY(-2px) rotate(45deg);
+}
 /* Threads stepper (iOS-style segmented −/value/+). Dimmed + inert when parallel is off. */
 .stepper {
   display: flex;
