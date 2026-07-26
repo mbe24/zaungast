@@ -42,8 +42,8 @@ pre {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 38px;
-  height: 38px;
+  width: 30px;
+  height: 30px;
   padding: 0;
   border: none;
   border-radius: 50%;
@@ -51,9 +51,10 @@ pre {
   cursor: pointer;
   transition: background 0.15s ease;
 }
+/* Same glyph size as the control icons (.ctl-icon) so buttons + db/threads/parallel icons all match. */
 .btn-icon {
-  width: 21px;
-  height: 21px;
+  width: 18px;
+  height: 18px;
 }
 #pickBtn {
   background: #0a84ff;
@@ -78,10 +79,11 @@ pre {
   outline: 2px solid #0a84ff;
   outline-offset: 2px;
 }
-/* Monochrome control icons replacing the db/threads/parallel text labels (grey on white). */
+/* Monochrome control icons replacing the db/threads/parallel text labels (grey on white). Same 18px
+   glyph size as the action buttons' .btn-icon, so every icon in the controls row matches. */
 .ctl-icon {
-  width: 17px;
-  height: 17px;
+  width: 18px;
+  height: 18px;
   color: #8e8e93;
   flex: none;
 }
