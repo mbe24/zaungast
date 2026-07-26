@@ -9,10 +9,13 @@
 import {
   openStoreFromSource,
   openStoreFromSourceParallel,
+  extractFromSourceParallel,
+  shapeBaseTables,
   createPool,
   MemorySource,
   type SnapshotSource,
   type Pool,
+  type StoreMeta,
 } from 'libzaungast/web';
 import { createSqliteWasmDriver } from 'libzaungast/web/sqlite-wasm-driver';
 import { buildDuckDbStore, type DuckDbStore } from './duckdb-store.ts';
@@ -88,27 +91,38 @@ self.onmessage = async (e: MessageEvent<In>) => {
       });
       return;
     }
-    // DuckDB mode still builds the SQLite store first (it owns the shaping), then loads into DuckDB — so
-    // both wasm engines init. Say so, rather than only naming sqlite-wasm.
     const engine = e.data.engine;
-    post({
-      type: 'progress',
-      msg: `initializing ${engine === 'duckdb' ? 'sqlite-wasm + duckdb-wasm' : 'sqlite-wasm'}…`,
-    });
-    const tDriver = performance.now();
-    const driver = await getDriver();
-    const driverWaitMs = performance.now() - tDriver; // ~0 when prewarm already inited it
 
+    // Self-test: build an empty SQLite store (verifies the wasm driver + facade), and — in DuckDB mode —
+    // also init DuckDB + a trivial round-trip. Both engines init here since it's a wasm-engine check.
     if (e.data.kind === 'selftest') {
+      post({
+        type: 'progress',
+        msg: `initializing ${engine === 'duckdb' ? 'sqlite-wasm + duckdb-wasm' : 'sqlite-wasm'}…`,
+      });
+      const driver = await getDriver();
       const store = openStoreFromSource(new MemorySource(new Map()), { driver });
       let duckOk: boolean | null = null;
       if (engine === 'duckdb') {
-        const conn = await getDuck(); // init DuckDB + a trivial round-trip to prove it works
+        const conn = await getDuck();
         duckOk = (await conn.query<{ x: number | bigint }>('select 42 as x')).length === 1;
       }
       post({ type: 'result', data: { selfTest: true, engine, duckOk, meta: store.meta } });
       store.close();
       return;
+    }
+
+    // Build: SQLite needs its wasm driver; DuckDB builds INDEPENDENTLY (no SQLite) → only duckdb-wasm inits.
+    post({
+      type: 'progress',
+      msg: `initializing ${engine === 'duckdb' ? 'duckdb-wasm' : 'sqlite-wasm'}…`,
+    });
+    let driver: Awaited<ReturnType<typeof getDriver>> | null = null;
+    let driverWaitMs = 0;
+    if (engine === 'sqlite') {
+      const tDriver = performance.now();
+      driver = await getDriver();
+      driverWaitMs = performance.now() - tDriver; // ~0 when prewarm already inited it
     }
 
     const { files, parallel, threads } = e.data;
@@ -158,17 +172,65 @@ self.onmessage = async (e: MessageEvent<In>) => {
     }
 
     const t = performance.now();
-    const { store, usedPool, poolSize, parseMs } = await openStoreFromSourceParallel(source, {
-      driver,
-      pool,
-      deferFts: engine === 'duckdb', // DuckDB search uses LIKE, not FTS5 — skip the wasted index
-      onPhase,
-    });
-    // Transparency: DuckDB defers/omits FTS (no FTS5 → search uses LIKE). Show the phase explicitly as
-    // N/A (en dash) rather than dropping the line, in its normal spot (after recompute, before decode).
-    if (engine === 'duckdb') post({ type: 'phase', phase: 'fts', ms: null, note: 'N/A' });
-    // Report the parallel decode as a phase line aligned with serial's `✓ decode`, noting the pool.
-    // (Serial reports its own 'decode' phase via onPhase.)
+    let usedPool = false;
+    let poolSize = 0;
+    let parseMs = 0;
+    let meta: StoreMeta;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let duck: DuckDbStore | null = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let sqlite: Awaited<ReturnType<typeof openStoreFromSourceParallel>>['store'] | null = null;
+
+    if (engine === 'duckdb') {
+      // Independent DuckDB build: the SHARED decode/fold/extract (extractFromSourceParallel) → shaped base
+      // tables → DuckDB materialize with its OWN apply/recompute (deriveTables in JS). No SQLite involved.
+      const res = await extractFromSourceParallel(source, { pool, onPhase }); // emits 'extract'
+      usedPool = res.usedPool;
+      poolSize = res.poolSize;
+      parseMs = res.parseMs;
+      const base = shapeBaseTables(res.extract);
+      const duckConn = await getDuck(); // warmed during the picker
+      duck = await buildDuckDbStore(base, duckConn, { onPhase }); // emits 'apply' + 'recompute'
+      post({ type: 'phase', phase: 'fts', ms: null, note: 'N/A' }); // no FTS5 → search uses LIKE
+      // Synthesize the meta (no ChatStore here): counts from DuckDB, fingerprint/self/lossy from the extract.
+      const cnt = async (tbl: string) =>
+        Number(
+          (await duckConn.query<{ c: number | bigint }>(`select count(*) c from ${tbl}`))[0]?.c ??
+            0,
+        );
+      const earliest = Number(
+        (
+          await duckConn.query<{ e: number | bigint | null }>(
+            'select min(ts) e from messages where ts>0',
+          )
+        )[0]?.e ?? 0,
+      );
+      meta = {
+        asOf: Date.now(),
+        fingerprint: res.extract.fp.hash,
+        mappingVersion: res.extract.mapping?.mappingVersion ?? null,
+        schemaMatched: !!res.extract.mapping,
+        counts: {
+          conversations: await cnt('conversations'),
+          messages: base.messages.length,
+          people: await cnt('people'),
+        },
+        earliestTs: earliest,
+        ftsEnabled: false,
+        lastFullAt: Date.now(),
+        refreshMode: 'full',
+        lossy: res.extract.lossy,
+        selfMri: res.extract.selfMri,
+      };
+    } else {
+      const res = await openStoreFromSourceParallel(source, { driver: driver!, pool, onPhase }); // extract/apply/recompute/fts
+      usedPool = res.usedPool;
+      poolSize = res.poolSize;
+      parseMs = res.parseMs;
+      sqlite = res.store;
+      meta = sqlite.meta;
+    }
+    // Decode line last, matching the existing style (both engines): parseMs is the parse+fold window.
     if (usedPool)
       post({
         type: 'phase',
@@ -178,20 +240,8 @@ self.onmessage = async (e: MessageEvent<In>) => {
       });
     const buildMs = Math.round(performance.now() - t);
 
-    // DuckDB engine: load the built (shaped) tables into DuckDB and query THERE. The SQLite store is
-    // always built first (it owns the SQLite-specific shaping); DuckDB adds a load step, timed separately.
-    let duck: DuckDbStore | null = null;
-    let duckLoadMs: number | null = null;
-    if (engine === 'duckdb') {
-      const duckConn = await getDuck(); // warmed during the picker → this is ~free
-      const td = performance.now();
-      duck = await buildDuckDbStore(store, duckConn);
-      duckLoadMs = Math.round(performance.now() - td);
-      post({ type: 'phase', phase: 'duckdb-load', ms: duckLoadMs });
-    }
-
     // Run the four example queries on the chosen engine, timing each (shown inline with each example in
-    // the result, not as phase lines). SQLite is sync, DuckDB async — `await fn()` times both correctly.
+    // the result). SQLite is sync, DuckDB async — `await fn()` times both correctly.
     const queryMs: Record<string, number> = {};
     const timed = async <T>(name: string, fn: () => T | Promise<T>): Promise<T> => {
       const t0 = performance.now();
@@ -199,19 +249,21 @@ self.onmessage = async (e: MessageEvent<In>) => {
       queryMs[name] = Math.round(performance.now() - t0);
       return r;
     };
-    const conversations = duck
-      ? await timed('conversations', () => duck!.conversations(20))
-      : await timed('conversations', () => store.conversations.list({ n: 20 }));
-    const people = duck
-      ? await timed('people', () => duck!.people(10))
-      : await timed('people', () => store.people.find({ n: 10 }));
-    const search = duck
-      ? await timed('search', () => duck!.search('the', 5))
-      : await timed('search', () => store.messages.search({ query: 'the', limit: 5 }));
-    const topics = duck
-      ? await timed('topics', () => duck!.topics('30d', 8))
-      : await timed('topics', () => store.topics.compute({ window: '30d', n: 8 }));
-    // Note: the DuckDB connection is warm/reused across builds — not closed here.
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const conversations = await timed<any>('conversations', () =>
+      duck ? duck.conversations(20) : sqlite!.conversations.list({ n: 20 }),
+    );
+    const people = await timed<any>('people', () =>
+      duck ? duck.people(10) : sqlite!.people.find({ n: 10 }),
+    );
+    const search = await timed<any>('search', () =>
+      duck ? duck.search('the', 5) : sqlite!.messages.search({ query: 'the', limit: 5 }),
+    );
+    const topics = await timed<any>('topics', () =>
+      duck ? duck.topics('30d', 8) : sqlite!.topics.compute({ window: '30d', n: 8 }),
+    );
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+    // The DuckDB connection is warm/reused across builds — not closed here.
 
     post({
       type: 'result',
@@ -223,16 +275,15 @@ self.onmessage = async (e: MessageEvent<In>) => {
         prewarmed,
         driverWait: Math.round(driverWaitMs),
         buildMs,
-        duckLoadMs,
         queryMs,
-        meta: store.meta,
+        meta,
         conversations,
         people,
         search,
         topics,
       },
     });
-    store.close();
+    sqlite?.close();
   } catch (err) {
     post({ type: 'error', msg: (err as Error).message });
   }

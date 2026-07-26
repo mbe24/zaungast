@@ -1,22 +1,22 @@
-// POC-only DuckDB "store": proves libzaungast's schema + query/analytics layer isn't overfit to SQLite.
-// It does NOT re-run the SQLite-specific store BUILDER (shaping, FTS, upserts) — that stays SQLite. It
-// copies the already-built base tables out of the SQLite store (via TeamsStore.rawDb) into DuckDB and
-// answers the same four example queries the POC renders, IN DuckDB — so a DuckDB path and a SQLite path
-// share one renderer and produce matching output (conversations/people/topics identical; search differs
-// because there's no FTS5 — it uses the same content-LIKE fallback the library uses when FTS is off).
-// Topics reuses the PURE JS scorer (computeTopicRows) over DuckDB-returned rows — identical ranking,
-// different engine. The DuckDB connection is injected so this is Node-testable (see the parity harness).
+// POC DuckDB backend — builds INDEPENDENTLY (no SQLite reuse). It consumes the engine-agnostic seam:
+// `shapeBaseTables` (shared shaped rows) + `deriveTables` (shared pure-JS people/conversation aggregates,
+// the dialect-free equivalent of SQLite's recompute), materializes them into DuckDB with explicit DDL,
+// and answers the same four example queries the SQLite path does — proving the query/analytics layer
+// ports to a genuinely different engine. Search has no FTS5 → the same content-LIKE fallback the library
+// uses when FTS is off; topics reuses the pure JS scorer over DuckDB-returned rows.
 import {
   computeTopicRows,
   computeTopicsWindow,
+  deriveTables,
   makeExtractor,
-  type TeamsStore,
+  type BaseTables,
   type Topic,
 } from 'libzaungast/web';
 import type { DuckDbConn } from './duckdb-wasm-driver.ts';
 
-// The facade-result shapes the POC's renderResult reads (a subset of the real facade types — only the
-// fields it renders), so DuckDB and SQLite results render through the exact same code.
+type PhaseHook = (phase: 'apply' | 'recompute', ms: number) => void;
+
+// The facade-result shapes the POC's renderResult reads (a subset — only the fields it renders).
 export interface DuckConv {
   handle: string;
   kind: string;
@@ -42,39 +42,97 @@ export interface DuckDbStore {
   topics(windowKey: string, n: number): Promise<DuckTopics>;
 }
 
-// DuckDB returns BigInt for integer columns (COUNT/BIGINT). Coerce for JS math + display.
 const num = (v: unknown): number => (typeof v === 'bigint' ? Number(v) : Number(v ?? 0));
 const isBotMri = (mri: unknown) => typeof mri === 'string' && mri.startsWith('28:');
-// LIKE term: escape the SQL string literal (single quotes). The example query ('the') has no wildcards;
-// this is the same crude content-scan the library uses when FTS is unavailable.
 const likeLiteral = (q: string) => `'%${q.replace(/'/g, "''")}%'`;
 
-// Copy one already-built SQLite table into DuckDB: register its rows as a JSON virtual file and let DuckDB
-// infer the schema via read_json_auto. Arrow-free (portable across DuckDB-wasm targets); `create or
-// replace` so a warm connection can be reused across builds.
-async function copyTable(
+// Load rows into a DuckDB table with an EXPLICIT column schema (avoids read_json_auto mistyping null-only
+// columns). registerFileText ships the JSON as a virtual file; read_json with a `columns` spec types it.
+async function loadTable(
   conn: DuckDbConn,
-  sqlite: TeamsStore['rawDb'],
   name: string,
-): Promise<number> {
-  const rows = sqlite.prepare(`select * from ${name}`).all() as Record<string, unknown>[];
-  if (!rows.length) {
-    await conn.run(`drop table if exists ${name}`);
-    return 0;
-  }
+  rows: Record<string, unknown>[],
+  columns: Record<string, string>,
+): Promise<void> {
   await conn.registerFileText(`${name}.json`, JSON.stringify(rows));
-  await conn.run(`create or replace table ${name} as select * from read_json_auto('${name}.json')`);
-  return rows.length;
+  const colspec = Object.entries(columns)
+    .map(([c, t]) => `${c}: '${t}'`)
+    .join(', ');
+  await conn.run(
+    `create or replace table ${name} as ` +
+      `select * from read_json('${name}.json', format='array', columns={${colspec}})`,
+  );
 }
 
-export async function buildDuckDbStore(sqlite: TeamsStore, conn: DuckDbConn): Promise<DuckDbStore> {
-  const db = sqlite.rawDb;
-  // Copy the built base tables (with SQLite's derived cols) so DuckDB answers the same queries on the
-  // same data — the query layer is what we're proving portable; the SQLite-specific BUILD is not re-run.
-  await copyTable(conn, db, 'messages');
-  await copyTable(conn, db, 'conversations');
-  await copyTable(conn, db, 'people');
-  await copyTable(conn, db, 'profiles');
+// Materialize the shared base tables into DuckDB and derive (people + conversation aggregates) IN JS via
+// the shared deriveTables, so the phases mirror SQLite: `apply` = load the base rows, `recompute` =
+// derive + load the derived tables. (No FTS here → the caller reports `fts N/A`.)
+export async function buildDuckDbStore(
+  base: BaseTables,
+  conn: DuckDbConn,
+  opts: { onPhase?: PhaseHook } = {},
+): Promise<DuckDbStore> {
+  // apply: load the shaped base messages (only the columns the demo queries need).
+  const tApply = performance.now();
+  await loadTable(
+    conn,
+    'messages',
+    base.messages.map((m) => ({
+      conv_id: m.convId,
+      id: m.id,
+      ts: m.ts,
+      sender_mri: m.senderMri,
+      sender_name: m.senderName,
+      is_system: m.isSystem,
+      content: m.content,
+    })),
+    {
+      conv_id: 'VARCHAR',
+      id: 'VARCHAR',
+      ts: 'BIGINT',
+      sender_mri: 'VARCHAR',
+      sender_name: 'VARCHAR',
+      is_system: 'INTEGER',
+      content: 'VARCHAR',
+    },
+  );
+  opts.onPhase?.('apply', performance.now() - tApply);
+
+  // recompute: derive (shared pure-JS, == SQLite's recompute) then load the derived tables.
+  const tRec = performance.now();
+  const derived = deriveTables(base);
+  await loadTable(
+    conn,
+    'conversations',
+    derived.conversations.map((c) => ({
+      handle: c.handle,
+      kind: c.kind,
+      topic: c.topic,
+      participant_names: c.participantNames,
+      msg_count: c.msgCount,
+      last_ts: c.lastTs,
+    })),
+    {
+      handle: 'VARCHAR',
+      kind: 'VARCHAR',
+      topic: 'VARCHAR',
+      participant_names: 'VARCHAR',
+      msg_count: 'BIGINT',
+      last_ts: 'BIGINT',
+    },
+  );
+  await loadTable(
+    conn,
+    'people',
+    derived.people.map((p) => ({
+      handle: p.handle,
+      name: p.name,
+      mri: p.mri,
+      msg_count: p.msgCount,
+    })),
+    { handle: 'VARCHAR', name: 'VARCHAR', mri: 'VARCHAR', msg_count: 'BIGINT' },
+  );
+  opts.onPhase?.('recompute', performance.now() - tRec);
 
   return {
     async conversations(n) {
@@ -128,7 +186,6 @@ export async function buildDuckDbStore(sqlite: TeamsStore, conn: DuckDbConn): Pr
     },
 
     async topics(windowKey, n) {
-      // Pull the analytic inputs from DuckDB, score with the SAME pure JS ranker as the SQLite facade.
       const nameRows = await conn.query<{ name: unknown }>('select name from people');
       const nameTokens = new Set<string>();
       for (const r of nameRows)
@@ -141,7 +198,6 @@ export async function buildDuckDbStore(sqlite: TeamsStore, conn: DuckDbConn): Pr
       const raw = await conn.query<Record<string, unknown>>(
         `select ts, sender_mri, content from messages where is_system = 0 and content <> ''`,
       );
-      // Drop bot/app senders (28:) like the facade's default, and coerce ts to a number for the math.
       const all = raw
         .filter((r) => !isBotMri(r.sender_mri))
         .map((r) => ({
