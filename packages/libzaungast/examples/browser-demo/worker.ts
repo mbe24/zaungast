@@ -26,7 +26,7 @@ type In =
 type Out =
   | { type: 'progress'; msg: string }
   | { type: 'decoding'; name: string; i: number; n: number }
-  | { type: 'phase'; phase: string; ms: number; note?: string }
+  | { type: 'phase'; phase: string; ms: number | null; note?: string } // ms null → rendered as an en dash (N/A)
   | { type: 'result'; data: unknown }
   | { type: 'error'; msg: string };
 
@@ -153,6 +153,15 @@ self.onmessage = async (e: MessageEvent<In>) => {
       deferFts: engine === 'duckdb', // DuckDB search uses LIKE, not FTS5 — skip the wasted index
       onPhase,
     });
+    // Transparency: DuckDB defers/omits FTS (no FTS5 → search uses LIKE). Show the phase explicitly as
+    // N/A (en dash) rather than dropping the line, in its normal spot (after recompute, before decode).
+    if (engine === 'duckdb')
+      post({
+        type: 'phase',
+        phase: 'fts',
+        ms: null,
+        note: '(N/A — DuckDB has no FTS5; search uses LIKE)',
+      });
     // Report the parallel decode as a phase line aligned with serial's `✓ decode`, noting the pool.
     // (Serial reports its own 'decode' phase via onPhase.)
     if (usedPool)

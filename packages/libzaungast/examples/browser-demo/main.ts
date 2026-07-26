@@ -75,7 +75,8 @@ worker.onmessage = (e: MessageEvent) => {
   if (m.type === 'progress') log('› ' + m.msg);
   else if (m.type === 'decoding')
     status(`  decoding ${m.name} (${m.i} of ${m.n})`); // single line, updates in place
-  else if (m.type === 'phase') log(`  ✓ ${m.phase} ${m.ms}ms${m.note ? ' ' + m.note : ''}`);
+  else if (m.type === 'phase')
+    log(`  ✓ ${m.phase} ${m.ms == null ? '—' : m.ms + 'ms'}${m.note ? ' ' + m.note : ''}`);
   else if (m.type === 'error') log('✗ ' + m.msg);
   else if (m.type === 'result') {
     if (pickT0 && !m.data.selfTest)
