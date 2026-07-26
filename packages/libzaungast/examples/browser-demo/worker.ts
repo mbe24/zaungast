@@ -20,7 +20,7 @@ import { createDuckDb } from './duckdb-wasm-driver.ts';
 
 type Engine = 'sqlite' | 'duckdb';
 type In =
-  | { kind: 'selftest' }
+  | { kind: 'selftest'; engine: Engine }
   | { kind: 'prewarm'; parallel: boolean; threads: number; engine: Engine }
   | { kind: 'build'; files: File[]; parallel: boolean; threads: number; engine: Engine };
 type Out =
@@ -88,19 +88,30 @@ self.onmessage = async (e: MessageEvent<In>) => {
       });
       return;
     }
-    post({ type: 'progress', msg: 'initializing sqlite-wasm…' });
+    // DuckDB mode still builds the SQLite store first (it owns the shaping), then loads into DuckDB — so
+    // both wasm engines init. Say so, rather than only naming sqlite-wasm.
+    const engine = e.data.engine;
+    post({
+      type: 'progress',
+      msg: `initializing ${engine === 'duckdb' ? 'sqlite-wasm + duckdb-wasm' : 'sqlite-wasm'}…`,
+    });
     const tDriver = performance.now();
     const driver = await getDriver();
     const driverWaitMs = performance.now() - tDriver; // ~0 when prewarm already inited it
 
     if (e.data.kind === 'selftest') {
       const store = openStoreFromSource(new MemorySource(new Map()), { driver });
-      post({ type: 'result', data: { selfTest: true, meta: store.meta } });
+      let duckOk: boolean | null = null;
+      if (engine === 'duckdb') {
+        const conn = await getDuck(); // init DuckDB + a trivial round-trip to prove it works
+        duckOk = (await conn.query<{ x: number | bigint }>('select 42 as x')).length === 1;
+      }
+      post({ type: 'result', data: { selfTest: true, engine, duckOk, meta: store.meta } });
       store.close();
       return;
     }
 
-    const { files, parallel, threads, engine } = e.data;
+    const { files, parallel, threads } = e.data;
     post({ type: 'progress', msg: `reading ${files.length} files…` });
     const map = new Map<string, Uint8Array>();
     for (const f of files) map.set(f.name, new Uint8Array(await f.arrayBuffer()));
@@ -155,13 +166,7 @@ self.onmessage = async (e: MessageEvent<In>) => {
     });
     // Transparency: DuckDB defers/omits FTS (no FTS5 → search uses LIKE). Show the phase explicitly as
     // N/A (en dash) rather than dropping the line, in its normal spot (after recompute, before decode).
-    if (engine === 'duckdb')
-      post({
-        type: 'phase',
-        phase: 'fts',
-        ms: null,
-        note: '(N/A — DuckDB has no FTS5; search uses LIKE)',
-      });
+    if (engine === 'duckdb') post({ type: 'phase', phase: 'fts', ms: null, note: 'N/A' });
     // Report the parallel decode as a phase line aligned with serial's `✓ decode`, noting the pool.
     // (Serial reports its own 'decode' phase via onPhase.)
     if (usedPool)
@@ -185,15 +190,13 @@ self.onmessage = async (e: MessageEvent<In>) => {
       post({ type: 'phase', phase: 'duckdb-load', ms: duckLoadMs });
     }
 
-    // Run the four example queries on the chosen engine, timing each and posting a `✓ <query> Nms` phase
-    // line so both engines stream the same style (SQLite is sync, DuckDB async — `await fn()` times both).
+    // Run the four example queries on the chosen engine, timing each (shown inline with each example in
+    // the result, not as phase lines). SQLite is sync, DuckDB async — `await fn()` times both correctly.
     const queryMs: Record<string, number> = {};
     const timed = async <T>(name: string, fn: () => T | Promise<T>): Promise<T> => {
       const t0 = performance.now();
       const r = await fn();
-      const ms = Math.round(performance.now() - t0);
-      queryMs[name] = ms;
-      post({ type: 'phase', phase: name, ms });
+      queryMs[name] = Math.round(performance.now() - t0);
       return r;
     };
     const conversations = duck

@@ -38,6 +38,7 @@ function fmtMeta(m: any) {
 function renderResult(d: any) {
   if (d.selfTest) {
     log('✓ wasm driver + openStoreFromSource OK');
+    if (d.engine === 'duckdb') log(d.duckOk ? '✓ duckdb-wasm OK' : '✗ duckdb-wasm probe failed');
     log('  meta:', fmtMeta(d.meta));
     log('  (empty source → schemaMatched:', d.meta.schemaMatched, ')');
     return;
@@ -47,24 +48,24 @@ function renderResult(d: any) {
     d.driverWait != null
       ? ` · driverWait ${d.driverWait}ms${d.prewarmed ? ' (pool prewarmed)' : ''}`
       : '';
-  // engine + per-example query times stream live as `✓ <phase> Nms` lines above (both engines); the
-  // built-store line just notes which engine answered.
   const engineLine = d.engine ? ` · engine ${d.engine}` : '';
   log(`✓ built store in ${d.buildMs}ms  [${d.mode}]${engineLine}${warmLine}\n`);
   log('meta:', fmtMeta(d.meta));
-  log(`\nconversations (${d.conversations.length} shown):`);
+  // per-example query time (both engines) shown inline with each example header as `· Nms`.
+  const qms = (k: string) => (d.queryMs?.[k] != null ? ` · ${d.queryMs[k]}ms` : '');
+  log(`\nconversations (${d.conversations.length} shown)${qms('conversations')}:`);
   for (const c of d.conversations)
     log(`  ${c.handle}  ${c.kind}  msgs=${c.msgCount}  ${c.topic ?? c.participantNames ?? ''}`);
-  log(`\npeople (total ${d.people.total}):`);
+  log(`\npeople (total ${d.people.total})${qms('people')}:`);
   for (const p of d.people.rows)
     log(`  ${p.handle}  ${p.name}${p.isBot ? ' [bot]' : ''}  msgs=${p.msgCount}`);
   log(
-    `\nsearch "the": ${d.search.ok ? `${d.search.rows.length} hits (order ${d.search.order})` : d.search.reason.reason}`,
+    `\nsearch "the"${qms('search')}: ${d.search.ok ? `${d.search.rows.length} hits (order ${d.search.order})` : d.search.reason.reason}`,
   );
   if (d.search.ok)
     for (const h of d.search.rows) log(`  [${h.senderName}] ${h.content.slice(0, 80)}`);
   log(
-    `\ntop topics (30d): ${d.topics.ok ? d.topics.rows.map((t: any) => t.phrase ?? JSON.stringify(t)).join(', ') : d.topics.reason.reason}`,
+    `\ntop topics (30d)${qms('topics')}: ${d.topics.ok ? d.topics.rows.map((t: any) => t.phrase ?? JSON.stringify(t)).join(', ') : d.topics.reason.reason}`,
   );
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -75,9 +76,11 @@ worker.onmessage = (e: MessageEvent) => {
   if (m.type === 'progress') log('› ' + m.msg);
   else if (m.type === 'decoding')
     status(`  decoding ${m.name} (${m.i} of ${m.n})`); // single line, updates in place
-  else if (m.type === 'phase')
-    log(`  ✓ ${m.phase} ${m.ms == null ? '—' : m.ms + 'ms'}${m.note ? ' ' + m.note : ''}`);
-  else if (m.type === 'error') log('✗ ' + m.msg);
+  else if (m.type === 'phase') {
+    // ms null → no time shown (e.g. `✓ fts N/A`); note (if any) trails the time.
+    const parts = [`✓ ${m.phase}`, m.ms == null ? '' : `${m.ms}ms`, m.note].filter(Boolean);
+    log('  ' + parts.join(' '));
+  } else if (m.type === 'error') log('✗ ' + m.msg);
   else if (m.type === 'result') {
     if (pickT0 && !m.data.selfTest)
       log(`⏱ pick→result ${Math.round(performance.now() - pickT0)}ms`);
@@ -87,7 +90,7 @@ worker.onmessage = (e: MessageEvent) => {
 
 document.getElementById('selftest')!.addEventListener('click', () => {
   clear();
-  worker.postMessage({ kind: 'selftest' });
+  worker.postMessage({ kind: 'selftest', engine: engineSel.value as 'sqlite' | 'duckdb' });
 });
 const input = document.getElementById('pick') as HTMLInputElement;
 const parallelToggle = document.getElementById('parallel') as HTMLInputElement;
