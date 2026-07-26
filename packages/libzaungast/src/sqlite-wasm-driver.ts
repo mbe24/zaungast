@@ -84,7 +84,12 @@ class WasmDatabase implements SqlDatabase {
 // `initOptions` is passed straight to sqlite3InitModule (Emscripten module opts) — in a bundled browser
 // build, pass `{ locateFile }` so the glue can find sqlite3.wasm next to the bundle. Node needs none.
 export async function createSqliteWasmDriver(
-  initOptions?: Record<string, unknown>,
+  // `locateFile` is the one option every browser build needs (point the glue at sqlite3.wasm); the rest
+  // are passed through to sqlite3InitModule (Emscripten module opts). Node needs neither.
+  initOptions?: { locateFile?: (path: string, prefix?: string) => string } & Record<
+    string,
+    unknown
+  >,
 ): Promise<SqlDriver> {
   // The shipped types declare sqlite3InitModule as taking no args; at runtime it accepts the standard
   // Emscripten module options (locateFile, print, …). Widen the signature rather than cast the result,
