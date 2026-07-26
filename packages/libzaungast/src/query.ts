@@ -9,6 +9,63 @@ import { byCodeUnit } from './util/sort.js';
 
 type DB = ChatStore['db'];
 
+// Raw DB row shapes (snake_case columns) — the typed inputs to the camelCase mappers below, replacing
+// `as any[]`. Fields are the union a query/mapper reads; a subset SELECT simply omits some at runtime
+// (the mappers `??` them), which is why the incidental extras are optional rather than required.
+interface MessageRow {
+  id: string;
+  conv_id: string;
+  root_id: string;
+  ts: number;
+  kind: string;
+  sender_mri: string | null;
+  sender_name: string | null;
+  is_mine: number;
+  has_attach: number;
+  mentions_me: number;
+  is_system: number;
+  content: string;
+  reactions: string | null;
+  snip?: string;
+}
+interface ConversationRow {
+  id: string;
+  handle: string;
+  kind: string;
+  topic: string | null;
+  participant_names: string | null;
+  last_ts: number;
+  msg_count: number;
+}
+interface PersonRow {
+  handle: string;
+  mri: string;
+  name: string;
+  msg_count: number;
+  last_ts: number;
+  given_name?: string | null;
+  surname?: string | null;
+  type?: string | null;
+  org?: string | null;
+}
+interface EventRow {
+  id: string;
+  series_id: string | null;
+  kind: string;
+  subject: string | null;
+  start_ts: number;
+  end_ts: number;
+  is_all_day: number;
+  organizer_name: string | null;
+  cid: string | null;
+  my_response: string | null;
+  is_cancelled: number;
+  is_confidential: number;
+  has_attach: number;
+  attendees: string | null;
+  body_html: string | null;
+}
+
 // escape LIKE wildcards in user input (used with `escape '\'`). Query-side helper.
 export function likeEscape(s: string): string {
   return s.replace(/[\\%_]/g, (m) => '\\' + m);
@@ -151,7 +208,7 @@ export function parseReactions(json: string | null | undefined): ReactionGroup[]
 // Map a raw `messages` row (snake_case, 0/1 flags) to a Message. The mappers live here (not in
 // the facade) so any consumer of the raw query fns can reuse them; the facade calls them at its
 // boundary while the query fns keep returning raw rows (the MCP still reads those directly).
-export function toMessage(r: any): Message {
+export function toMessage(r: MessageRow): Message {
   return {
     id: r.id,
     convId: r.conv_id,
@@ -169,8 +226,8 @@ export function toMessage(r: any): Message {
   };
 }
 // Map a raw search row (a `messages` row + a `snip` column) to a SearchHit.
-export function toSearchHit(r: any): SearchHit {
-  return { ...toMessage(r), snippet: r.snip };
+export function toSearchHit(r: MessageRow): SearchHit {
+  return { ...toMessage(r), snippet: r.snip ?? '' };
 }
 
 // ---------- search ----------
@@ -493,7 +550,7 @@ export interface PeopleResult {
   rows: Person[];
 }
 
-const toPerson = (r: any): Person => ({
+const toPerson = (r: PersonRow): Person => ({
   handle: r.handle,
   mri: r.mri,
   name: r.name,
@@ -560,7 +617,7 @@ export interface Conversation {
   msgCount: number;
 }
 
-const toConversation = (r: any): Conversation => ({
+const toConversation = (r: ConversationRow): Conversation => ({
   id: r.id,
   handle: r.handle,
   kind: r.kind,
@@ -794,7 +851,7 @@ export interface CalendarEvent {
 }
 
 // Map a raw events row (snake_case columns) to a CalendarEvent, booleanizing the 0/1 flags.
-function toCalendarEvent(r: any): CalendarEvent {
+function toCalendarEvent(r: EventRow): CalendarEvent {
   return {
     id: r.id,
     seriesId: r.series_id ?? null,
