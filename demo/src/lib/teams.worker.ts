@@ -141,6 +141,10 @@ const api = {
           });
         } catch (e) {
           console.warn('[zaungast] extract pool failed → serial extract', e);
+          // Destroy the pool BEFORE the serial re-extract so in-flight straggler chunks (up to all 5
+          // entities' worth, since R-A dispatches them concurrently) don't contend with it.
+          pool?.destroy();
+          pool = null;
           store = await openStoreFromSnapshot(snap, { driver, deferFts: true, onPhase });
         }
       } else {

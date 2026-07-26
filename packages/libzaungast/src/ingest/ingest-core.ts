@@ -497,8 +497,14 @@ export async function extractFromSnapshotAsync(
   };
 
   const tExtract = onPhase ? performance.now() : 0;
+  // Resolve every entity's targets BEFORE dispatching any chunk. entityTargets can throw synchronously
+  // on a malformed mapping; doing it all here (not as args mid-Promise.all) means such a throw escapes
+  // before any extractPar promise exists — never leaving an already-created promise unobserved.
   const msgTargets = entityTargets(snap, mapping, 'message');
   const convTargets = entityTargets(snap, mapping, 'conversation');
+  const profileTargets = entityTargets(snap, mapping, 'profile');
+  const eventTargets = entityTargets(snap, mapping, 'event');
+  const callTargets = entityTargets(snap, mapping, 'call');
   // R-A: dispatch ALL five entities' chunks up front. `extractPar` dispatches its chunks synchronously
   // (before its first await), so evaluating the five calls inside `Promise.all([...])` queues every
   // entity's work at once — the pool never idles on one entity's straggler chunk while the next entity
@@ -510,9 +516,9 @@ export async function extractFromSnapshotAsync(
   const [msgE, convE, profileE, eventE, callE] = await Promise.all([
     extractPar('message', msgTargets),
     extractPar('conversation', convTargets),
-    extractPar('profile', entityTargets(snap, mapping, 'profile')),
-    extractPar('event', entityTargets(snap, mapping, 'event')),
-    extractPar('call', entityTargets(snap, mapping, 'call')),
+    extractPar('profile', profileTargets),
+    extractPar('event', eventTargets),
+    extractPar('call', callTargets),
   ]);
   const msgRows = msgE.records;
   const convRows = convE.records;
