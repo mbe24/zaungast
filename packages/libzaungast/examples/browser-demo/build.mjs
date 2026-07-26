@@ -29,8 +29,9 @@ await esbuild.build({
 });
 copyFileSync(wasm, `${dist}/sqlite3.wasm`);
 copyFileSync(`${here}index.html`, `${dist}/index.html`);
+copyFileSync(`${here}styles.css`, `${dist}/styles.css`);
 
 console.log(
-  '\n✓ built browser-demo/dist: index.html + main.js + worker.js + sqlite3.wasm' +
+  '\n✓ built browser-demo/dist: index.html + styles.css + main.js + worker.js + sqlite3.wasm' +
     '  (serve over http — e.g. `npx serve browser-demo/dist`)',
 );

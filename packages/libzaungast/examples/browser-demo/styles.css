@@ -1,0 +1,94 @@
+/* POC page styles. Kept out of index.html so the markup stays lean; copied to dist/ by build.mjs and
+   linked as ./styles.css (a plain static asset — not bundled by esbuild). */
+body {
+  font:
+    14px/1.5 system-ui,
+    sans-serif;
+  margin: 2rem;
+  max-width: 900px;
+}
+button {
+  font: inherit;
+  padding: 0.5rem 1rem;
+  margin-right: 0.5rem;
+  cursor: pointer;
+}
+pre {
+  background: #f4f4f4;
+  padding: 1rem;
+  border-radius: 6px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  margin-top: 1rem;
+}
+.note {
+  color: #666;
+}
+.path {
+  font-size: 12px;
+  padding: 0.5rem 0.75rem;
+  margin: 0.4rem 0;
+  word-break: break-all;
+}
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+/* Push the mode toggle to the right edge of the controls row; label text first, switch after. */
+.mode {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 13px;
+  color: #444;
+  user-select: none;
+  cursor: pointer;
+}
+/* iOS-style toggle switch (a checkbox visually replaced by a sliding track + knob). */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 22px;
+  flex: none;
+}
+.switch input {
+  position: absolute;
+  opacity: 0; /* keep the real checkbox for a11y + state, but hide it under the track */
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+}
+.slider {
+  position: absolute;
+  inset: 0;
+  background: #c8c8c8;
+  border-radius: 22px;
+  transition: background 0.18s ease;
+  pointer-events: none;
+}
+.slider::before {
+  content: '';
+  position: absolute;
+  height: 18px;
+  width: 18px;
+  left: 2px;
+  top: 2px;
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: transform 0.18s ease;
+}
+.switch input:checked + .slider {
+  background: #34c759;
+}
+.switch input:checked + .slider::before {
+  transform: translateX(18px);
+}
+.switch input:focus-visible + .slider {
+  outline: 2px solid #0a84ff;
+  outline-offset: 2px;
+}
