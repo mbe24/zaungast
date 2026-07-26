@@ -1,43 +1,10 @@
-// Ingest worker for the pool: off-thread `.ldb` parse (kind 'parse') AND SSV extract (kind 'extract').
-// One worker script serves both cold-read phases so the pool is spawned once and reused.
-//  • parse:   bytes → PackedTable (M4a); the parsed entries are flattened into 3 transferables (keys
-//             blob + values blob + lengths table) via packTable, so a table crosses the boundary as 3
-//             buffers moved zero-copy — not the hundreds of thousands of tiny per-entry buffers that
-//             made per-entry transfer net-negative. The coordinator rebuilds it with unpackTable.
-//  • extract: (packed records, mapping, entity) → EntityExtract; the record range arrives packed into 3
-//             transferables (packRecords) and is rebuilt here with unpackRecords — same zero-copy shape
-//             as parse, avoiding the per-record structured-clone tax.
-import {
-  parseTable,
-  extractRecords,
-  packTable,
-  packedTransferList,
-  unpackRecords,
-  type PackedRecords,
-} from 'libzaungast/web';
+// Pool worker: a 2-line entry over libzaungast/web's handlePoolMessage, which runs both cold-read pool
+// jobs — `.ldb` parse → PackedTable, and the SSV extract over a packed record range → EntityExtract —
+// and returns the reply + the ArrayBuffers to move zero-copy. The coordinator (teams.worker.ts) spawns N
+// of these via createPool. The parse/extract logic itself lives in the library, so this stays trivial.
+import { handlePoolMessage } from 'libzaungast/web';
 
-type Msg =
-  | { kind: 'parse'; bytes: Uint8Array }
-  | { kind: 'extract'; packed: PackedRecords; mapping: unknown; entity: string };
-
-self.onmessage = (e: MessageEvent<Msg>) => {
-  const msg = e.data;
-  const post = self as unknown as Worker;
-  if (msg.kind === 'parse') {
-    let res;
-    try {
-      res = parseTable(msg.bytes);
-    } catch {
-      // Mirror readTablesInto's inline catch: a corrupt table folds as lossy-empty (whole load marked
-      // lossy), never a pool-killing throw — so one bad `.ldb` can't force a full serial re-parse.
-      res = { entries: [], lossy: true };
-    }
-    const packed = packTable(res);
-    post.postMessage(packed, packedTransferList(packed) as Transferable[]);
-  } else {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    post.postMessage(
-      extractRecords(unpackRecords(msg.packed) as any, msg.mapping as any, msg.entity),
-    );
-  }
+self.onmessage = (e: MessageEvent) => {
+  const { data, transfer } = handlePoolMessage(e.data);
+  (self as unknown as Worker).postMessage(data, transfer);
 };

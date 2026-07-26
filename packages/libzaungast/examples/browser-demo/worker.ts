@@ -3,26 +3,18 @@
 // goes so the UI stays responsive. Built to browser-demo/dist/worker.js. Served over http (Workers,
 // module loading, and the wasm fetch all require http, not file://).
 //
-// TWO build modes, chosen by the UI toggle so you can A/B them on the same cache back-to-back:
-//   • serial   — openStoreFromSource: decode + fold + extract + build, all on this worker.
-//   • parallel — parse the .ldb across a nested Web Worker pool, fold the Snapshot here (byte-identical
-//                order → same result), then fan the SSV extract back out across the same pool. Falls back
-//                to serial on any pool failure (nested workers unsupported, parse throw, …).
+// The whole parallel cold-read path (parse across a pool → fold → extract across the pool → serial
+// fallback) now lives in libzaungast/web's `openStoreFromSourceParallel`; this file just spawns a pool
+// (the UI threads stepper sizes it) and hands it in. Serial mode passes `pool: null`.
 import {
   openStoreFromSource,
-  openStoreFromSnapshot,
-  loadSnapshotFromAsync,
-  unpackTable,
-  packRecords,
-  packedRecordsTransferList,
+  openStoreFromSourceParallel,
+  createPool,
   MemorySource,
   type SnapshotSource,
-  type TableReadResult,
-  type PackedTable,
-  type EntityExtract,
+  type Pool,
 } from 'libzaungast/web';
-import { createSqliteWasmDriver } from '../sqlite-wasm-driver.ts';
-import { createPool, type Pool } from './pool.ts';
+import { createSqliteWasmDriver } from 'libzaungast/web/sqlite-wasm-driver';
 
 type In =
   | { kind: 'selftest' }
@@ -44,9 +36,10 @@ const getDriver = () =>
     locateFile: (path: string) => new URL(path, import.meta.url).href,
   }));
 
-// Pool spawn at a caller-chosen size (the UI threads stepper), hoisted so a 'prewarm' message can spawn
-// it during the file picker and the build after the pick reuses it. Sanity-clamped so a bogus message
-// can't spawn a runaway pool.
+// Pool spawn at a caller-chosen size (the UI threads stepper) over the library's createPool; the workers
+// run libzaungast/web's handlePoolMessage (see parse.worker.ts). Hoisted so a 'prewarm' message can spawn
+// it during the file picker and the build after reuses it. Sanity-clamped so a bogus message can't spawn
+// a runaway pool.
 function spawnPool(size: number): Pool | null {
   const n = Math.min(Math.max(size, 2), 16);
   if (n <= 1) return null;
@@ -61,7 +54,7 @@ function spawnPool(size: number): Pool | null {
 }
 let warmPool: Pool | null = null; // populated by a 'prewarm' message, consumed by the next parallel build
 
-// Ensure warmPool holds a pool of exactly `threads` workers (respawn if size changed, e.g. stepper moved).
+// Ensure warmPool holds a pool of exactly `threads` workers (respawn if the stepper moved).
 function warmTo(threads: number) {
   if (warmPool && warmPool.size !== threads) {
     warmPool.destroy();
@@ -113,9 +106,9 @@ self.onmessage = async (e: MessageEvent<In>) => {
       });
     post({ type: 'progress', msg: `${dataFiles.length} data files (.ldb/.log) to decode` });
 
-    // Progress-reporting SnapshotSource (the A5 seam): the decoder calls read() once per .ldb/.log, so
-    // reporting there gives live per-file progress with NO library change. In parallel mode the .ldb are
-    // parsed by the pool (reported in the parse loop), so read() only fires for the .log WAL here.
+    // Progress-reporting SnapshotSource: openStoreFromSourceParallel reads each .ldb once (to dispatch
+    // it to the pool) and the .log during the fold, so read() gives live per-file progress with no extra
+    // wiring. In serial mode the whole decode flows through read() too.
     let i = 0;
     const source: SnapshotSource = {
       names: () => [...map.keys()],
@@ -129,80 +122,34 @@ self.onmessage = async (e: MessageEvent<In>) => {
     const onPhase = (phase: string, ms: number) =>
       post({ type: 'phase', phase, ms: Math.round(ms) });
 
-    const ldbNames = [...map.keys()].filter((n) => n.endsWith('.ldb'));
+    // Pick the pool: reuse the prewarmed one (respawn to the stepper size if needed); null in serial mode.
     let pool: Pool | null = null;
-    let poolSize = 0;
     let prewarmed = false;
     if (parallel) {
-      warmTo(threads); // reuse the prewarmed pool, or (re)spawn to the stepper's current size
+      warmTo(threads);
       prewarmed = warmPool !== null;
       pool = warmPool;
-      warmPool = null;
-      poolSize = pool ? pool.size : 0;
+      warmPool = null; // openStoreFromSourceParallel consumes + destroys it
     } else if (warmPool) {
       warmPool.destroy(); // speculatively prewarmed, but this build is serial — free the idle workers
       warmPool = null;
     }
 
     const t = performance.now();
-    let parseMs = 0;
-    let usedPool = false;
-    let store;
-    try {
-      if (pool) {
-        try {
-          const tParse = performance.now();
-          // R-B: dispatch every .ldb parse eagerly, then fold each via getTable in canonical order while
-          // the pool parses the rest — the fold overlaps the parse (byte-identical; fold order unchanged).
-          const pending = new Map<string, Promise<TableReadResult>>();
-          for (const n of ldbNames)
-            pending.set(
-              n,
-              pool!.run<PackedTable>({ kind: 'parse', bytes: map.get(n)! }).then((packed) => {
-                post({ type: 'decoding', name: n, i: ++i, n: dataFiles.length });
-                return unpackTable(packed);
-              }),
-            );
-          const snap = await loadSnapshotFromAsync(source, {
-            getTable: (name) => pending.get(name),
-          });
-          parseMs = performance.now() - tParse; // parse+fold overlap window
-          // Report parallel decode as a phase line aligned with serial's `✓ decode`, noting the pool.
-          post({
-            type: 'phase',
-            phase: 'decode',
-            ms: Math.round(parseMs),
-            note: `(using ${poolSize} workers)`,
-          });
-          store = await openStoreFromSnapshot(snap, {
-            driver,
-            onPhase,
-            runExtract: (task) => {
-              // Pack the record range into 3 transferables (keys/vals/lens) so the whole chunk moves
-              // zero-copy — not one structured-clone per tiny record buffer (the extract-side transfer tax).
-              const packed = packRecords(task.records);
-              return pool!.run<EntityExtract>(
-                { kind: 'extract', packed, mapping: task.mapping, entity: task.entity },
-                packedRecordsTransferList(packed),
-              );
-            },
-          });
-          usedPool = true;
-        } catch (err) {
-          post({
-            type: 'progress',
-            msg: `pool failed → serial fallback (${(err as Error).message})`,
-          });
-          pool.destroy();
-          pool = null;
-          store = openStoreFromSource(source, { driver, onPhase });
-        }
-      } else {
-        store = openStoreFromSource(source, { driver, onPhase });
-      }
-    } finally {
-      pool?.destroy();
-    }
+    const { store, usedPool, poolSize, parseMs } = await openStoreFromSourceParallel(source, {
+      driver,
+      pool,
+      onPhase,
+    });
+    // Report the parallel decode as a phase line aligned with serial's `✓ decode`, noting the pool.
+    // (Serial reports its own 'decode' phase via onPhase.)
+    if (usedPool)
+      post({
+        type: 'phase',
+        phase: 'decode',
+        ms: Math.round(parseMs),
+        note: `(using ${poolSize} workers)`,
+      });
     const buildMs = Math.round(performance.now() - t);
 
     post({

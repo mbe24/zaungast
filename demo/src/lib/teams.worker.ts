@@ -2,25 +2,21 @@
 // heavy work — decode + build + query — runs off the main thread. The store stays resident so multiple
 // visualizations (Wrapped now; contact graph etc. later) query the same build. Progress is reported
 // through a Comlink-proxied callback the main thread passes in.
+//
+// The parallel cold-read path (parse across a pool → fold → extract across the pool → serial fallback)
+// now lives in libzaungast/web's `openStoreFromSourceParallel`; this worker spawns a pool and hands it in.
 import * as Comlink from 'comlink';
 import {
   openStoreFromSource,
-  openStoreFromSnapshot,
-  loadSnapshotFromAsync,
-  unpackTable,
-  packRecords,
-  packedRecordsTransferList,
+  openStoreFromSourceParallel,
+  createPool,
   type SnapshotSource,
-  type Snapshot,
-  type TableReadResult,
-  type PackedTable,
-  type EntityExtract,
+  type Pool,
   type TeamsStore,
   type StoreMeta,
   type BuildPhase,
 } from 'libzaungast/web';
-import { createSqliteWasmDriver } from './sqlite-wasm-driver';
-import { createPool, type Pool } from './pool';
+import { createSqliteWasmDriver } from 'libzaungast/web/sqlite-wasm-driver';
 // Vite resolves the wasm to a served URL; the driver's locateFile hands it to the sqlite-wasm glue.
 import sqlite3Url from '@sqlite.org/sqlite-wasm/sqlite3.wasm?url';
 import { computeWrapped, type WrappedData } from './wrapped';
@@ -35,10 +31,10 @@ let driverPromise: ReturnType<typeof createSqliteWasmDriver> | null = null;
 const getDriver = () =>
   (driverPromise ??= createSqliteWasmDriver({ locateFile: () => sqlite3Url }));
 
-// Worker-pool sizing + spawn, hoisted so prewarm() can spawn it (each worker loading the libzaungast
-// bundle) DURING the file picker and build() just reuses it — no wasm-init / pool-spawn after the pick.
-// CAP at 8: a naive `cores-1` (27 on a 28-core box) pays 27x module-init before any work; decode
-// (~26 .ldb) + extract (a few 4000-record chunks) saturate well under it.
+// Worker-pool sizing + spawn (over libzaungast/web's createPool; workers run handlePoolMessage), hoisted
+// so prewarm() can spawn it DURING the file picker and build() just reuses it. CAP at 8: a naive
+// `cores-1` (27 on a 28-core box) pays 27x module-init before any work; decode (~26 .ldb) + extract
+// saturate well under it.
 const POOL_SIZE = Math.min((self.navigator?.hardwareConcurrency || 4) - 1, 8);
 function spawnPool(): Pool | null {
   if (POOL_SIZE <= 1) return null;
@@ -75,8 +71,7 @@ const api = {
     const driver = await getDriver();
     const driverWaitMs = performance.now() - tDriver; // ~0 when prewarm() already inited it
     onProgress?.({ type: 'reading', total: files.length });
-    // Read every file's bytes CONCURRENTLY (File.arrayBuffer() is async I/O). The serial
-    // `await` loop this replaces read one file at a time; Promise.all overlaps the disk reads.
+    // Read every file's bytes CONCURRENTLY (File.arrayBuffer() is async I/O), overlapping the disk reads.
     const tRead = performance.now();
     const buffers = await Promise.all(files.map((f) => f.arrayBuffer()));
     const map = new Map<string, Uint8Array>();
@@ -103,95 +98,32 @@ const api = {
       onProgress?.({ type: 'phase', phase, ms: Math.round(ms) });
     };
 
-    // C3: parse the `.ldb` files across a Web Worker pool (the biggest cold-read phase), then fold the
-    // Snapshot on this coordinator (byte-identical order → same fingerprint) and build the store from
-    // it. Falls back to the serial path if a pool can't be created (e.g. nested workers unsupported) or
-    // any parse fails — the coordinator keeps the raw bytes, so the fallback is always safe.
-    const ldbNames = [...map.keys()].filter((n) => n.endsWith('.ldb'));
-    // Reuse the pool prewarm() spawned during the picker; otherwise spawn it now (spawnPool caps size).
+    // Reuse the prewarmed pool (or spawn now); openStoreFromSourceParallel owns parse+fold+extract with a
+    // serial fallback and consumes/destroys the pool. deferFts: this viz may never search — take the whole
+    // `fts` phase off the cold-read path.
     const prewarmed = warmPool !== null;
-    let pool: Pool | null = warmPool ?? spawnPool();
+    const pool = warmPool ?? spawnPool();
     warmPool = null;
-    const poolSize = pool ? pool.size : 0; // captured before the finally destroys the pool
 
     const tBuild = performance.now();
-    let parseMs = 0;
-    let usedPool = false;
-    let snap: Snapshot | null = null;
-    try {
-      if (pool) {
-        try {
-          const tParse = performance.now();
-          // R-B: dispatch every `.ldb` parse eagerly, then let loadSnapshotFromAsync pull each via
-          // getTable in canonical order and fold it WHILE the pool parses the rest — the fold overlaps
-          // the parse instead of running after it. Byte-identical (the fold still consumes files in
-          // sorted order; only wall-clock interleaving changes). getTable returns undefined for a name
-          // never dispatched → inline parse fallback at that position (see readTablesIntoAsync).
-          const pending = new Map<string, Promise<TableReadResult>>();
-          for (const n of ldbNames)
-            pending.set(
-              n,
-              pool!.run<PackedTable>({ kind: 'parse', bytes: map.get(n)! }).then((packed) => {
-                onProgress?.({ type: 'decoding', name: n, i: ++i, n: dataFiles.length });
-                return unpackTable(packed);
-              }),
-            );
-          snap = await loadSnapshotFromAsync(source, { getTable: (name) => pending.get(name) });
-          parseMs = performance.now() - tParse; // now the parse+fold overlap window
-          usedPool = true;
-        } catch (e) {
-          console.warn('[zaungast] parse pool failed → serial fallback', e);
-          snap = null;
-          usedPool = false;
-          pool.destroy(); // don't let stragglers contend with the serial re-parse
-          pool = null;
-        }
-      }
-
-      if (usedPool && snap) {
-        // C4: fan the SSV extract out across the SAME pool (the library compacts records first, then
-        // concatenates results in dispatch order → byte-identical to serial). On ANY pool failure,
-        // fall back to a serial extract over the SAME snapshot (no re-parse) — extract is read-only.
-        try {
-          store = await openStoreFromSnapshot(snap, {
-            driver,
-            deferFts: true,
-            onPhase,
-            runExtract: (task) => {
-              // Pack the record range into 3 transferables (keys/vals/lens) so the whole chunk moves
-              // zero-copy — not one structured-clone per tiny record buffer (the extract-side transfer tax).
-              const packed = packRecords(task.records);
-              return pool!.run<EntityExtract>(
-                { kind: 'extract', packed, mapping: task.mapping, entity: task.entity },
-                packedRecordsTransferList(packed),
-              );
-            },
-          });
-        } catch (e) {
-          console.warn('[zaungast] extract pool failed → serial extract', e);
-          // Destroy the pool BEFORE the serial re-extract so in-flight straggler chunks (up to all 5
-          // entities' worth, since R-A dispatches them concurrently) don't contend with it.
-          pool?.destroy();
-          pool = null;
-          store = await openStoreFromSnapshot(snap, { driver, deferFts: true, onPhase });
-        }
-      } else {
-        store = openStoreFromSource(source, { driver, deferFts: true, onPhase });
-      }
-    } finally {
-      pool?.destroy();
-    }
+    const result = await openStoreFromSourceParallel(source, {
+      driver,
+      pool,
+      deferFts: true,
+      onPhase,
+    });
+    store = result.store;
     const buildMs = performance.now() - tBuild;
 
     console.log('[zaungast cold-read ms]', {
       fileRead: Math.round(readMs),
-      parsePool: usedPool ? Math.round(parseMs) : 'serial',
+      parsePool: result.usedPool ? Math.round(result.parseMs) : 'serial',
       ...phaseMs, // extract · apply · recompute · (decode only on the serial path; fts deferred)
       buildTotal: Math.round(buildMs),
       grandTotal: Math.round(readMs + buildMs),
       files: files.length,
-      ldb: ldbNames.length,
-      pool: usedPool ? poolSize : 0,
+      ldb: [...map.keys()].filter((n) => n.endsWith('.ldb')).length,
+      pool: result.usedPool ? result.poolSize : 0,
       prewarmed,
       driverWait: Math.round(driverWaitMs),
       cores: self.navigator?.hardwareConcurrency ?? 0,
