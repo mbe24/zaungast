@@ -143,7 +143,7 @@ export function applyMessages(
 // first-occurrence order, so winners insert in the exact rowid order the per-row upsert would produce —
 // keeping even the ORDER BY-id FTS dump bit-identical. Winners are PK-unique ⇒ the plain bulk INSERT
 // can't conflict, and any fold bug fails loud instead of silently diverging.
-export function bulkInsertMessages(store: ChatStore, msgRows: any[], selfMri: string | null): void {
+export function foldMessageWinners(msgRows: any[], selfMri: string | null): MessageInsert[] {
   const winners = new Map<string, MessageInsert>();
   for (const m of msgRows) {
     const row = shapeMessageRow(m, selfMri);
@@ -152,7 +152,10 @@ export function bulkInsertMessages(store: ChatStore, msgRows: any[], selfMri: st
     const cur = winners.get(key);
     if (!cur || row.version >= cur.version) winners.set(key, row);
   }
-  store.insertMessagesBulk([...winners.values()]);
+  return [...winners.values()];
+}
+export function bulkInsertMessages(store: ChatStore, msgRows: any[], selfMri: string | null): void {
+  store.insertMessagesBulk(foldMessageWinners(msgRows, selfMri));
 }
 
 // Extract the profiles name-source rows (mri → display name) from the snapshot. Split from
@@ -338,10 +341,22 @@ export function applyCalls(store: ChatStore, snap: Snapshot, mapping: any) {
   store.replaceCalls(buildCallRows(snap, mapping));
 }
 
-export function applyConversationMeta(store: ChatStore, convRows: any[]) {
+// One conversation-metadata row (the id-derived + raw meta fields, pre-derivation). Shared shape so an
+// engine-agnostic builder can load the same rows the SQLite upsert does.
+export interface ConvMetaRow {
+  id: string;
+  kind: string;
+  topic: string | null;
+  teamId: string | null;
+  threadType: string | null;
+  metaLastTs: number;
+}
+// Pure conversation-meta shaping (hoisted from applyConversationMeta's loop, incl. the `!c.id` skip).
+export function shapeConversationMetaRows(convRows: any[]): ConvMetaRow[] {
+  const out: ConvMetaRow[] = [];
   for (const c of convRows) {
     if (!c.id) continue;
-    store.upsertConversationMeta({
+    out.push({
       id: c.id,
       kind: convKind(c.id),
       topic: c.topic || null,
@@ -352,6 +367,10 @@ export function applyConversationMeta(store: ChatStore, convRows: any[]) {
       metaLastTs: Number(c.lastMessageTimeUtc) || 0,
     });
   }
+  return out;
+}
+export function applyConversationMeta(store: ChatStore, convRows: any[]) {
+  for (const c of shapeConversationMetaRows(convRows)) store.upsertConversationMeta(c);
 }
 
 // Order-sensitive: ties break by first-insertion (msgRows order). MUST run on the coordinator over the

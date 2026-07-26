@@ -1,4 +1,4 @@
-import { makeHandle } from '../util/handles.js';
+import { HandleAllocator } from '../util/handles.js';
 import { SCHEMA_SQL } from './schema-sql.js';
 import type { SqlDatabase, SqlDriver, SqlStatement, SqlParam } from './sql-driver.js';
 
@@ -51,8 +51,9 @@ export class ChatStore {
   db: SqlDatabase;
   ftsEnabled = false;
   private ftsBuilt = false; // has the full FTS index been populated? (deferred builds start false)
-  private readonly handleByFull = new Map<string, string>();
-  private readonly usedHandles = new Set<string>();
+  // Handle assignment (short c:/p: ids), collision-extended in assignment order. Extracted to a shared
+  // allocator so the engine-agnostic derivation (deriveTables) can reproduce the exact same handles.
+  private readonly handles = new HandleAllocator();
 
   // Phrase-extraction cache for rank_topics: content string → extracted phrases. Persists across
   // tool calls and (for unchanged content) across incremental refreshes. Invalidated when the
@@ -114,28 +115,9 @@ export class ChatStore {
   }
 
   // Stable short handle for a full id, collision-extended. Cache persists across incremental
-  // refreshes so a person/conversation keeps the same handle.
+  // refreshes so a person/conversation keeps the same handle. Delegates to the shared HandleAllocator.
   handleFor(prefix: 'c' | 'p', fullId: string): string {
-    const cached = this.handleByFull.get(fullId);
-    if (cached) return cached;
-    // 6 hex chars (24 bits) → collision probability ~16× lower than 5, so the order-dependent
-    // extension path below is essentially never hit. Residual (accepted, ~pre-release only): if
-    // a fresh full rebuild adds an entity that collides at 6 chars with an existing one, the
-    // assignment order can flip which one extends — a stale handle from before that rebuild
-    // could then resolve differently. Handles are re-issued in every tool result, so the window
-    // is one full rebuild between an agent reading and reusing a handle; negligible in practice.
-    for (let len = 6; len <= 40; len++) {
-      const h = makeHandle(prefix, fullId, len);
-      if (!this.usedHandles.has(h)) {
-        this.usedHandles.add(h);
-        this.handleByFull.set(fullId, h);
-        return h;
-      }
-    }
-    const fb = `${prefix}:${fullId.slice(0, 12)}`;
-    this.usedHandles.add(fb);
-    this.handleByFull.set(fullId, fb);
-    return fb;
+    return this.handles.handleFor(prefix, fullId);
   }
 
   private readonly stmt = new Map<string, SqlStatement>();
