@@ -14,9 +14,16 @@ import { test, expect, beforeAll, afterAll } from 'vitest';
 import { loadSnapshotFrom } from '../src/format/chromium/indexeddb.js';
 import { parseTable } from '../src/format/chromium/sstable.js';
 import { MemorySource } from '../src/format/chromium/memory-source.js';
-import { packTable, unpackTable, packedTransferList } from '../src/format/table-transfer.js';
+import {
+  packTable,
+  unpackTable,
+  packedTransferList,
+  packRecords,
+  unpackRecords,
+  packedRecordsTransferList,
+} from '../src/format/table-transfer.js';
 import { generateFixtureWithTables } from './fixture/generate.js';
-import type { Snapshot } from '../src/format/types.js';
+import type { Snapshot, SnapshotRecord } from '../src/format/types.js';
 import type { TableEntry, TableReadResult } from '../src/format/types.js';
 
 // Hash EVERY record's exact key+value bytes across all buckets (not the schema fingerprint, which only
@@ -86,6 +93,62 @@ test('empty/lossy table packs and unpacks cleanly', () => {
   const round = unpackTable(packTable({ entries: [], lossy: true }));
   expect(round.entries).toHaveLength(0);
   expect(round.lossy).toBe(true);
+});
+
+// ── Extract-transport codec (packRecords/unpackRecords) ─────────────────────────────────────────
+// A synthetic record range with the shapes recordsToRows must survive: a NULL value (tombstone), an
+// EMPTY (0-length) value distinct from null, an empty key, and the full 0..255 byte range in both.
+function syntheticRecords(): SnapshotRecord[] {
+  return [
+    { seq: 5, type: 1, key: new Uint8Array([1, 2, 3]), value: null }, // tombstone
+    { seq: 6, type: 2, key: new Uint8Array([1, 2, 3]), value: new Uint8Array(0) }, // empty value ≠ null
+    { seq: 7, type: 0, key: new Uint8Array(0), value: new Uint8Array([42]) }, // empty key
+    {
+      seq: 8,
+      type: 3,
+      key: Uint8Array.from({ length: 256 }, (_, b) => b),
+      value: Uint8Array.from({ length: 256 }, (_, b) => 255 - b),
+    },
+  ];
+}
+
+// key/value bytes must round-trip exactly; a null value must stay null and an empty value must stay a
+// 0-length Uint8Array (never collapse to null) — the two decode differently downstream.
+function expectSameRecordBytes(round: SnapshotRecord[], original: SnapshotRecord[]) {
+  expect(round.length).toBe(original.length);
+  for (let i = 0; i < original.length; i++) {
+    expect([...round[i].key]).toEqual([...original[i].key]);
+    if (original[i].value === null) expect(round[i].value).toBeNull();
+    else {
+      expect(round[i].value).not.toBeNull();
+      expect([...round[i].value!]).toEqual([...original[i].value!]);
+    }
+  }
+}
+
+test('packRecords → unpackRecords round-trips key/value bytes (null ≠ empty)', () => {
+  expectSameRecordBytes(unpackRecords(packRecords(syntheticRecords())), syntheticRecords());
+});
+
+test('packed records survive structuredClone (the extract worker hop)', () => {
+  expectSameRecordBytes(
+    unpackRecords(structuredClone(packRecords(syntheticRecords()))),
+    syntheticRecords(),
+  );
+});
+
+test('packedRecordsTransferList is exactly the 3 backing buffers (keys, vals, lens)', () => {
+  const p = packRecords(syntheticRecords());
+  const list = packedRecordsTransferList(p);
+  expect(list).toHaveLength(3);
+  expect(list[0]).toBe(p.keys);
+  expect(list[1]).toBe(p.vals);
+  expect(list[2]).toBe(p.lens.buffer);
+  for (const b of list) expect(b).toBeInstanceOf(ArrayBuffer);
+});
+
+test('empty record range packs and unpacks cleanly', () => {
+  expect(unpackRecords(packRecords([]))).toHaveLength(0);
 });
 
 // End-to-end: real .ldb, packed+cloned+unpacked, must fold to the identical Snapshot + fingerprint.

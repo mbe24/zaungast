@@ -4,12 +4,21 @@
 //             blob + values blob + lengths table) via packTable, so a table crosses the boundary as 3
 //             buffers moved zero-copy — not the hundreds of thousands of tiny per-entry buffers that
 //             made per-entry transfer net-negative. The coordinator rebuilds it with unpackTable.
-//  • extract: (records, mapping, entity) → EntityExtract; records arrive compact-copied by the library.
-import { parseTable, extractRecords, packTable, packedTransferList } from 'libzaungast/web';
+//  • extract: (packed records, mapping, entity) → EntityExtract; the record range arrives packed into 3
+//             transferables (packRecords) and is rebuilt here with unpackRecords — same zero-copy shape
+//             as parse, avoiding the per-record structured-clone tax.
+import {
+  parseTable,
+  extractRecords,
+  packTable,
+  packedTransferList,
+  unpackRecords,
+  type PackedRecords,
+} from 'libzaungast/web';
 
 type Msg =
   | { kind: 'parse'; bytes: Uint8Array }
-  | { kind: 'extract'; records: unknown[]; mapping: unknown; entity: string };
+  | { kind: 'extract'; packed: PackedRecords; mapping: unknown; entity: string };
 
 self.onmessage = (e: MessageEvent<Msg>) => {
   const msg = e.data;
@@ -27,6 +36,8 @@ self.onmessage = (e: MessageEvent<Msg>) => {
     post.postMessage(packed, packedTransferList(packed) as Transferable[]);
   } else {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    post.postMessage(extractRecords(msg.records as any, msg.mapping as any, msg.entity));
+    post.postMessage(
+      extractRecords(unpackRecords(msg.packed) as any, msg.mapping as any, msg.entity),
+    );
   }
 };

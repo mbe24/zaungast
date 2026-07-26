@@ -12,11 +12,16 @@ export { parseTable } from './format/chromium/sstable.js';
 // Transfer codec (M4a): the parse worker packs each result into 3 transferables (packTable +
 // packedTransferList) instead of N tiny per-entry buffers; the coordinator rebuilds it with unpackTable.
 // Engine-agnostic — also on the non-web ./format surface.
+// packRecords/unpackRecords apply the same 3-buffer flattening to the parallel EXTRACT dispatch.
 export {
   packTable,
   unpackTable,
   packedTransferList,
   type PackedTable,
+  packRecords,
+  unpackRecords,
+  packedRecordsTransferList,
+  type PackedRecords,
 } from './format/table-transfer.js';
 export { MemorySource } from './format/chromium/memory-source.js';
 export { fingerprint } from './format/fingerprint.js';

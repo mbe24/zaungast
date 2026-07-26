@@ -11,7 +11,7 @@
 // Pure + transport-agnostic (no Worker/postMessage here) so both the browser pool and a future Node
 // worker_threads pool share it. Usage: worker does `const p = packTable(parseTable(bytes));
 // post(p, packedTransferList(p))`; the coordinator does `unpackTable(received)`.
-import type { TableReadResult } from './types.js';
+import type { TableReadResult, SnapshotRecord } from './types.js';
 
 export interface PackedTable {
   keys: ArrayBuffer; // every key's bytes, concatenated in entry order
@@ -90,4 +90,97 @@ export function unpackTable(p: PackedTable): TableReadResult {
       `table-transfer: length mismatch (keys ${kOff}/${keys.length}, vals ${vOff}/${vals.length})`,
     );
   return { entries, lossy: p.lossy };
+}
+
+// ── Extract-transport codec ────────────────────────────────────────────────────────────────────
+// The SAME per-buffer clone tax that motivated packTable also hits the parallel *extract* dispatch:
+// the coordinator fans a bucket's `SnapshotRecord[]` out to the pool, and structured-clone would neuter
+// every record's tiny key + value buffer one at a time. This flattens a record range into the same
+// three-buffer shape (keys blob · vals blob · lengths) so a whole chunk crosses as three transferables.
+//
+// SCOPE: this is an extract-transport codec, not a general SnapshotRecord clone. `recordsToRows`
+// (resolver.ts) — the sole consumer of transferred records — reads ONLY `key` and `value`; it never
+// touches `seq`/`type`. So those two fields are deliberately NOT shipped, and `unpackRecords`
+// reconstructs them as 0. A `null` value (tombstone) is preserved distinctly from a 0-length value via
+// a sentinel length, because `decodeValue(null)` vs `decodeValue(<empty>)` differ downstream.
+export interface PackedRecords {
+  keys: ArrayBuffer; // every record key's bytes, concatenated in record order
+  vals: ArrayBuffer; // every non-null value's bytes, concatenated in record order
+  lens: Uint32Array; // [keyLen, valLen] per record; valLen === NULL_VALUE marks a null (tombstone) value
+}
+
+// Sentinel valLen meaning "value is null" — distinct from a real 0-length value. 0xffffffff is one past
+// the largest representable real length, so no genuine value can collide with it (packRecords guards).
+const NULL_VALUE = 0xffffffff;
+
+// The three buffers to hand to postMessage's transfer list (moved zero-copy, not cloned). Kept OUT of
+// PackedRecords so the posted object never both clones and transfers the same buffers.
+export function packedRecordsTransferList(p: PackedRecords): ArrayBuffer[] {
+  return [p.keys, p.vals, p.lens.buffer as ArrayBuffer];
+}
+
+// Flatten a record range into three transferable buffers. Copies each key/value's bytes once into the
+// shared blobs — the same one copy `compactRecord` would do, but into contiguous blobs that transfer as
+// three buffers instead of N per-record clones.
+export function packRecords(records: SnapshotRecord[]): PackedRecords {
+  const n = records.length;
+  const lens = new Uint32Array(n * 2);
+  let keyBytes = 0;
+  let valBytes = 0;
+  for (let i = 0; i < n; i++) {
+    const { key, value } = records[i];
+    // lens is Uint32 and NULL_VALUE is reserved — a key/value at/over 4 GiB would wrap or alias the
+    // null sentinel and desync every later record. Unreachable for real records; the codec is generic.
+    if (key.length >= NULL_VALUE || (value !== null && value.length >= NULL_VALUE))
+      throw new RangeError(`records-transfer: record ${i} field exceeds 4 GiB, not representable`);
+    lens[i * 2] = key.length;
+    lens[i * 2 + 1] = value === null ? NULL_VALUE : value.length;
+    keyBytes += key.length;
+    if (value !== null) valBytes += value.length;
+  }
+  const keys = new Uint8Array(keyBytes);
+  const vals = new Uint8Array(valBytes);
+  let kOff = 0;
+  let vOff = 0;
+  for (let i = 0; i < n; i++) {
+    const { key, value } = records[i];
+    keys.set(key, kOff);
+    kOff += key.length;
+    if (value !== null) {
+      vals.set(value, vOff);
+      vOff += value.length;
+    }
+  }
+  return { keys: keys.buffer as ArrayBuffer, vals: vals.buffer as ArrayBuffer, lens };
+}
+
+// Rebuild the record range from a packed buffer set. Keys/values are subarray VIEWS into the two blobs
+// (no per-record allocation); `seq`/`type` are reconstructed as 0 (see SCOPE above).
+export function unpackRecords(p: PackedRecords): SnapshotRecord[] {
+  if (p.lens.length % 2 !== 0) throw new RangeError('records-transfer: odd lens length');
+  const keys = new Uint8Array(p.keys);
+  const vals = new Uint8Array(p.vals);
+  const n = p.lens.length / 2;
+  const out: SnapshotRecord[] = new Array(n);
+  let kOff = 0;
+  let vOff = 0;
+  for (let i = 0; i < n; i++) {
+    const kLen = p.lens[i * 2];
+    const vLen = p.lens[i * 2 + 1];
+    const key = keys.subarray(kOff, kOff + kLen);
+    kOff += kLen;
+    let value: Uint8Array | null = null;
+    if (vLen !== NULL_VALUE) {
+      value = vals.subarray(vOff, vOff + vLen);
+      vOff += vLen;
+    }
+    out[i] = { seq: 0, type: 0, key, value };
+  }
+  // Lengths must consume both blobs EXACTLY — otherwise subarray silently clamps and hands back
+  // truncated/garbage records. Fail loud on a mismatched packed set instead.
+  if (kOff !== keys.length || vOff !== vals.length)
+    throw new RangeError(
+      `records-transfer: length mismatch (keys ${kOff}/${keys.length}, vals ${vOff}/${vals.length})`,
+    );
+  return out;
 }

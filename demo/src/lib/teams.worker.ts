@@ -8,6 +8,8 @@ import {
   openStoreFromSnapshot,
   loadSnapshotFromAsync,
   unpackTable,
+  packRecords,
+  packedRecordsTransferList,
   type SnapshotSource,
   type Snapshot,
   type TableReadResult,
@@ -155,13 +157,15 @@ const api = {
             driver,
             deferFts: true,
             onPhase,
-            runExtract: (task) =>
-              pool!.run<EntityExtract>({
-                kind: 'extract',
-                records: task.records,
-                mapping: task.mapping,
-                entity: task.entity,
-              }),
+            runExtract: (task) => {
+              // Pack the record range into 3 transferables (keys/vals/lens) so the whole chunk moves
+              // zero-copy — not one structured-clone per tiny record buffer (the extract-side transfer tax).
+              const packed = packRecords(task.records);
+              return pool!.run<EntityExtract>(
+                { kind: 'extract', packed, mapping: task.mapping, entity: task.entity },
+                packedRecordsTransferList(packed),
+              );
+            },
           });
         } catch (e) {
           console.warn('[zaungast] extract pool failed → serial extract', e);
