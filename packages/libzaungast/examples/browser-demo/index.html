@@ -32,8 +32,47 @@ C:\Users\&lt;you&gt;\AppData\Local\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Mic
     </div>
 
     <div class="controls">
-      <button id="selftest">Self-test (no data)</button>
-      <button id="pickBtn">Pick Teams cache folder…</button>
+      <button
+        id="selftest"
+        aria-label="Self-test (no data)"
+        title="Self-test — build an empty store to verify the wasm engine(s)"
+      >
+        <!-- stopwatch / timer -->
+        <svg
+          class="btn-icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M9.5 3h5" />
+          <path d="M12 3v3" />
+          <circle cx="12" cy="13.5" r="7.5" />
+          <path d="M12 13.5L15 10.5" />
+        </svg>
+      </button>
+      <button
+        id="pickBtn"
+        aria-label="Pick Teams cache folder and run"
+        title="Pick your Teams cache folder — decode, build, and query it"
+      >
+        <!-- play circle -->
+        <svg
+          class="btn-icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <circle cx="12" cy="12" r="9" />
+          <path d="M9.8 7.7L16.5 12L9.8 16.3Z" fill="currentColor" stroke="none" />
+        </svg>
+      </button>
       <!-- Hidden real input (webkitdirectory: folder pick, cross-browser); the button triggers it. -->
       <input id="pick" type="file" webkitdirectory hidden />
       <!-- Right-aligned cluster: threads stepper (left) then the parallel master toggle (right). -->
