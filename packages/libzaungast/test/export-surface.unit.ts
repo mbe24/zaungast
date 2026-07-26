@@ -68,6 +68,45 @@ test.each(['ChatStore', 'createJsEngine', 'ingest'])(
   },
 );
 
+// 2b. './web' — the turn-key BROWSER surface (runtime VALUE exports; types erase). Frozen so the barrel
+// that ballooned during the demo/POC build-out (and was trimmed back to the turn-key layer) can't
+// silently regrow — adding a value export must be a deliberate edit to this list. The mid-level codec /
+// parse / executor primitives were removed here (they live on './format'); assert a few stayed out.
+const WEB_API = [
+  'MemorySource',
+  'computeTopicRows',
+  'computeTopicsWindow',
+  'createPool',
+  'deriveTables',
+  'extractEntity',
+  'extractFromSourceParallel',
+  'fingerprint',
+  'handlePoolMessage',
+  'htmlToText',
+  'loadBundledMappings',
+  'loadSnapshotFrom',
+  'makePhraseExtractor',
+  'openStoreFromSource',
+  'openStoreFromSourceParallel',
+  'proposeSchema',
+  'sampleStoreFields',
+  'selectMapping',
+  'shapeBaseTables',
+];
+
+test("'./web' exposes exactly the turn-key browser surface", async () => {
+  const web = keys(await import('libzaungast/web'));
+  expect(web).toEqual(WEB_API);
+});
+
+test.each(['parseTable', 'packTable', 'packRecords', 'openStoreFromSnapshot', 'extractRecords'])(
+  "'./web' does NOT re-expose the internal mid-level %s",
+  async (hidden) => {
+    const web = keys(await import('libzaungast/web'));
+    expect(web).not.toContain(hidden);
+  },
+);
+
 // 3. Internal deep-imports must REJECT (not in the exports map). store.js + query.js keep ChatStore
 // and the SQL layer internal; ingest.js is the sensitive one — both ingest() and openStoreFile live
 // there, and only the latter may be reached, via engine-spi (never ingest()/applyIncremental raw).
