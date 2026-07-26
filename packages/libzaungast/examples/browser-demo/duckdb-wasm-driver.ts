@@ -5,14 +5,13 @@
 // build.mjs and resolved at runtime relative to import.meta.url (self-hosted — no CDN fetch).
 import * as duckdb from '@duckdb/duckdb-wasm';
 
-import type { Table } from 'apache-arrow';
-
 export interface DuckDbConn {
   run(sql: string): Promise<void>;
   // Rows as plain objects. DuckDB returns BigInt for integer columns (COUNT, etc.); callers coerce.
   query<T = Record<string, unknown>>(sql: string): Promise<T[]>;
-  // Bulk-load an Arrow table as a DuckDB table (schema from the Arrow schema when create is set).
-  insertArrowTable(table: Table, options: { name: string; create?: boolean }): Promise<void>;
+  // Register an in-memory virtual file (name → text) so `read_json_auto('name')` can bulk-load it. This
+  // is the arrow-free ingest path (insertArrowTable is unreliable across DuckDB-wasm targets).
+  registerFileText(name: string, text: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -45,8 +44,8 @@ export async function createDuckDb(): Promise<DuckDbConn> {
       const table = await conn.query(sql);
       return table.toArray().map((row) => row.toJSON() as T);
     },
-    async insertArrowTable(table, options) {
-      await conn.insertArrowTable(table, options);
+    async registerFileText(name, text) {
+      await db.registerFileText(name, text);
     },
     async close() {
       await conn.close();

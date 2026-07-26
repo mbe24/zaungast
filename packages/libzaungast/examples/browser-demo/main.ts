@@ -47,25 +47,24 @@ function renderResult(d: any) {
     d.driverWait != null
       ? ` · driverWait ${d.driverWait}ms${d.prewarmed ? ' (pool prewarmed)' : ''}`
       : '';
+  // engine + per-example query times stream live as `✓ <phase> Nms` lines above (both engines); the
+  // built-store line just notes which engine answered.
   const engineLine = d.engine ? ` · engine ${d.engine}` : '';
-  const duckLine = d.duckLoadMs != null ? ` · duckdb-load ${d.duckLoadMs}ms` : '';
-  // per-example query time (both engines) — the `· Nms` after each section header.
-  const qms = (k: string) => (d.queryMs?.[k] != null ? ` · ${d.queryMs[k]}ms` : '');
-  log(`✓ built store in ${d.buildMs}ms  [${d.mode}]${engineLine}${duckLine}${warmLine}\n`);
+  log(`✓ built store in ${d.buildMs}ms  [${d.mode}]${engineLine}${warmLine}\n`);
   log('meta:', fmtMeta(d.meta));
-  log(`\nconversations (${d.conversations.length} shown)${qms('conversations')}:`);
+  log(`\nconversations (${d.conversations.length} shown):`);
   for (const c of d.conversations)
     log(`  ${c.handle}  ${c.kind}  msgs=${c.msgCount}  ${c.topic ?? c.participantNames ?? ''}`);
-  log(`\npeople (total ${d.people.total})${qms('people')}:`);
+  log(`\npeople (total ${d.people.total}):`);
   for (const p of d.people.rows)
     log(`  ${p.handle}  ${p.name}${p.isBot ? ' [bot]' : ''}  msgs=${p.msgCount}`);
   log(
-    `\nsearch "the"${qms('search')}: ${d.search.ok ? `${d.search.rows.length} hits (order ${d.search.order})` : d.search.reason.reason}`,
+    `\nsearch "the": ${d.search.ok ? `${d.search.rows.length} hits (order ${d.search.order})` : d.search.reason.reason}`,
   );
   if (d.search.ok)
     for (const h of d.search.rows) log(`  [${h.senderName}] ${h.content.slice(0, 80)}`);
   log(
-    `\ntop topics (30d)${qms('topics')}: ${d.topics.ok ? d.topics.rows.map((t: any) => t.phrase ?? JSON.stringify(t)).join(', ') : d.topics.reason.reason}`,
+    `\ntop topics (30d): ${d.topics.ok ? d.topics.rows.map((t: any) => t.phrase ?? JSON.stringify(t)).join(', ') : d.topics.reason.reason}`,
   );
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -107,7 +106,12 @@ let threads = Math.min(8, MAX_THREADS);
 // Prewarm on load / whenever parallel or the thread count changes, so the warm pool matches what the next
 // build will spawn (worker.ts `warmTo` respawns if the size differs). Sends the current thread count.
 const doPrewarm = () =>
-  worker.postMessage({ kind: 'prewarm', parallel: parallelToggle.checked, threads });
+  worker.postMessage({
+    kind: 'prewarm',
+    parallel: parallelToggle.checked,
+    threads,
+    engine: engineSel.value as 'sqlite' | 'duckdb',
+  });
 const renderThreads = () => {
   threadVal.textContent = String(threads);
   const on = parallelToggle.checked;
@@ -143,6 +147,8 @@ parallelToggle.addEventListener('change', () => {
   renderThreads(); // enable/disable the stepper to match
   doPrewarm();
 });
+// Re-warm when the engine changes so DuckDB's wasm is inited during selection, not at build time.
+engineSel.addEventListener('change', doPrewarm);
 renderThreads();
 doPrewarm();
 log('ready. Run the self-test first, then pick your Teams cache folder.');

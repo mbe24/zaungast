@@ -16,11 +16,12 @@ import {
 } from 'libzaungast/web';
 import { createSqliteWasmDriver } from 'libzaungast/web/sqlite-wasm-driver';
 import { buildDuckDbStore, type DuckDbStore } from './duckdb-store.ts';
+import { createDuckDb } from './duckdb-wasm-driver.ts';
 
 type Engine = 'sqlite' | 'duckdb';
 type In =
   | { kind: 'selftest' }
-  | { kind: 'prewarm'; parallel: boolean; threads: number }
+  | { kind: 'prewarm'; parallel: boolean; threads: number; engine: Engine }
   | { kind: 'build'; files: File[]; parallel: boolean; threads: number; engine: Engine };
 type Out =
   | { type: 'progress'; msg: string }
@@ -37,6 +38,12 @@ const getDriver = () =>
   (driverPromise ??= createSqliteWasmDriver({
     locateFile: (path: string) => new URL(path, import.meta.url).href,
   }));
+
+// One DuckDB connection per worker (the engine picker's second backend). Warmed during the picker (its
+// wasm init is the slow part) so the 'duckdb-load' phase measures just the table copy. Reused across
+// builds — buildDuckDbStore uses CREATE OR REPLACE, so re-running is safe.
+let duckPromise: ReturnType<typeof createDuckDb> | null = null;
+const getDuck = () => (duckPromise ??= createDuckDb());
 
 // Pool spawn at a caller-chosen size (the UI threads stepper) over the library's createPool; the workers
 // run libzaungast/web's handlePoolMessage (see parse.worker.ts). Hoisted so a 'prewarm' message can spawn
@@ -73,9 +80,11 @@ self.onmessage = async (e: MessageEvent<In>) => {
       const t = performance.now();
       await getDriver();
       if (e.data.parallel) warmTo(e.data.threads);
+      if (e.data.engine === 'duckdb') await getDuck(); // warm DuckDB's wasm during the picker too
       console.log('[poc prewarm ms]', {
         driverInit: Math.round(performance.now() - t),
         pool: warmPool ? warmPool.size : 0,
+        duck: duckPromise ? 'warm' : 'cold',
       });
       return;
     }
@@ -141,6 +150,7 @@ self.onmessage = async (e: MessageEvent<In>) => {
     const { store, usedPool, poolSize, parseMs } = await openStoreFromSourceParallel(source, {
       driver,
       pool,
+      deferFts: engine === 'duckdb', // DuckDB search uses LIKE, not FTS5 — skip the wasted index
       onPhase,
     });
     // Report the parallel decode as a phase line aligned with serial's `✓ decode`, noting the pool.
@@ -159,20 +169,22 @@ self.onmessage = async (e: MessageEvent<In>) => {
     let duck: DuckDbStore | null = null;
     let duckLoadMs: number | null = null;
     if (engine === 'duckdb') {
-      post({ type: 'progress', msg: 'loading tables into DuckDB…' });
+      const duckConn = await getDuck(); // warmed during the picker → this is ~free
       const td = performance.now();
-      duck = await buildDuckDbStore(store);
+      duck = await buildDuckDbStore(store, duckConn);
       duckLoadMs = Math.round(performance.now() - td);
       post({ type: 'phase', phase: 'duckdb-load', ms: duckLoadMs });
     }
 
-    // Run the four example queries on the chosen engine, timing each (SQLite is sync, DuckDB async —
-    // `await fn()` measures both correctly).
+    // Run the four example queries on the chosen engine, timing each and posting a `✓ <query> Nms` phase
+    // line so both engines stream the same style (SQLite is sync, DuckDB async — `await fn()` times both).
     const queryMs: Record<string, number> = {};
     const timed = async <T>(name: string, fn: () => T | Promise<T>): Promise<T> => {
       const t0 = performance.now();
       const r = await fn();
-      queryMs[name] = Math.round(performance.now() - t0);
+      const ms = Math.round(performance.now() - t0);
+      queryMs[name] = ms;
+      post({ type: 'phase', phase: name, ms });
       return r;
     };
     const conversations = duck
@@ -187,7 +199,7 @@ self.onmessage = async (e: MessageEvent<In>) => {
     const topics = duck
       ? await timed('topics', () => duck!.topics('30d', 8))
       : await timed('topics', () => store.topics.compute({ window: '30d', n: 8 }));
-    await duck?.close();
+    // Note: the DuckDB connection is warm/reused across builds — not closed here.
 
     post({
       type: 'result',
