@@ -17,7 +17,7 @@ import { extractRecords } from '../src/format/resolver.js';
 import { packRecords, unpackRecords } from '../src/format/table-transfer.js';
 import { openStoreFromSource, openStoreFromSnapshot } from '../src/store-facade.js';
 import { MemorySource } from '../src/format/chromium/memory-source.js';
-import { createSqliteWasmDriver } from '../examples/sqlite-wasm-driver.js';
+import { createSqliteWasmDriver } from '../src/sqlite-wasm-driver.js';
 import type { StoreMeta } from '../src/ingest/store.js';
 import { generateFixture } from './fixture/generate.js';
 

@@ -30,6 +30,11 @@
       "types": "./dist/web.d.ts",
       "default": "./dist/web.js"
     },
+    "./web/sqlite-wasm-driver": {
+      "development": "./src/sqlite-wasm-driver.ts",
+      "types": "./dist/sqlite-wasm-driver.d.ts",
+      "default": "./dist/sqlite-wasm-driver.js"
+    },
     "./schema/versions/*.json": {
       "development": "./src/schema/versions/*.json",
       "default": "./dist/schema/versions/*.json"
@@ -59,6 +64,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-schema.mjs",
     "gen:schema-sql": "node scripts/gen-schema-sql.mjs"
+  },
+  "peerDependencies": {
+    "@sqlite.org/sqlite-wasm": "^3.53.0-build1"
+  },
+  "peerDependenciesMeta": {
+    "@sqlite.org/sqlite-wasm": {
+      "optional": true
+    }
   },
   "engines": {
     "node": ">=22.5.0"

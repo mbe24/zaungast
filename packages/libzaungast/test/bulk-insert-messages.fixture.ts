@@ -7,7 +7,7 @@
 import { test, expect, beforeAll } from 'vitest';
 import { ChatStore } from '../src/ingest/store.js';
 import { applyMessages, bulkInsertMessages } from '../src/ingest/ingest-core.js';
-import { createSqliteWasmDriver } from '../examples/sqlite-wasm-driver.js';
+import { createSqliteWasmDriver } from '../src/sqlite-wasm-driver.js';
 import type { SqlDriver } from '../src/ingest/sql-driver.js';
 
 let driver: SqlDriver;

@@ -66,6 +66,18 @@ export {
 // Parallel-extract seam: a consumer supplies an ExtractExecutor (e.g. a worker pool running
 // extractRecords) to openStoreFromSnapshot; the library owns the ordering/reassembly.
 export type { ExtractExecutor, ExtractTask } from './ingest/ingest-core.js';
+// Turn-key parallel cold read: `createPool` spawns a browser Web Worker pool whose workers run
+// `handlePoolMessage` (a 2-line entry), and `openStoreFromSourceParallel` drives parse+fold+extract over
+// it with a serial fallback — the same fast path both example apps use, promoted for any browser consumer.
+// (The @sqlite.org/sqlite-wasm driver is the separate `libzaungast/web/sqlite-wasm-driver` subpath.)
+export { createPool } from './pool.js';
+export { handlePoolMessage, type PoolRequest, type PoolResponse } from './pool-worker.js';
+export {
+  openStoreFromSourceParallel,
+  type Pool,
+  type ParallelBuildOptions,
+  type ParallelBuildResult,
+} from './parallel.js';
 export type { SqlDriver, SqlDatabase, SqlStatement, SqlParam } from './ingest/sql-driver.js';
 export type { StoreMeta } from './ingest/store.js';
 export type {

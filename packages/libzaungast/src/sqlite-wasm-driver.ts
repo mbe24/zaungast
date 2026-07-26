@@ -1,11 +1,12 @@
-// Reference browser SqlDriver over @sqlite.org/sqlite-wasm — the adapter that plugs the wasm SQLite
-// build into libzaungast's SqlDriver seam (src/ingest/sql-driver.ts). It is NOT part of the shipped
-// library (files:["dist"] excludes examples/) and @sqlite.org/sqlite-wasm is a devDependency only, so a
-// Node/MCP consumer never pulls wasm. A browser demo imports this alongside `libzaungast/web`, calls
-// `await createSqliteWasmDriver()` once (the only async — the WASM init), then hands the sync driver to
-// ChatStore/openStoreFromSource. Validated by test/sqlite-wasm-driver.unit.ts (drives a full ChatStore).
+// Browser SqlDriver over @sqlite.org/sqlite-wasm — the adapter that plugs the wasm SQLite build into
+// libzaungast's SqlDriver seam (./ingest/sql-driver.ts). Shipped as the OPTIONAL subpath
+// `libzaungast/web/sqlite-wasm-driver` so it isn't pulled into the main `./web` bundle: @sqlite.org/
+// sqlite-wasm is an OPTIONAL peerDependency, so a Node/MCP consumer (or a browser consumer bringing its
+// own driver) never installs wasm. A browser consumer imports this alongside `libzaungast/web`, calls
+// `await createSqliteWasmDriver({ locateFile })` once (the only async — the WASM init), then hands the
+// sync driver to openStoreFromSource/openStoreFromSourceParallel. Validated by test/sqlite-wasm-driver.unit.ts.
 import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
-import type { SqlDatabase, SqlDriver, SqlParam, SqlStatement } from '../src/ingest/sql-driver.js';
+import type { SqlDatabase, SqlDriver, SqlParam, SqlStatement } from './ingest/sql-driver.js';
 
 // The minimal oo1 shapes used here (the package's own types are broad). We reuse a compiled `Stmt`
 // across calls (bind/step/reset) instead of oo1's convenience `exec()` — `exec()` prepares AND finalizes

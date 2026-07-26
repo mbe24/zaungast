@@ -17,7 +17,7 @@ import { openStoreFromSource, type TeamsStore } from '../src/store-facade.js';
 import type { StoreMeta } from '../src/ingest/store.js';
 import type { SqlDriver } from '../src/ingest/sql-driver.js';
 import { MemorySource } from '../src/format/chromium/memory-source.js';
-import { createSqliteWasmDriver } from '../examples/sqlite-wasm-driver.js';
+import { createSqliteWasmDriver } from '../src/sqlite-wasm-driver.js';
 import { generateFixture } from './fixture/generate.js';
 
 let dir: string;
