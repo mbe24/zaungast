@@ -499,17 +499,26 @@ export async function extractFromSnapshotAsync(
   const tExtract = onPhase ? performance.now() : 0;
   const msgTargets = entityTargets(snap, mapping, 'message');
   const convTargets = entityTargets(snap, mapping, 'conversation');
-  const msgRows = (await extractPar('message', msgTargets)).records;
-  const convRows = (await extractPar('conversation', convTargets)).records;
-  const profileRows = shapeProfileRows(
-    (await extractPar('profile', entityTargets(snap, mapping, 'profile'))).records,
-  );
-  const eventRows = shapeEventRows(
-    (await extractPar('event', entityTargets(snap, mapping, 'event'))).records,
-  );
-  const callRows = shapeCallRows(
-    (await extractPar('call', entityTargets(snap, mapping, 'call'))).records,
-  );
+  // R-A: dispatch ALL five entities' chunks up front. `extractPar` dispatches its chunks synchronously
+  // (before its first await), so evaluating the five calls inside `Promise.all([...])` queues every
+  // entity's work at once — the pool never idles on one entity's straggler chunk while the next entity
+  // sits undispatched (the serial `await extractPar(...)` chain left ~N-1 workers idle per entity tail).
+  // Byte-identical: each extractPar still reassembles its own rows in dispatch order, so msgRows order —
+  // and thus voteSelfMri's tie-break — is unchanged; `Promise.all` preserves array order AND attaches a
+  // handler to every promise, so a single failure rejects here (caller's serial fallback fires) with no
+  // stray unhandled rejection.
+  const [msgE, convE, profileE, eventE, callE] = await Promise.all([
+    extractPar('message', msgTargets),
+    extractPar('conversation', convTargets),
+    extractPar('profile', entityTargets(snap, mapping, 'profile')),
+    extractPar('event', entityTargets(snap, mapping, 'event')),
+    extractPar('call', entityTargets(snap, mapping, 'call')),
+  ]);
+  const msgRows = msgE.records;
+  const convRows = convE.records;
+  const profileRows = shapeProfileRows(profileE.records);
+  const eventRows = shapeEventRows(eventE.records);
+  const callRows = shapeCallRows(callE.records);
   onPhase?.('extract', performance.now() - tExtract);
   const selfMri = voteSelfMri(msgRows);
   return {
