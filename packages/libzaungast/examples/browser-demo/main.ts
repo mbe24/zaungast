@@ -44,7 +44,11 @@ function renderResult(d: any) {
   }
   const parseLine =
     d.parseMs != null ? `, parse-pool ${d.parseMs}ms over ${d.poolSize} workers` : '';
-  log(`✓ built store in ${d.buildMs}ms  [${d.mode}${parseLine}]\n`);
+  const warmLine =
+    d.driverWait != null
+      ? ` · driverWait ${d.driverWait}ms${d.prewarmed ? ' (pool prewarmed)' : ''}`
+      : '';
+  log(`✓ built store in ${d.buildMs}ms  [${d.mode}${parseLine}]${warmLine}\n`);
   log('meta:', fmtMeta(d.meta));
   log(`\nconversations (${d.conversations.length} shown):`);
   for (const c of d.conversations)
@@ -63,6 +67,7 @@ function renderResult(d: any) {
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
+let pickT0 = 0; // set when the folder is picked; measures the full pick→result perceived latency
 worker.onmessage = (e: MessageEvent) => {
   const m = e.data;
   if (m.type === 'progress') log('› ' + m.msg);
@@ -70,7 +75,11 @@ worker.onmessage = (e: MessageEvent) => {
     status(`  decoding ${m.name} (${m.i} of ${m.n})`); // single line, updates in place
   else if (m.type === 'phase') log(`  ✓ ${m.phase} ${m.ms}ms`);
   else if (m.type === 'error') log('✗ ' + m.msg);
-  else if (m.type === 'result') renderResult(m.data);
+  else if (m.type === 'result') {
+    if (pickT0 && !m.data.selfTest)
+      log(`⏱ pick→result ${Math.round(performance.now() - pickT0)}ms`);
+    renderResult(m.data);
+  }
 };
 
 document.getElementById('selftest')!.addEventListener('click', () => {
@@ -83,10 +92,18 @@ document.getElementById('pickBtn')!.addEventListener('click', () => input.click(
 input.addEventListener('change', () => {
   if (!input.files || !input.files.length) return;
   clear();
+  pickT0 = performance.now();
   worker.postMessage({
     kind: 'build',
     files: Array.from(input.files),
     parallel: parallelToggle.checked,
   });
 });
+
+// Prewarm on load (while the user is reading the page / choosing a folder): init the wasm driver, and —
+// if the toggle is on — spawn the pool, so the build after the pick pays neither. Re-fire if the toggle
+// flips so the pool is warmed to match the mode that'll actually run.
+const doPrewarm = () => worker.postMessage({ kind: 'prewarm', parallel: parallelToggle.checked });
+parallelToggle.addEventListener('change', doPrewarm);
+doPrewarm();
 log('ready. Run the self-test first, then pick your Teams cache folder.');

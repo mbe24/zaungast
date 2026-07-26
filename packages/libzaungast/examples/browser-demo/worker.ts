@@ -22,7 +22,10 @@ import {
 import { createSqliteWasmDriver } from '../sqlite-wasm-driver.ts';
 import { createPool, type Pool } from './pool.ts';
 
-type In = { kind: 'selftest' } | { kind: 'build'; files: File[]; parallel: boolean };
+type In =
+  | { kind: 'selftest' }
+  | { kind: 'prewarm'; parallel: boolean }
+  | { kind: 'build'; files: File[]; parallel: boolean };
 type Out =
   | { type: 'progress'; msg: string }
   | { type: 'decoding'; name: string; i: number; n: number }
@@ -39,10 +42,40 @@ const getDriver = () =>
     locateFile: (path: string) => new URL(path, import.meta.url).href,
   }));
 
+// Pool sizing + spawn, hoisted so a 'prewarm' message can spawn it during the file picker and the build
+// after the pick just reuses it (same 8-cap as the wrapped app — see teams.worker.ts for rationale).
+const POOL_SIZE = Math.min((self.navigator?.hardwareConcurrency || 4) - 1, 8);
+function spawnPool(): Pool | null {
+  if (POOL_SIZE <= 1) return null;
+  try {
+    return createPool(
+      () => new Worker(new URL('./parse.worker.js', import.meta.url), { type: 'module' }),
+      POOL_SIZE,
+    );
+  } catch {
+    return null;
+  }
+}
+let warmPool: Pool | null = null; // populated by a 'prewarm' message, consumed by the next parallel build
+
 self.onmessage = async (e: MessageEvent<In>) => {
   try {
+    // Prewarm during the picker: init the wasm driver, and (if the toggle is on) spawn the pool — so the
+    // build after the pick pays neither wasm-init nor pool-spawn. Fire-and-forget from main.ts.
+    if (e.data.kind === 'prewarm') {
+      const t = performance.now();
+      await getDriver();
+      if (e.data.parallel) warmPool ??= spawnPool();
+      console.log('[poc prewarm ms]', {
+        driverInit: Math.round(performance.now() - t),
+        pool: warmPool ? warmPool.size : 0,
+      });
+      return;
+    }
     post({ type: 'progress', msg: 'initializing sqlite-wasm…' });
+    const tDriver = performance.now();
     const driver = await getDriver();
+    const driverWaitMs = performance.now() - tDriver; // ~0 when prewarm already inited it
 
     if (e.data.kind === 'selftest') {
       const store = openStoreFromSource(new MemorySource(new Map()), { driver });
@@ -87,18 +120,15 @@ self.onmessage = async (e: MessageEvent<In>) => {
     const ldbNames = [...map.keys()].filter((n) => n.endsWith('.ldb'));
     let pool: Pool | null = null;
     let poolSize = 0;
+    let prewarmed = false;
     if (parallel) {
-      const cores = self.navigator?.hardwareConcurrency || 4;
-      poolSize = Math.min(cores - 1, 8); // same cap as the wrapped app: beyond ~8, spawn tax > parallelism
-      if (poolSize > 1)
-        try {
-          pool = createPool(
-            () => new Worker(new URL('./parse.worker.js', import.meta.url), { type: 'module' }),
-            poolSize,
-          );
-        } catch {
-          pool = null;
-        }
+      prewarmed = warmPool !== null; // reuse the pool prewarm spawned during the picker
+      pool = warmPool ?? spawnPool();
+      warmPool = null;
+      poolSize = pool ? pool.size : 0;
+    } else if (warmPool) {
+      warmPool.destroy(); // speculatively prewarmed, but this build is serial — free the idle workers
+      warmPool = null;
     }
 
     const t = performance.now();
@@ -167,6 +197,8 @@ self.onmessage = async (e: MessageEvent<In>) => {
         mode: usedPool ? 'parallel' : 'serial',
         poolSize: usedPool ? poolSize : 0,
         parseMs: usedPool ? Math.round(parseMs) : null,
+        prewarmed,
+        driverWait: Math.round(driverWaitMs),
         buildMs,
         meta: store.meta,
         conversations: store.conversations.list({ n: 20 }),
