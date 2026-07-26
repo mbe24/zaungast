@@ -9,19 +9,39 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { test, expect, beforeAll, afterAll } from 'vitest';
 import { loadSnapshotFrom } from '../src/format/chromium/indexeddb.js';
 import { parseTable } from '../src/format/chromium/sstable.js';
 import { MemorySource } from '../src/format/chromium/memory-source.js';
-import { fingerprint } from '../src/format/fingerprint.js';
 import { packTable, unpackTable, packedTransferList } from '../src/format/table-transfer.js';
 import { generateFixtureWithTables } from './fixture/generate.js';
+import type { Snapshot } from '../src/format/types.js';
 import type { TableEntry, TableReadResult } from '../src/format/types.js';
 
-// A synthetic table with awkward shapes: empty value, 1-byte, multi-byte, full 0..255 byte range.
+// Hash EVERY record's exact key+value bytes across all buckets (not the schema fingerprint, which only
+// samples 5 records/bucket + field keys). This is what actually proves the fold saw byte-identical
+// entries — it catches value corruption past the 5th record, and dropped/duplicated/reordered records.
+function hashAllRecords(snap: Snapshot): string {
+  const h = createHash('sha256');
+  for (const [sk, bucket] of snap.buckets) {
+    h.update(sk);
+    h.update(String(bucket.records.length));
+    for (const r of bucket.records) {
+      h.update(new Uint8Array(r.key));
+      h.update('\0');
+      h.update(r.value === null ? '\0null' : new Uint8Array(r.value));
+      h.update('\0');
+    }
+  }
+  return h.digest('hex');
+}
+
+// A synthetic table with awkward shapes: empty value, empty KEY, 1-byte, multi-byte, full 0..255 range.
 function syntheticTable(): TableReadResult {
   const entries: TableEntry[] = [
     [new Uint8Array([1, 2, 3]), new Uint8Array(0)], // empty value
+    [new Uint8Array(0), new Uint8Array([42])], // empty key
     [new Uint8Array([0]), new Uint8Array([255])],
     [
       Uint8Array.from({ length: 256 }, (_, b) => b),
@@ -85,11 +105,12 @@ function memSourceFrom(): MemorySource {
   return new MemorySource(files);
 }
 
-test('real .ldb packed → cloned → unpacked folds to the identical fingerprint', () => {
-  // Compared by fingerprint hash — the frozen wire identity, defined over the entry BYTES. (A deep
-  // toEqual would spuriously fail here: this Node test's inline .ldb read yields Buffer entries while
-  // unpackTable yields Uint8Array — same bytes, different wrapper. In the browser both sides are
-  // Uint8Array, so the distinction can't arise there; the hash is the invariant that actually matters.)
+test('real .ldb packed → cloned → unpacked folds to identical record bytes (all records)', () => {
+  // Compared by hashing EVERY record's key+value bytes (see hashAllRecords) — a full byte-identity
+  // proof, not the schema fingerprint (which only samples 5 records/bucket and would miss value
+  // corruption past the 5th record). A deep toEqual can't be used: this Node test's inline .ldb read
+  // yields Buffer entries while unpackTable yields Uint8Array — same bytes, different wrapper; in the
+  // browser both sides are Uint8Array, so the distinction can't arise there anyway.
   const baseline = loadSnapshotFrom(memSourceFrom());
   const src = memSourceFrom();
   const ldb = src.names().filter((n) => n.endsWith('.ldb'));
@@ -101,5 +122,5 @@ test('real .ldb packed → cloned → unpacked folds to the identical fingerprin
   }
   const viaPacked = loadSnapshotFrom(src, { parsedTables: parsed });
   expect(viaPacked.buckets.size).toBe(baseline.buckets.size);
-  expect(fingerprint(viaPacked).hash).toBe(fingerprint(baseline).hash);
+  expect(hashAllRecords(viaPacked)).toBe(hashAllRecords(baseline));
 });

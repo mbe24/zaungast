@@ -35,6 +35,10 @@ export function packTable(res: TableReadResult): PackedTable {
   let valBytes = 0;
   for (let e = 0; e < n; e++) {
     const [k, v] = res.entries[e];
+    // lens is Uint32 — a >4 GiB entry would wrap mod 2^32 and desync every later entry on unpack.
+    // Unreachable for real `.ldb` tables (~MB), but the codec is generic over any TableReadResult.
+    if (k.length > 0xffffffff || v.length > 0xffffffff)
+      throw new RangeError(`table-transfer: entry ${e} exceeds 4 GiB, not representable`);
     lens[e * 2] = k.length;
     lens[e * 2 + 1] = v.length;
     keyBytes += k.length;
@@ -64,6 +68,8 @@ export function packTable(res: TableReadResult): PackedTable {
 // Rebuild the identical `TableReadResult` from a packed table. Entries are subarray views into the two
 // blobs — no per-entry allocation, byte-identical to the original `parseTable` output.
 export function unpackTable(p: PackedTable): TableReadResult {
+  // lens is [keyLen, valLen] pairs — an odd length is a malformed packed table, not a partial read.
+  if (p.lens.length % 2 !== 0) throw new RangeError('table-transfer: odd lens length');
   const keys = new Uint8Array(p.keys);
   const vals = new Uint8Array(p.vals);
   const n = p.lens.length / 2;
@@ -77,5 +83,11 @@ export function unpackTable(p: PackedTable): TableReadResult {
     kOff += kLen;
     vOff += vLen;
   }
+  // The lengths must consume the blobs EXACTLY — otherwise subarray silently clamps and hands back
+  // truncated/garbage entries. Fail loud on a mismatched packed table instead.
+  if (kOff !== keys.length || vOff !== vals.length)
+    throw new RangeError(
+      `table-transfer: length mismatch (keys ${kOff}/${keys.length}, vals ${vOff}/${vals.length})`,
+    );
   return { entries, lossy: p.lossy };
 }
