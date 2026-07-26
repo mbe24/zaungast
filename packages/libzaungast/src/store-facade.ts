@@ -8,7 +8,7 @@
 // Error contract (stated once): a FALLIBLE facade query returns `{ ok: false, reason: QueryMiss } |
 // { ok: true, … }`; an INFALLIBLE one returns its rows/value directly. Never a silent fall-through.
 import type { ChatStore, StoreMeta } from './ingest/store.js';
-import type { SqlDriver } from './ingest/sql-driver.js';
+import type { SqlDriver, SqlDatabase } from './ingest/sql-driver.js';
 import type { Snapshot, SnapshotSource } from './format/types.js';
 import { loadSnapshotFrom } from './format/chromium/indexeddb.js';
 import {
@@ -173,6 +173,10 @@ export interface StoreView {
 // counts/…). Its `lastFullAt`/`refreshMode` fields are live-refresh diagnostics — static and
 // meaningless for a one-shot `openStore`/`openStoreFromSource`.
 export interface TeamsStore extends StoreView {
+  // Escape hatch: the underlying SqlDatabase, for custom READ-ONLY SQL or exporting the built tables to
+  // another engine (the DuckDB POC copies the base tables through this). The store owns its lifetime —
+  // don't mutate or close it here.
+  readonly rawDb: SqlDatabase;
   close(): void;
   [Symbol.dispose](): void;
 }
@@ -326,6 +330,9 @@ export class StaticTeamsStore implements TeamsStore {
 
   get meta(): StoreMeta {
     return this._meta;
+  }
+  get rawDb(): SqlDatabase {
+    return this.store.db;
   }
   close(): void {
     this.store.close();

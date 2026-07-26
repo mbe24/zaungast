@@ -32,6 +32,12 @@ export {
   extractRecords,
   loadBundledMappings,
 } from './format/resolver.js';
+// Topics analytics primitives — the phrase extractor + the lift-scoring/window helpers are PURE (no
+// ChatStore/SQL): a consumer feeds them `(ts, sender_mri, content)` rows from ANY engine and gets the
+// same ranked topics as the built-in `topics.compute`. (Used by the DuckDB POC to score topics over
+// DuckDB-returned rows — proof the analytics core isn't SQLite-specific.)
+export { computeTopicRows, computeTopicsWindow } from './query.js';
+export { makeExtractor } from './util/topics.js';
 export { sampleStoreFields, type StoreFieldSample } from './format/sample.js';
 export { proposeSchema, type SchemaProposal, type ProposedStore } from './format/propose.js';
 export type * from './format/types.js';
