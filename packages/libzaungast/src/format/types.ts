@@ -26,6 +26,14 @@ export interface TableReadResult {
   lossy: boolean;
 }
 
+// Provider of a parsed `.ldb` table by filename, for the async overlapped loader
+// (`loadSnapshotFromAsync`). Returns a parsed result (sync or async — e.g. a worker pool that parsed it
+// off-thread) or `undefined` to fall back to inline read+parse at that file's canonical position.
+// Transport-agnostic: a browser Web Worker pool or a Node worker_threads pool both satisfy it.
+export type TableProvider = (
+  name: string,
+) => TableReadResult | Promise<TableReadResult> | undefined;
+
 // ---- wal.ts ----
 
 export interface WalOp {

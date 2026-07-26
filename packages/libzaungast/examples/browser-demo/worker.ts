@@ -11,7 +11,7 @@
 import {
   openStoreFromSource,
   openStoreFromSnapshot,
-  loadSnapshotFrom,
+  loadSnapshotFromAsync,
   unpackTable,
   MemorySource,
   type SnapshotSource,
@@ -117,16 +117,21 @@ self.onmessage = async (e: MessageEvent<In>) => {
               '…',
           });
           const tParse = performance.now();
-          const parsed = new Map<string, TableReadResult>();
-          await Promise.all(
-            ldbNames.map(async (n) => {
-              const packed = await pool!.run<PackedTable>({ kind: 'parse', bytes: map.get(n)! });
-              parsed.set(n, unpackTable(packed));
-              post({ type: 'decoding', name: n, i: ++i, n: dataFiles.length });
-            }),
-          );
-          parseMs = performance.now() - tParse;
-          const snap = loadSnapshotFrom(source, { parsedTables: parsed });
+          // R-B: dispatch every .ldb parse eagerly, then fold each via getTable in canonical order while
+          // the pool parses the rest — the fold overlaps the parse (byte-identical; fold order unchanged).
+          const pending = new Map<string, Promise<TableReadResult>>();
+          for (const n of ldbNames)
+            pending.set(
+              n,
+              pool!.run<PackedTable>({ kind: 'parse', bytes: map.get(n)! }).then((packed) => {
+                post({ type: 'decoding', name: n, i: ++i, n: dataFiles.length });
+                return unpackTable(packed);
+              }),
+            );
+          const snap = await loadSnapshotFromAsync(source, {
+            getTable: (name) => pending.get(name),
+          });
+          parseMs = performance.now() - tParse; // parse+fold overlap window
           store = await openStoreFromSnapshot(snap, {
             driver,
             onPhase,

@@ -19,6 +19,7 @@ import type {
   SnapshotSource,
   SsvValue,
   StoreBucket,
+  TableProvider,
   TableReadResult,
   WalBatch,
 } from '../types.js';
@@ -212,22 +213,16 @@ function collectSnapshot(map: Map<string, SnapshotRecord>, raw: number, lossy: b
 // `seqCap` (tests) ignores entries above a sequence, so the map holds OLDER versions of
 // later-rewritten chains — letting an incremental genuinely exercise edits, not just inserts.
 // `lossy` is true if any table/log failed to read fully (→ callers must not trust deletions).
-// Build the deduped `dedupKey(userKey) -> SnapshotRecord` map by scanning every .ldb table + the .log WAL.
-// Shared by loadEntries (→ flat live[]) and loadSnapshot (→ grouped buckets).
-function buildDedupMap(
-  source: SnapshotSource,
-  { includeLog = true, seqCap, parsedTables }: LoadEntriesOptions = {},
-): { map: Map<string, SnapshotRecord>; raw: number; lossy: boolean } {
-  const files = source
-    .names()
-    .filter((f) => f.endsWith('.ldb'))
-    .sort(byCodeUnit);
-  const map = new Map<string, SnapshotRecord>(); // dedupKey(userKey) -> { seq, type, key, value }
-  let raw = 0,
-    lossy = false;
-
-  // Store the incoming key/value by reference (they are private views over the read file buffers,
-  // which nobody mutates) and mutate the winning slot in place on overwrite — no per-entry copy.
+// The dedup sink: keep the highest-seq record per userKey (first-seen wins an equal-seq tie), storing
+// key/value BY REFERENCE (private views over the read buffers, never mutated), mutating the winning slot
+// in place on overwrite — no per-entry copy. Factored so the sync and async (overlapped) loaders fold
+// through byte-identical logic — the `consider` call SEQUENCE determines Map insertion order, so both
+// loaders MUST drive it in the same canonical file/entry order (.ldb byCodeUnit, entry order, WAL last).
+function makeDedupConsider(
+  map: Map<string, SnapshotRecord>,
+  seqCap?: number,
+): { consider: Consider; raw: () => number } {
+  let raw = 0;
   const consider: Consider = (userKey, value, seq, type) => {
     if (seqCap !== undefined && seq > seqCap) return;
     raw++;
@@ -241,18 +236,34 @@ function buildDedupMap(
       cur.value = value;
     }
   };
+  return { consider, raw: () => raw };
+}
 
-  if (readTablesInto(source, files, consider, undefined, parsedTables)) lossy = true;
-  if (includeLog) {
-    // Always read the WAL — a freshly-compacted or young DB can hold all its data in the
-    // .log with no .ldb tables yet; gating on files.length would ingest it as empty.
-    const logFiles = source
-      .names()
-      .filter((f) => f.endsWith('.log'))
-      .sort(byCodeUnit);
-    if (readLogsInto(source, logFiles, consider)) lossy = true;
-  }
-  return { map, raw, lossy };
+const ldbFilesOf = (source: SnapshotSource): string[] =>
+  source
+    .names()
+    .filter((f) => f.endsWith('.ldb'))
+    .sort(byCodeUnit);
+const logFilesOf = (source: SnapshotSource): string[] =>
+  source
+    .names()
+    .filter((f) => f.endsWith('.log'))
+    .sort(byCodeUnit);
+
+// Build the deduped `dedupKey(userKey) -> SnapshotRecord` map by scanning every .ldb table + the .log WAL.
+// Shared by loadEntries (→ flat live[]) and loadSnapshot (→ grouped buckets).
+function buildDedupMap(
+  source: SnapshotSource,
+  { includeLog = true, seqCap, parsedTables }: LoadEntriesOptions = {},
+): { map: Map<string, SnapshotRecord>; raw: number; lossy: boolean } {
+  const map = new Map<string, SnapshotRecord>(); // dedupKey(userKey) -> { seq, type, key, value }
+  const { consider, raw } = makeDedupConsider(map, seqCap);
+  let lossy = false;
+  if (readTablesInto(source, ldbFilesOf(source), consider, undefined, parsedTables)) lossy = true;
+  // Always read the WAL — a freshly-compacted or young DB can hold all its data in the .log with no
+  // .ldb tables yet; gating on files.length would ingest it as empty.
+  if (includeLog && readLogsInto(source, logFilesOf(source), consider)) lossy = true;
+  return { map, raw: raw(), lossy };
 }
 
 export function loadEntriesFrom(
@@ -270,6 +281,63 @@ export function loadEntriesFrom(
 export function loadSnapshotFrom(source: SnapshotSource, opts: LoadEntriesOptions = {}): Snapshot {
   const { map, raw, lossy } = buildDedupMap(source, opts);
   return collectSnapshot(map, raw, lossy);
+}
+
+// Async twin of readTablesInto for the overlapped fold (R-B): fold tables in canonical sorted order,
+// but obtain each via the async `getTable` provider (e.g. a worker pool that has dispatched all parses
+// eagerly and started working ahead) so the fold of file i overlaps the parse of files i+1..n. We AWAIT
+// each file IN ORDER, so `consider` is called in exactly the sync sequence → byte-identical Snapshot,
+// regardless of the pool's completion order. A provider MISS (undefined) or REJECTION (infra failure)
+// falls back to inline read+parse at that same position — identical skip+lossy semantics to readTablesInto.
+// NOTE: the coordinator must keep the raw bytes readable (do NOT transfer .ldb buffers INTO the workers)
+// or this fallback reads a detached buffer; on a wholesale provider failure the caller should serial-fall-back.
+async function readTablesIntoAsync(
+  source: SnapshotSource,
+  files: string[],
+  consider: Consider,
+  getTable: TableProvider,
+): Promise<boolean> {
+  let lossy = false;
+  for (const f of files) {
+    let res: TableReadResult | undefined;
+    try {
+      res = await getTable(f);
+    } catch {
+      res = undefined; // provider failed for this file → inline fallback below
+    }
+    if (!res) {
+      try {
+        res = parseTable(source.read(f));
+      } catch (e) {
+        console.error(`skip ${f}: ${(e as Error).message}`);
+        lossy = true;
+        continue;
+      }
+    }
+    if (res.lossy) lossy = true;
+    if (foldTable(res, consider)) lossy = true;
+  }
+  return lossy;
+}
+
+// Async, overlap-friendly sibling of loadSnapshotFrom. Byte-identical to it (same canonical fold order);
+// the only difference is that `.ldb` tables are pulled through `getTable` so the caller can parse them
+// off-thread ahead of the fold. Engine-agnostic: `getTable` is a plain function/Promise — a browser Web
+// Worker pool OR a Node worker_threads pool supplies it identically. The sync `loadSnapshotFrom` is left
+// untouched (it stays the TS byte-differential oracle for the native engine). With no `getTable`, this is
+// just loadSnapshotFrom over an async shell (every file falls back to inline parse).
+export async function loadSnapshotFromAsync(
+  source: SnapshotSource,
+  opts: LoadEntriesOptions & { getTable?: TableProvider } = {},
+): Promise<Snapshot> {
+  const { includeLog = true, seqCap, getTable } = opts;
+  const map = new Map<string, SnapshotRecord>();
+  const { consider, raw } = makeDedupConsider(map, seqCap);
+  let lossy = false;
+  const provider: TableProvider = getTable ?? (() => undefined);
+  if (await readTablesIntoAsync(source, ldbFilesOf(source), consider, provider)) lossy = true;
+  if (includeLog && readLogsInto(source, logFilesOf(source), consider)) lossy = true;
+  return collectSnapshot(map, raw(), lossy);
 }
 
 // COPY-REUSE loader (stage 2). `.ldb` files are immutable once named, so their parsed entries

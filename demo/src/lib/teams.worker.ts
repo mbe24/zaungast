@@ -6,7 +6,7 @@ import * as Comlink from 'comlink';
 import {
   openStoreFromSource,
   openStoreFromSnapshot,
-  loadSnapshotFrom,
+  loadSnapshotFromAsync,
   unpackTable,
   type SnapshotSource,
   type Snapshot,
@@ -102,16 +102,22 @@ const api = {
       if (pool) {
         try {
           const tParse = performance.now();
-          const parsed = new Map<string, TableReadResult>();
-          await Promise.all(
-            ldbNames.map(async (n) => {
-              const packed = await pool!.run<PackedTable>({ kind: 'parse', bytes: map.get(n)! });
-              parsed.set(n, unpackTable(packed));
-              onProgress?.({ type: 'decoding', name: n, i: ++i, n: dataFiles.length });
-            }),
-          );
-          parseMs = performance.now() - tParse;
-          snap = loadSnapshotFrom(source, { parsedTables: parsed });
+          // R-B: dispatch every `.ldb` parse eagerly, then let loadSnapshotFromAsync pull each via
+          // getTable in canonical order and fold it WHILE the pool parses the rest — the fold overlaps
+          // the parse instead of running after it. Byte-identical (the fold still consumes files in
+          // sorted order; only wall-clock interleaving changes). getTable returns undefined for a name
+          // never dispatched → inline parse fallback at that position (see readTablesIntoAsync).
+          const pending = new Map<string, Promise<TableReadResult>>();
+          for (const n of ldbNames)
+            pending.set(
+              n,
+              pool!.run<PackedTable>({ kind: 'parse', bytes: map.get(n)! }).then((packed) => {
+                onProgress?.({ type: 'decoding', name: n, i: ++i, n: dataFiles.length });
+                return unpackTable(packed);
+              }),
+            );
+          snap = await loadSnapshotFromAsync(source, { getTable: (name) => pending.get(name) });
+          parseMs = performance.now() - tParse; // now the parse+fold overlap window
           usedPool = true;
         } catch (e) {
           console.warn('[zaungast] parse pool failed → serial fallback', e);
