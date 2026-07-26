@@ -65,37 +65,42 @@ pre {
   opacity: 0.4;
   pointer-events: none;
 }
+/* One stadium pill (fully rounded), no internal dividers — the iOS UIStepper look: bold −/value/+. */
 .stepper .seg {
   display: inline-flex;
-  align-items: stretch;
-  border: 1px solid #c8c8c8;
-  border-radius: 8px;
-  overflow: hidden;
+  align-items: center;
+  border: 1.5px solid #c6c6c8;
+  border-radius: 999px;
   background: #fff;
+  overflow: hidden;
 }
 .stepper .step-btn {
   font: inherit;
-  font-size: 15px;
+  font-size: 19px;
+  font-weight: 600;
   line-height: 1;
   margin: 0;
-  padding: 0.25rem 0.6rem;
+  padding: 0.15rem 0.85rem;
   border: none;
   background: transparent;
-  color: #0a84ff;
+  color: #1c1c1e; /* dark neutral glyphs, matching the reference (not tinted blue) */
   cursor: pointer;
+  transition: background 0.12s ease;
+}
+.stepper .step-btn:active {
+  background: #ececef; /* iOS-style press feedback */
 }
 .stepper .step-btn:disabled {
-  color: #c8c8c8;
+  color: #c6c6c8;
   cursor: default;
-}
-.stepper .step-btn + .step-val,
-.stepper .step-val + .step-btn {
-  border-left: 1px solid #c8c8c8;
+  background: transparent;
 }
 .stepper .step-val {
-  min-width: 2ch;
-  padding: 0.25rem 0.4rem;
+  min-width: 1.5ch;
+  padding: 0.15rem 0.1rem;
   text-align: center;
+  font-size: 14px;
+  color: #1c1c1e;
   font-variant-numeric: tabular-nums;
 }
 /* iOS-style toggle switch (a checkbox visually replaced by a sliding track + knob). */
