@@ -17,7 +17,9 @@ rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
 
 await esbuild.build({
-  entryPoints: [`${here}main.ts`, `${here}worker.ts`],
+  // parse.worker.ts is a nested worker (the coordinator worker.ts spawns a pool of them for parallel
+  // mode) — a separate entry so esbuild emits parse.worker.js that `new Worker(new URL(...))` can load.
+  entryPoints: [`${here}main.ts`, `${here}worker.ts`, `${here}parse.worker.ts`],
   bundle: true,
   format: 'esm',
   platform: 'browser',

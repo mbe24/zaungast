@@ -10,7 +10,8 @@ const paint = () => {
   out.textContent = committed + (live !== null ? live + '\n' : '');
 };
 const log = (...xs: unknown[]) => {
-  committed += xs.map((x) => (typeof x === 'string' ? x : JSON.stringify(x, null, 2))).join(' ') + '\n';
+  committed +=
+    xs.map((x) => (typeof x === 'string' ? x : JSON.stringify(x, null, 2))).join(' ') + '\n';
   live = null;
   paint();
 };
@@ -41,7 +42,9 @@ function renderResult(d: any) {
     log('  (empty source → schemaMatched:', d.meta.schemaMatched, ')');
     return;
   }
-  log(`✓ built store in ${d.buildMs}ms\n`);
+  const parseLine =
+    d.parseMs != null ? `, parse-pool ${d.parseMs}ms over ${d.poolSize} workers` : '';
+  log(`✓ built store in ${d.buildMs}ms  [${d.mode}${parseLine}]\n`);
   log('meta:', fmtMeta(d.meta));
   log(`\nconversations (${d.conversations.length} shown):`);
   for (const c of d.conversations)
@@ -49,16 +52,22 @@ function renderResult(d: any) {
   log(`\npeople (total ${d.people.total}):`);
   for (const p of d.people.rows)
     log(`  ${p.handle}  ${p.name}${p.isBot ? ' [bot]' : ''}  msgs=${p.msgCount}`);
-  log(`\nsearch "the": ${d.search.ok ? `${d.search.rows.length} hits (order ${d.search.order})` : d.search.reason.reason}`);
-  if (d.search.ok) for (const h of d.search.rows) log(`  [${h.senderName}] ${h.content.slice(0, 80)}`);
-  log(`\ntop topics (30d): ${d.topics.ok ? d.topics.rows.map((t: any) => t.phrase ?? JSON.stringify(t)).join(', ') : d.topics.reason.reason}`);
+  log(
+    `\nsearch "the": ${d.search.ok ? `${d.search.rows.length} hits (order ${d.search.order})` : d.search.reason.reason}`,
+  );
+  if (d.search.ok)
+    for (const h of d.search.rows) log(`  [${h.senderName}] ${h.content.slice(0, 80)}`);
+  log(
+    `\ntop topics (30d): ${d.topics.ok ? d.topics.rows.map((t: any) => t.phrase ?? JSON.stringify(t)).join(', ') : d.topics.reason.reason}`,
+  );
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
 worker.onmessage = (e: MessageEvent) => {
   const m = e.data;
   if (m.type === 'progress') log('› ' + m.msg);
-  else if (m.type === 'decoding') status(`  decoding ${m.name} (${m.i} of ${m.n})`); // single line, updates in place
+  else if (m.type === 'decoding')
+    status(`  decoding ${m.name} (${m.i} of ${m.n})`); // single line, updates in place
   else if (m.type === 'phase') log(`  ✓ ${m.phase} ${m.ms}ms`);
   else if (m.type === 'error') log('✗ ' + m.msg);
   else if (m.type === 'result') renderResult(m.data);
@@ -69,10 +78,15 @@ document.getElementById('selftest')!.addEventListener('click', () => {
   worker.postMessage({ kind: 'selftest' });
 });
 const input = document.getElementById('pick') as HTMLInputElement;
+const parallelToggle = document.getElementById('parallel') as HTMLInputElement;
 document.getElementById('pickBtn')!.addEventListener('click', () => input.click());
 input.addEventListener('change', () => {
   if (!input.files || !input.files.length) return;
   clear();
-  worker.postMessage({ kind: 'build', files: Array.from(input.files) });
+  worker.postMessage({
+    kind: 'build',
+    files: Array.from(input.files),
+    parallel: parallelToggle.checked,
+  });
 });
 log('ready. Run the self-test first, then pick your Teams cache folder.');

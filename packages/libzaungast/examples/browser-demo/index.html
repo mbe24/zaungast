@@ -7,7 +7,9 @@
     <title>libzaungast/web POC</title>
     <style>
       body {
-        font: 14px/1.5 system-ui, sans-serif;
+        font:
+          14px/1.5 system-ui,
+          sans-serif;
         margin: 2rem;
         max-width: 900px;
       }
@@ -34,27 +36,49 @@
         margin: 0.4rem 0;
         word-break: break-all;
       }
+      .controls {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+      /* Push the mode toggle to the right edge of the controls row. */
+      .mode {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        font-size: 13px;
+        color: #444;
+        user-select: none;
+      }
+      .mode input {
+        width: 1.05rem;
+        height: 1.05rem;
+        cursor: pointer;
+      }
     </style>
   </head>
   <body>
     <h1>libzaungast/web — browser integration POC</h1>
     <p class="note">
-      Everything runs locally in your browser (in a Web Worker); nothing is uploaded — pick a copy of
-      the folder if Teams is running.
+      Everything runs locally in your browser (in a Web Worker); nothing is uploaded — pick a copy
+      of the folder if Teams is running.
     </p>
     <div class="note">
       <p>
         Pick the folder ending in <code>.indexeddb.leveldb</code> (the one holding
-        <code>CURRENT</code>, <code>MANIFEST-*</code>, <code>*.ldb</code>/<code>*.log</code>) — not its
-        parent <code>IndexedDB</code> folder:
+        <code>CURRENT</code>, <code>MANIFEST-*</code>, <code>*.ldb</code>/<code>*.log</code>) — not
+        its parent <code>IndexedDB</code> folder:
       </p>
       <p><strong>Windows</strong></p>
-      <pre class="path">C:\Users\&lt;you&gt;\AppData\Local\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\EBWebView\&lt;profile&gt;\IndexedDB\https_teams.microsoft.com_0.indexeddb.leveldb</pre>
+      <pre class="path">
+C:\Users\&lt;you&gt;\AppData\Local\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\EBWebView\&lt;profile&gt;\IndexedDB\https_teams.microsoft.com_0.indexeddb.leveldb</pre>
       <p><strong>macOS</strong></p>
-      <pre class="path">/Users/&lt;you&gt;/Library/Containers/com.microsoft.teams2/Data/Library/Application Support/Microsoft/MSTeams/EBWebView/&lt;profile&gt;/IndexedDB/https_teams.microsoft.com_0.indexeddb.leveldb</pre>
+      <pre class="path">
+/Users/&lt;you&gt;/Library/Containers/com.microsoft.teams2/Data/Library/Application Support/Microsoft/MSTeams/EBWebView/&lt;profile&gt;/IndexedDB/https_teams.microsoft.com_0.indexeddb.leveldb</pre>
       <p>
-        <code>&lt;you&gt;</code> is your account username; <code>&lt;profile&gt;</code> is your Teams
-        profile folder (usually <code>WV2Profile_tfw</code>).
+        <code>&lt;you&gt;</code> is your account username; <code>&lt;profile&gt;</code> is your
+        Teams profile folder (usually <code>WV2Profile_tfw</code>).
       </p>
     </div>
 
@@ -63,6 +87,11 @@
       <button id="pickBtn">Pick Teams cache folder…</button>
       <!-- Hidden real input (webkitdirectory: folder pick, cross-browser); the button triggers it. -->
       <input id="pick" type="file" webkitdirectory hidden />
+      <!-- Right-aligned build-mode toggle: checked = parallel worker pool, unchecked = serial. -->
+      <label class="mode" title="Parse .ldb + run extract across a Web Worker pool">
+        <input id="parallel" type="checkbox" checked />
+        parallel
+      </label>
     </div>
 
     <pre id="out"></pre>
