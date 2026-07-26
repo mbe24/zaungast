@@ -33,12 +33,45 @@ let driverPromise: ReturnType<typeof createSqliteWasmDriver> | null = null;
 const getDriver = () =>
   (driverPromise ??= createSqliteWasmDriver({ locateFile: () => sqlite3Url }));
 
+// Worker-pool sizing + spawn, hoisted so prewarm() can spawn it (each worker loading the libzaungast
+// bundle) DURING the file picker and build() just reuses it — no wasm-init / pool-spawn after the pick.
+// CAP at 8: a naive `cores-1` (27 on a 28-core box) pays 27x module-init before any work; decode
+// (~26 .ldb) + extract (a few 4000-record chunks) saturate well under it.
+const POOL_SIZE = Math.min((self.navigator?.hardwareConcurrency || 4) - 1, 8);
+function spawnPool(): Pool | null {
+  if (POOL_SIZE <= 1) return null;
+  try {
+    return createPool(
+      () => new Worker(new URL('./parse.worker.ts', import.meta.url), { type: 'module' }),
+      POOL_SIZE,
+    );
+  } catch {
+    return null;
+  }
+}
+let warmPool: Pool | null = null; // populated by prewarm(), consumed by the next build()
+
 const isData = (n: string) => n.endsWith('.ldb') || n.endsWith('.log');
 
 const api = {
+  // Prewarm during the file picker: init the wasm SQLite driver AND spawn the parse/extract pool (each
+  // worker loads the libzaungast bundle) WHILE the user is still choosing a folder — so build() pays
+  // neither after the pick. Idempotent; fire-and-forget — a failure just lets build() do it lazily.
+  async prewarm(): Promise<void> {
+    const t = performance.now();
+    await getDriver();
+    warmPool ??= spawnPool();
+    console.log('[zaungast prewarm ms]', {
+      driverInit: Math.round(performance.now() - t),
+      pool: warmPool ? warmPool.size : 0,
+    });
+  },
+
   // Build the store from a picked leveldb folder. Reports progress via the (optional) proxied callback.
   async build(files: File[], onProgress?: (p: Progress) => void): Promise<StoreMeta> {
+    const tDriver = performance.now();
     const driver = await getDriver();
+    const driverWaitMs = performance.now() - tDriver; // ~0 when prewarm() already inited it
     onProgress?.({ type: 'reading', total: files.length });
     // Read every file's bytes CONCURRENTLY (File.arrayBuffer() is async I/O). The serial
     // `await` loop this replaces read one file at a time; Promise.all overlaps the disk reads.
@@ -73,26 +106,11 @@ const api = {
     // it. Falls back to the serial path if a pool can't be created (e.g. nested workers unsupported) or
     // any parse fails — the coordinator keeps the raw bytes, so the fallback is always safe.
     const ldbNames = [...map.keys()].filter((n) => n.endsWith('.ldb'));
-    let pool: Pool | null = null;
-    let poolSize = 0; // hoisted so the timings log can report it after the pool is destroyed
-    try {
-      const cores = self.navigator?.hardwareConcurrency || 4;
-      // CAP the pool: each worker loads the whole libzaungast bundle on spawn, so a naive `cores-1`
-      // (27 on a 28-core box) pays 27x module-init + spawn BEFORE any work — overhead that dwarfs
-      // the marginal parallelism. Decode (~26 .ldb) and extract (a handful of 4000-record chunks)
-      // both saturate well under this cap, so the extra workers were pure spawn tax.
-      const MAX_POOL = 8;
-      poolSize = Math.min(cores - 1, MAX_POOL);
-      // Size by cores, NOT by .ldb count: parse uses at most one worker per .ldb, but EXTRACT chunks
-      // scale to the whole pool — so a fully-compacted single-.ldb store still parallelizes extract.
-      if (poolSize > 1)
-        pool = createPool(
-          () => new Worker(new URL('./parse.worker.ts', import.meta.url), { type: 'module' }),
-          poolSize,
-        );
-    } catch {
-      pool = null;
-    }
+    // Reuse the pool prewarm() spawned during the picker; otherwise spawn it now (spawnPool caps size).
+    const prewarmed = warmPool !== null;
+    let pool: Pool | null = warmPool ?? spawnPool();
+    warmPool = null;
+    const poolSize = pool ? pool.size : 0; // captured before the finally destroys the pool
 
     const tBuild = performance.now();
     let parseMs = 0;
@@ -170,6 +188,8 @@ const api = {
       files: files.length,
       ldb: ldbNames.length,
       pool: usedPool ? poolSize : 0,
+      prewarmed,
+      driverWait: Math.round(driverWaitMs),
       cores: self.navigator?.hardwareConcurrency ?? 0,
     });
     return store.meta;

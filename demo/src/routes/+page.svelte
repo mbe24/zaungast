@@ -3,9 +3,10 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
+	import { onMount } from 'svelte';
 	import Chart from '$lib/components/Chart.svelte';
 	import * as Plot from '@observablehq/plot';
-	import { app, build } from '$lib/app.svelte';
+	import { app, build, prewarm } from '$lib/app.svelte';
 	import { PALETTE } from '$lib/palette';
 	import { nf, fmtDate, fmtDateTime } from '$lib/format';
 	import { plotStyle, type PlotOptions } from '$lib/plot';
@@ -13,6 +14,13 @@
 	let fileInput = $state<HTMLInputElement>();
 	// Shared across pages (see $lib/app.svelte); aliased so the template + charts below read as before.
 	const phase = $derived(app.phase);
+
+	// Prewarm the data worker (wasm init + pool spawn) as soon as the picker screen loads — while the
+	// user is choosing a folder — so build() doesn't pay that latency after the pick. Only on a fresh
+	// landing (idle); no point re-spawning workers if a build already happened.
+	onMount(() => {
+		if (app.phase === 'idle') prewarm();
+	});
 	const progress = $derived(app.progress);
 	const error = $derived(app.error);
 	const data = $derived(app.data);
