@@ -106,9 +106,13 @@ self.onmessage = async (e: MessageEvent<In>) => {
     try {
       if (pool) {
         try {
+          const logCount = dataFiles.length - ldbNames.length; // the .log WAL(s) folded in after
           post({
             type: 'progress',
-            msg: `parsing ${ldbNames.length} .ldb across ${poolSize} workers…`,
+            msg:
+              `parsing ${ldbNames.length} .ldb across ${poolSize} workers` +
+              (logCount ? ` (+${logCount} .log WAL folded after)` : '') +
+              '…',
           });
           const tParse = performance.now();
           const parsed = new Map<string, TableReadResult>();
