@@ -63,15 +63,9 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-schema.mjs",
-    "gen:schema-sql": "node scripts/gen-schema-sql.mjs"
-  },
-  "peerDependencies": {
-    "@sqlite.org/sqlite-wasm": "^3.53.0-build1"
-  },
-  "peerDependenciesMeta": {
-    "@sqlite.org/sqlite-wasm": {
-      "optional": true
-    }
+    "gen:schema-sql": "node scripts/gen-schema-sql.mjs",
+    "prepack": "node scripts/prepack.mjs",
+    "postpack": "node scripts/postpack.mjs"
   },
   "engines": {
     "node": ">=22.5.0"

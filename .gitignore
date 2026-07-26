@@ -11,3 +11,6 @@ plan/
 profiling/
 # zaungast's package README is copied from the root README at publish time (release.yml), not committed
 packages/zaungast/README.md
+
+# libzaungast prepack backup (restored by postpack; ignored in case a pack aborts)
+packages/libzaungast/package.json.prepack-bak
