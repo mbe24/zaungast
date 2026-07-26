@@ -8,11 +8,16 @@ import esbuild from 'esbuild';
 import { copyFileSync, mkdirSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 
 const require = createRequire(import.meta.url);
 const here = fileURLToPath(new URL('.', import.meta.url));
 const dist = `${here}dist`;
+// Typecheck first — esbuild only transpiles (no type errors), so without this a missing method or bad
+// shape ships silently into the browser. tsconfig.json uses DOM libs + bundler resolution for these files.
+console.log('› typechecking (tsc -p tsconfig.json)…');
+execFileSync('npx', ['tsc', '-p', `${here}tsconfig.json`], { stdio: 'inherit', shell: true });
 // Resolve the wasm via the package's exports map (location-independent, hoisting-independent).
 const wasm = require.resolve('@sqlite.org/sqlite-wasm/sqlite3.wasm');
 // DuckDB-Wasm self-hosted assets (the engine picker's second backend): the wasm modules + their workers

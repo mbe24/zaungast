@@ -1,0 +1,16 @@
+{
+  // Typecheck-only config for the POC (esbuild does the actual build). Catches missing methods / bad
+  // shapes that the esbuild-transpile path silently accepts. Browser libs (DOM + WebWorker globals via
+  // the `self as Worker` casts); bundler resolution for the `./x.ts` imports + the libzaungast/web exports.
+  "extends": "../../../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": [],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true
+  },
+  "include": ["*.ts"],
+  "exclude": ["dist", "build.mjs"]
+}
