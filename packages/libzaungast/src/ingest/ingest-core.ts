@@ -15,6 +15,8 @@ import type {
 } from '../format/types.js';
 import { ChatStore, type StoreMeta, type MessageInsert } from './store.js';
 import type { SqlDriver } from './sql-driver.js';
+import { HandleAllocator } from '../util/handles.js';
+import { byCodeUnit } from '../util/sort.js';
 import {
   htmlToText,
   isSystemMessage,
@@ -455,6 +457,169 @@ export function shapeBaseTables(ex: FullExtract): BaseTables {
     lossy: ex.lossy,
     maxSeq: ex.maxSeq,
   };
+}
+
+// The derived tables: one people row per non-system sender + the conversations' derived columns. This is
+// the ENGINE-AGNOSTIC, pure-JS equivalent of ChatStore.recomputeDerived (which is SQLite SQL) — a new
+// backend (DuckDB, …) calls this instead of porting the recompute SQL to its dialect. The SQLite path
+// NEVER calls it; a CI parity test pins deriveTables ≡ the SQL recompute over the same BaseTables (incl.
+// handles). It must replicate recompute's semantics EXACTLY, most subtly the handle-allocation ORDER:
+// conv-meta ids (in apply order) → missing-conversation ids (by id asc) → people mris (by mri asc).
+export interface DerivedPerson {
+  mri: string;
+  handle: string;
+  name: string;
+  msgCount: number;
+  lastTs: number;
+}
+export interface DerivedConversation {
+  id: string;
+  handle: string;
+  kind: string;
+  topic: string | null;
+  teamId: string | null;
+  threadType: string | null;
+  metaLastTs: number;
+  msgCount: number;
+  activityTs: number;
+  participantCount: number;
+  lastTs: number;
+  participantNames: string | null;
+}
+export interface DerivedTables {
+  people: DerivedPerson[];
+  conversations: DerivedConversation[];
+}
+export function deriveTables(base: BaseTables): DerivedTables {
+  const handles = new HandleAllocator();
+  const self = base.selfMri ?? '';
+  const msgs = base.messages;
+
+  // 1. Conversation meta (mirrors apply's upsertConversationMeta): handle allocated at FIRST occurrence,
+  // meta fields overwritten by the LAST occurrence (ON CONFLICT DO UPDATE), in convRows order.
+  type ConvAcc = DerivedConversation;
+  const conv = new Map<string, ConvAcc>();
+  for (const c of base.conversations) {
+    const cur = conv.get(c.id);
+    if (cur) {
+      cur.kind = c.kind;
+      cur.topic = c.topic;
+      cur.teamId = c.teamId;
+      cur.threadType = c.threadType;
+      cur.metaLastTs = c.metaLastTs;
+    } else {
+      conv.set(c.id, {
+        id: c.id,
+        handle: handles.handleFor('c', c.id),
+        kind: c.kind,
+        topic: c.topic,
+        teamId: c.teamId,
+        threadType: c.threadType,
+        metaLastTs: c.metaLastTs,
+        msgCount: 0,
+        activityTs: 0,
+        participantCount: 0,
+        lastTs: 0,
+        participantNames: null,
+      });
+    }
+  }
+
+  // 2a. Missing conversations: any conv_id present in messages but not in meta — by id asc (recompute's
+  // `order by conv_id`). kind = convKind(id) (== the SQL's min(kind), since every message's kind is that).
+  const missing = new Set<string>();
+  for (const m of msgs) if (m.convId && !conv.has(m.convId)) missing.add(m.convId);
+  for (const id of [...missing].sort(byCodeUnit))
+    conv.set(id, {
+      id,
+      handle: handles.handleFor('c', id),
+      kind: convKind(id),
+      topic: null,
+      teamId: null,
+      threadType: null,
+      metaLastTs: 0,
+      msgCount: 0,
+      activityTs: 0,
+      participantCount: 0,
+      lastTs: 0,
+      participantNames: null,
+    });
+
+  // 2b. People: non-system messages grouped by sender_mri; count, max(ts); name = the most-recent
+  // (ts desc, id desc) sender_name. mri asc for handle allocation (after all conversation handles).
+  interface PAcc {
+    count: number;
+    last: number;
+    nameTs: number;
+    nameId: string;
+    name: string;
+  }
+  const pstat = new Map<string, PAcc>();
+  for (const m of msgs) {
+    if (m.isSystem) continue;
+    const mri = m.senderMri;
+    let p = pstat.get(mri);
+    if (!p) {
+      p = { count: 0, last: 0, nameTs: -1, nameId: '', name: '' };
+      pstat.set(mri, p);
+    }
+    p.count++;
+    if (m.ts > p.last) p.last = m.ts;
+    if (m.ts > p.nameTs || (m.ts === p.nameTs && m.id > p.nameId)) {
+      p.nameTs = m.ts;
+      p.nameId = m.id;
+      p.name = m.senderName;
+    }
+  }
+  const people: DerivedPerson[] = [];
+  const nameByMri = new Map<string, string>();
+  for (const mri of [...pstat.keys()].sort(byCodeUnit)) {
+    const p = pstat.get(mri)!;
+    people.push({
+      mri,
+      handle: handles.handleFor('p', mri),
+      name: p.name,
+      msgCount: p.count,
+      lastTs: p.last,
+    });
+    nameByMri.set(mri, p.name);
+  }
+
+  // 2c/2d. Per-conversation aggregates over non-system messages: msg_count, activity_ts (max), the
+  // distinct participant set (mri → its max ts, for participant_count + the top-5 name list).
+  const agg = new Map<string, { count: number; activity: number; parts: Map<string, number> }>();
+  for (const m of msgs) {
+    if (m.isSystem) continue;
+    let a = agg.get(m.convId);
+    if (!a) {
+      a = { count: 0, activity: 0, parts: new Map() };
+      agg.set(m.convId, a);
+    }
+    a.count++;
+    if (m.ts > a.activity) a.activity = m.ts;
+    const prev = a.parts.get(m.senderMri);
+    if (prev === undefined || m.ts > prev) a.parts.set(m.senderMri, m.ts);
+  }
+  const conversations: DerivedConversation[] = [];
+  for (const c of conv.values()) {
+    const a = agg.get(c.id);
+    c.msgCount = a?.count ?? 0;
+    c.activityTs = a?.activity ?? 0;
+    c.participantCount = a?.parts.size ?? 0;
+    c.lastTs = Math.max(c.metaLastTs || 0, c.activityTs || 0);
+    // participant_names: top-5 by (max ts desc, mri asc), excluding self + empty-named, joined ', '.
+    if (a) {
+      const top = [...a.parts.entries()]
+        .filter(([mri]) => mri !== self)
+        .map(([mri, ts]) => ({ mri, ts, name: nameByMri.get(mri) ?? '' }))
+        .filter((x) => x.name !== '')
+        .sort((x, y) => y.ts - x.ts || byCodeUnit(x.mri, y.mri))
+        .slice(0, 5);
+      c.participantNames = top.length ? top.map((x) => x.name).join(', ') : null;
+    }
+    conversations.push(c);
+  }
+  return { people, conversations };
 }
 
 // Opt-in profiling hook (dev only — see scripts/profile.mjs). Fires once per store-build phase with

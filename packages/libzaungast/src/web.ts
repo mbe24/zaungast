@@ -72,6 +72,18 @@ export {
 // Parallel-extract seam: a consumer supplies an ExtractExecutor (e.g. a worker pool running
 // extractRecords) to openStoreFromSnapshot; the library owns the ordering/reassembly.
 export type { ExtractExecutor, ExtractTask } from './ingest/ingest-core.js';
+// Engine-agnostic store-build seam: shape the raw extract into base tables (shared by any DB backend),
+// and derive the people + conversation aggregates in pure JS (the dialect-free equivalent of the SQLite
+// recompute). A non-SQLite backend consumes these to build an independent, data-matching store.
+export {
+  shapeBaseTables,
+  deriveTables,
+  type BaseTables,
+  type ConvMetaRow,
+  type DerivedTables,
+  type DerivedPerson,
+  type DerivedConversation,
+} from './ingest/ingest-core.js';
 // Turn-key parallel cold read: `createPool` spawns a browser Web Worker pool whose workers run
 // `handlePoolMessage` (a 2-line entry), and `openStoreFromSourceParallel` drives parse+fold+extract over
 // it with a serial fallback — the same fast path both example apps use, promoted for any browser consumer.
