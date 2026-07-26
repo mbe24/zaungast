@@ -87,6 +87,38 @@ document.getElementById('selftest')!.addEventListener('click', () => {
 });
 const input = document.getElementById('pick') as HTMLInputElement;
 const parallelToggle = document.getElementById('parallel') as HTMLInputElement;
+
+// Threads stepper: worker-pool size for parallel mode, 2 … min(10, cores), default 8. (10 not 8 so the
+// degradation past the sweet spot is visible.) Disabled when parallel is off.
+const stepper = document.getElementById('threads-stepper')!;
+const threadVal = document.getElementById('thread-val')!;
+const decBtn = document.getElementById('thread-dec') as HTMLButtonElement;
+const incBtn = document.getElementById('thread-inc') as HTMLButtonElement;
+const MIN_THREADS = 2;
+const MAX_THREADS = Math.max(MIN_THREADS, Math.min(10, navigator.hardwareConcurrency || 4));
+let threads = Math.min(8, MAX_THREADS);
+
+// Prewarm on load / whenever parallel or the thread count changes, so the warm pool matches what the next
+// build will spawn (worker.ts `warmTo` respawns if the size differs). Sends the current thread count.
+const doPrewarm = () =>
+  worker.postMessage({ kind: 'prewarm', parallel: parallelToggle.checked, threads });
+const renderThreads = () => {
+  threadVal.textContent = String(threads);
+  const on = parallelToggle.checked;
+  stepper.classList.toggle('disabled', !on);
+  decBtn.disabled = !on || threads <= MIN_THREADS;
+  incBtn.disabled = !on || threads >= MAX_THREADS;
+};
+const stepThreads = (delta: number) => {
+  const next = Math.min(MAX_THREADS, Math.max(MIN_THREADS, threads + delta));
+  if (next === threads) return;
+  threads = next;
+  renderThreads();
+  doPrewarm(); // re-warm the pool to the new size while the user is still choosing a folder
+};
+decBtn.addEventListener('click', () => stepThreads(-1));
+incBtn.addEventListener('click', () => stepThreads(1));
+
 document.getElementById('pickBtn')!.addEventListener('click', () => input.click());
 input.addEventListener('change', () => {
   if (!input.files || !input.files.length) return;
@@ -96,13 +128,14 @@ input.addEventListener('change', () => {
     kind: 'build',
     files: Array.from(input.files),
     parallel: parallelToggle.checked,
+    threads,
   });
 });
 
-// Prewarm on load (while the user is reading the page / choosing a folder): init the wasm driver, and —
-// if the toggle is on — spawn the pool, so the build after the pick pays neither. Re-fire if the toggle
-// flips so the pool is warmed to match the mode that'll actually run.
-const doPrewarm = () => worker.postMessage({ kind: 'prewarm', parallel: parallelToggle.checked });
-parallelToggle.addEventListener('change', doPrewarm);
+parallelToggle.addEventListener('change', () => {
+  renderThreads(); // enable/disable the stepper to match
+  doPrewarm();
+});
+renderThreads();
 doPrewarm();
 log('ready. Run the self-test first, then pick your Teams cache folder.');

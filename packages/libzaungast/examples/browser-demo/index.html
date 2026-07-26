@@ -36,15 +36,34 @@ C:\Users\&lt;you&gt;\AppData\Local\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Mic
       <button id="pickBtn">Pick Teams cache folder…</button>
       <!-- Hidden real input (webkitdirectory: folder pick, cross-browser); the button triggers it. -->
       <input id="pick" type="file" webkitdirectory hidden />
-      <!-- Right-aligned build-mode toggle: on = parallel worker pool, off = serial. Label text first,
-           the iOS-style switch after it. -->
-      <label class="mode" title="Parse .ldb + run extract across a Web Worker pool">
-        parallel
-        <span class="switch">
-          <input id="parallel" type="checkbox" checked />
-          <span class="slider"></span>
+      <!-- Right-aligned cluster: threads stepper (left) then the parallel master toggle (right). -->
+      <div class="right-controls">
+        <!-- Thread-count stepper — pool size for parallel mode; disabled when parallel is off. -->
+        <span
+          class="stepper"
+          id="threads-stepper"
+          title="Worker-pool size for parallel decode/extract"
+        >
+          threads
+          <span class="seg">
+            <button type="button" id="thread-dec" class="step-btn" aria-label="fewer threads">
+              −
+            </button>
+            <span class="step-val" id="thread-val">8</span>
+            <button type="button" id="thread-inc" class="step-btn" aria-label="more threads">
+              +
+            </button>
+          </span>
         </span>
-      </label>
+        <!-- Build-mode toggle: on = parallel worker pool, off = serial. Label text first, switch after. -->
+        <label class="mode" title="Parse .ldb + run extract across a Web Worker pool">
+          parallel
+          <span class="switch">
+            <input id="parallel" type="checkbox" checked />
+            <span class="slider"></span>
+          </span>
+        </label>
+      </div>
     </div>
 
     <pre id="out"></pre>

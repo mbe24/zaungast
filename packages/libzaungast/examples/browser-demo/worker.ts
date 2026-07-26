@@ -24,8 +24,8 @@ import { createPool, type Pool } from './pool.ts';
 
 type In =
   | { kind: 'selftest' }
-  | { kind: 'prewarm'; parallel: boolean }
-  | { kind: 'build'; files: File[]; parallel: boolean };
+  | { kind: 'prewarm'; parallel: boolean; threads: number }
+  | { kind: 'build'; files: File[]; parallel: boolean; threads: number };
 type Out =
   | { type: 'progress'; msg: string }
   | { type: 'decoding'; name: string; i: number; n: number }
@@ -42,21 +42,31 @@ const getDriver = () =>
     locateFile: (path: string) => new URL(path, import.meta.url).href,
   }));
 
-// Pool sizing + spawn, hoisted so a 'prewarm' message can spawn it during the file picker and the build
-// after the pick just reuses it (same 8-cap as the wrapped app — see teams.worker.ts for rationale).
-const POOL_SIZE = Math.min((self.navigator?.hardwareConcurrency || 4) - 1, 8);
-function spawnPool(): Pool | null {
-  if (POOL_SIZE <= 1) return null;
+// Pool spawn at a caller-chosen size (the UI threads stepper), hoisted so a 'prewarm' message can spawn
+// it during the file picker and the build after the pick reuses it. Sanity-clamped so a bogus message
+// can't spawn a runaway pool.
+function spawnPool(size: number): Pool | null {
+  const n = Math.min(Math.max(size, 2), 16);
+  if (n <= 1) return null;
   try {
     return createPool(
       () => new Worker(new URL('./parse.worker.js', import.meta.url), { type: 'module' }),
-      POOL_SIZE,
+      n,
     );
   } catch {
     return null;
   }
 }
 let warmPool: Pool | null = null; // populated by a 'prewarm' message, consumed by the next parallel build
+
+// Ensure warmPool holds a pool of exactly `threads` workers (respawn if size changed, e.g. stepper moved).
+function warmTo(threads: number) {
+  if (warmPool && warmPool.size !== threads) {
+    warmPool.destroy();
+    warmPool = null;
+  }
+  warmPool ??= spawnPool(threads);
+}
 
 self.onmessage = async (e: MessageEvent<In>) => {
   try {
@@ -65,7 +75,7 @@ self.onmessage = async (e: MessageEvent<In>) => {
     if (e.data.kind === 'prewarm') {
       const t = performance.now();
       await getDriver();
-      if (e.data.parallel) warmPool ??= spawnPool();
+      if (e.data.parallel) warmTo(e.data.threads);
       console.log('[poc prewarm ms]', {
         driverInit: Math.round(performance.now() - t),
         pool: warmPool ? warmPool.size : 0,
@@ -84,7 +94,7 @@ self.onmessage = async (e: MessageEvent<In>) => {
       return;
     }
 
-    const { files, parallel } = e.data;
+    const { files, parallel, threads } = e.data;
     post({ type: 'progress', msg: `reading ${files.length} files…` });
     const map = new Map<string, Uint8Array>();
     for (const f of files) map.set(f.name, new Uint8Array(await f.arrayBuffer()));
@@ -122,8 +132,9 @@ self.onmessage = async (e: MessageEvent<In>) => {
     let poolSize = 0;
     let prewarmed = false;
     if (parallel) {
-      prewarmed = warmPool !== null; // reuse the pool prewarm spawned during the picker
-      pool = warmPool ?? spawnPool();
+      warmTo(threads); // reuse the prewarmed pool, or (re)spawn to the stepper's current size
+      prewarmed = warmPool !== null;
+      pool = warmPool;
       warmPool = null;
       poolSize = pool ? pool.size : 0;
     } else if (warmPool) {

@@ -35,9 +35,14 @@ pre {
   align-items: center;
   gap: 0.5rem;
 }
-/* Push the mode toggle to the right edge of the controls row; label text first, switch after. */
-.mode {
+/* Right-aligned cluster: the threads stepper then the parallel toggle (master switch stays rightmost). */
+.right-controls {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+}
+.mode {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -45,6 +50,53 @@ pre {
   color: #444;
   user-select: none;
   cursor: pointer;
+}
+/* Threads stepper (iOS-style segmented −/value/+). Dimmed + inert when parallel is off. */
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 13px;
+  color: #444;
+  user-select: none;
+  transition: opacity 0.15s ease;
+}
+.stepper.disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+.stepper .seg {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid #c8c8c8;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+.stepper .step-btn {
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  margin: 0;
+  padding: 0.25rem 0.6rem;
+  border: none;
+  background: transparent;
+  color: #0a84ff;
+  cursor: pointer;
+}
+.stepper .step-btn:disabled {
+  color: #c8c8c8;
+  cursor: default;
+}
+.stepper .step-btn + .step-val,
+.stepper .step-val + .step-btn {
+  border-left: 1px solid #c8c8c8;
+}
+.stepper .step-val {
+  min-width: 2ch;
+  padding: 0.25rem 0.4rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 /* iOS-style toggle switch (a checkbox visually replaced by a sliding track + knob). */
 .switch {
