@@ -38,8 +38,16 @@ test.each(impls)('%s: latin1 round-trips all 256 byte values (1:1, not windows-1
 // TextDecoder path is covered.
 test.each(impls)('%s: dedupKey is injective over all 256 single bytes', (_n, c) => {
   const out = new Set<string>();
-  for (let b = 0; b < 256; b++) out.add(c.dedupKey(Uint8Array.of(b)));
+  for (let b = 0; b < 256; b++) {
+    const k = c.dedupKey(Uint8Array.of(b));
+    // Each byte MUST emit exactly one code unit — else a multi-unit byte could collide a 1-byte key
+    // with a 2-byte one at sequence level, which 256-distinct-singletons alone wouldn't catch.
+    expect(k.length).toBe(1);
+    out.add(k);
+  }
   expect(out.size).toBe(256); // no two bytes share a key — incl. the 5 windows-1252-undefined bytes
+  // And length is preserved for a full 256-byte buffer (sequence-level injectivity).
+  expect(c.dedupKey(Uint8Array.from({ length: 256 }, (_x, i) => i)).length).toBe(256);
 });
 
 test.each(impls)(

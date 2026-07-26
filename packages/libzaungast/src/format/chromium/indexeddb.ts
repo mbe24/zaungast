@@ -212,7 +212,7 @@ function collectSnapshot(map: Map<string, SnapshotRecord>, raw: number, lossy: b
 // `seqCap` (tests) ignores entries above a sequence, so the map holds OLDER versions of
 // later-rewritten chains — letting an incremental genuinely exercise edits, not just inserts.
 // `lossy` is true if any table/log failed to read fully (→ callers must not trust deletions).
-// Build the deduped `userKeyHex -> SnapshotRecord` map by scanning every .ldb table + the .log WAL.
+// Build the deduped `dedupKey(userKey) -> SnapshotRecord` map by scanning every .ldb table + the .log WAL.
 // Shared by loadEntries (→ flat live[]) and loadSnapshot (→ grouped buckets).
 function buildDedupMap(
   source: SnapshotSource,
@@ -222,7 +222,7 @@ function buildDedupMap(
     .names()
     .filter((f) => f.endsWith('.ldb'))
     .sort(byCodeUnit);
-  const map = new Map<string, SnapshotRecord>(); // userKeyHex -> { seq, type, key, value }
+  const map = new Map<string, SnapshotRecord>(); // dedupKey(userKey) -> { seq, type, key, value }
   let raw = 0,
     lossy = false;
 
@@ -231,9 +231,9 @@ function buildDedupMap(
   const consider: Consider = (userKey, value, seq, type) => {
     if (seqCap !== undefined && seq > seqCap) return;
     raw++;
-    const hex = dedupKey(userKey);
-    const cur = map.get(hex);
-    if (!cur) map.set(hex, { seq, type, key: userKey, value });
+    const mapKey = dedupKey(userKey);
+    const cur = map.get(mapKey);
+    if (!cur) map.set(mapKey, { seq, type, key: userKey, value });
     else if (seq > cur.seq) {
       cur.seq = seq;
       cur.type = type;
@@ -299,9 +299,9 @@ function buildReuseMap(
     lossy = false;
   const consider: Consider = (userKey, value, seq, type) => {
     raw++;
-    const hex = dedupKey(userKey);
-    const cur = map.get(hex);
-    if (!cur) map.set(hex, { seq, type, key: userKey, value });
+    const mapKey = dedupKey(userKey);
+    const cur = map.get(mapKey);
+    if (!cur) map.set(mapKey, { seq, type, key: userKey, value });
     else if (seq > cur.seq) {
       cur.seq = seq;
       cur.type = type;

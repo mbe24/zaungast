@@ -3,9 +3,12 @@
 // `#bytes` conditional import (see package.json `imports`):
 //   • bytes-node.ts — delegates to the native `Buffer` builtin (the MCP's hot path; native-speed strings).
 //   • bytes-web.ts  — hand-rolled, dependency-free (the browser build).
-// `TextDecoder` is deliberately NOT used for latin1/utf16le: WHATWG aliases 'latin1'/'iso-8859-1' to
-// windows-1252 and sanitizes lone surrogates, which would silently corrupt keys/values (green on Node,
-// wrong in the browser). Only utf-8 is decoded via `TextDecoder` (with `ignoreBOM`). See plan A2/§4.
+// `TextDecoder` is deliberately NOT used for the FIDELITY codecs latin1/utf16le: WHATWG aliases
+// 'latin1'/'iso-8859-1' to windows-1252 and sanitizes lone surrogates, which would silently corrupt
+// keys/values (green on Node, wrong in the browser). Only utf-8 is decoded via `TextDecoder` (with
+// `ignoreBOM`). See plan A2/§4. (Exception: `dedupKey` — see its doc — DOES use TextDecoder('latin1')
+// on web, but purely as an injective in-memory Map key, never for fidelity, so the windows-1252 remap
+// is harmless there. Do NOT cite it to move toLatin1/toUtf16le onto TextDecoder.)
 export interface BytesCodec {
   /** Latin-1 (ISO-8859-1, 1:1 byte↔codepoint) decode of `u8[start..end)`. */
   toLatin1(u8: Uint8Array, start?: number, end?: number): string;

@@ -1,9 +1,12 @@
-// Web byte codec — hand-rolled, zero dependencies, no `Buffer`. latin1 + utf16le are done by hand
-// because WHATWG `TextDecoder` aliases their labels to windows-1252 and sanitizes lone surrogates (both
-// silently corrupt data — see bytes-types.ts). Only utf-8 uses `TextDecoder`, the one decode WHATWG gets
-// right, with `ignoreBOM` so a leading BOM is preserved (matching `Buffer.toString('utf8')`). Selected
-// via `#bytes` under the `browser` condition. Correctness is pinned against the Node codec by
-// test/bytes.unit.ts; this path is not perf-critical (it's the browser demo, not the MCP hot path).
+// Web byte codec — hand-rolled, zero dependencies, no `Buffer`. The FIDELITY codecs latin1 + utf16le are
+// done by hand because WHATWG `TextDecoder` aliases their labels to windows-1252 and sanitizes lone
+// surrogates (both silently corrupt data — see bytes-types.ts). utf-8 uses `TextDecoder` (the one decode
+// WHATWG gets right, with `ignoreBOM`). `dedupKey` ALSO uses `TextDecoder('latin1')` — but only as an
+// injective in-memory Map key (never fidelity), where windows-1252's remap is harmless and it's ~23×
+// faster; it's the fold's hot path (121k keys per cold read). Selected via `#bytes` under the `browser`
+// condition. Correctness is pinned against the Node codec by test/bytes.unit.ts. (`TextDecoder('latin1')`
+// needs full-ICU Node to construct — fine on official Node + all browsers; only a nonstandard small-ICU
+// Node build running the tests would trip.)
 import type { BytesCodec } from './bytes-types.js';
 
 const CHUNK = 8192; // bound spread arg-count for fromCharCode on large inputs
