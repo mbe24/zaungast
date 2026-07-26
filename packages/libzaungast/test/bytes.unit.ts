@@ -32,6 +32,45 @@ test.each(impls)('%s: latin1 round-trips all 256 byte values (1:1, not windows-1
   expect([...c.fromLatin1(s)]).toEqual([...all]);
 });
 
+// dedupKey is the fold's in-memory Map key (R3). It need NOT be a fidelity codec (the web impl uses
+// windows-1252 via native TextDecoder), but it MUST be injective — else two different userKeys collide
+// and the dedup fold silently drops/merges records. Runs under the browser project too, so the real
+// TextDecoder path is covered.
+test.each(impls)('%s: dedupKey is injective over all 256 single bytes', (_n, c) => {
+  const out = new Set<string>();
+  for (let b = 0; b < 256; b++) out.add(c.dedupKey(Uint8Array.of(b)));
+  expect(out.size).toBe(256); // no two bytes share a key — incl. the 5 windows-1252-undefined bytes
+});
+
+test.each(impls)(
+  '%s: dedupKey induces the same partition as toLatin1 (fold output-invariant)',
+  (_n, c) => {
+    // Swapping the fold key from toLatin1 to dedupKey must not change WHICH userKeys dedup together.
+    const corpus: Uint8Array[] = [
+      Uint8Array.of(), // empty key
+      Uint8Array.of(0),
+      Uint8Array.of(0x81), // windows-1252-undefined bytes, in and out of context
+      Uint8Array.of(0x8d),
+      Uint8Array.of(0x8f, 0x90, 0x9d),
+      Uint8Array.of(1, 2, 3),
+      Uint8Array.of(1, 2, 3), // duplicate — must land in the same group
+      Uint8Array.of(255, 0, 128),
+      Uint8Array.from({ length: 256 }, (_x, i) => i),
+      Uint8Array.from({ length: 256 }, (_x, i) => 255 - i),
+    ];
+    // For each element, the index of the first element sharing its key = its group id.
+    const partition = (key: (u: Uint8Array) => string) => {
+      const first = new Map<string, number>();
+      corpus.forEach((u, i) => {
+        const k = key(u);
+        if (!first.has(k)) first.set(k, i);
+      });
+      return corpus.map((u) => first.get(key(u)));
+    };
+    expect(partition((u) => c.dedupKey(u))).toEqual(partition((u) => c.toLatin1(u)));
+  },
+);
+
 test.each(impls)('%s: latin1 honors start/end', (_n, c) => {
   const u8 = Uint8Array.from([0x41, 0x80, 0x92, 0xff, 0x00]);
   expect(c.toLatin1(u8, 1, 4)).toBe('ÿ');

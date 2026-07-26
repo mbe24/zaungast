@@ -9,6 +9,13 @@
 export interface BytesCodec {
   /** Latin-1 (ISO-8859-1, 1:1 byte↔codepoint) decode of `u8[start..end)`. */
   toLatin1(u8: Uint8Array, start?: number, end?: number): string;
+  /**
+   * A FAST, injective byte→string key for in-memory dedup maps (the fold's hot path). NOT a fidelity
+   * codec — the exact code points are unspecified (the web impl uses windows-1252 via native
+   * `TextDecoder`, a verified 256↔ bijection); only injectivity + determinism are guaranteed. Keys never
+   * escape `buildDedupMap`/`buildReuseMap`, so the representation is private. Never persist or round-trip.
+   */
+  dedupKey(u8: Uint8Array): string;
   /** Latin-1 encode: each char's low byte. Exact inverse of `toLatin1` for byte-strings. */
   fromLatin1(s: string): Uint8Array;
   /** Lowercase hex of every byte. */

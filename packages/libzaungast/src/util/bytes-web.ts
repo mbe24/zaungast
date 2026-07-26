@@ -21,6 +21,12 @@ export const fromLatin1: BytesCodec['fromLatin1'] = (s) => {
   return u8;
 };
 
+// Dedup-map key ONLY (never fidelity): windows-1252 via native TextDecoder is a verified 256↔ bijection,
+// so it's injective — different byte sequences never collide — which is all a dedup key needs. ~23× faster
+// than the hand-rolled fromCharCode above on real keys, and this is now the fold's hot path (121k keys).
+const LATIN1 = new TextDecoder('latin1');
+export const dedupKey: BytesCodec['dedupKey'] = (u8) => LATIN1.decode(u8);
+
 const HEX = Array.from({ length: 256 }, (_, b) => b.toString(16).padStart(2, '0'));
 export const toHex: BytesCodec['toHex'] = (u8) => {
   let s = '';

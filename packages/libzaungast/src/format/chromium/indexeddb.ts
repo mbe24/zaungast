@@ -1,5 +1,5 @@
 // IndexedDB-on-LevelDB helpers: multi-sstable loader + Chromium key decoding.
-import { toLatin1, alloc } from '#bytes';
+import { dedupKey, alloc } from '#bytes';
 import { parseTable } from './sstable.js';
 import { parseWal } from './write-ahead-log.js';
 import { deserialize } from './structured-clone.js';
@@ -41,9 +41,11 @@ function foldTable(res: TableReadResult, consider: Consider): boolean {
     const type = ikey[n - 8];
     const seqHi = ikey[n - 1]; // top 8 bits of the 56-bit seq
     if (seqHi >= 0x20) throw new Error('leveldb seq exceeds 2^53 — widen seq handling'); // 0x20*2^48 == 2^53
-    // Low 48 bits via a per-key DataView: getUint32([n-7..n-4]) + getUint16([n-3..n-2])*2^32.
-    const dv = new DataView(ikey.buffer, ikey.byteOffset, ikey.byteLength);
-    const seqLow = dv.getUint32(n - 7, true) + dv.getUint16(n - 3, true) * 2 ** 32;
+    // Low 48 bits read by hand — no per-entry `new DataView` (121k allocations on a real cache). Same
+    // bytes as getUint32([n-7..n-4], LE) + getUint16([n-3..n-2], LE)*2^32; the >>>0 keeps lo32 unsigned.
+    const lo32 =
+      (ikey[n - 7] | (ikey[n - 6] << 8) | (ikey[n - 5] << 16) | (ikey[n - 4] << 24)) >>> 0;
+    const seqLow = lo32 + (ikey[n - 3] | (ikey[n - 2] << 8)) * 2 ** 32;
     const seq = seqHi * 0x1000000000000 + seqLow; // hi*2^48 + low 48 bits (exact, < 2^53)
     consider(ikey.subarray(0, n - 8), value, seq, type);
   }
@@ -229,7 +231,7 @@ function buildDedupMap(
   const consider: Consider = (userKey, value, seq, type) => {
     if (seqCap !== undefined && seq > seqCap) return;
     raw++;
-    const hex = toLatin1(userKey);
+    const hex = dedupKey(userKey);
     const cur = map.get(hex);
     if (!cur) map.set(hex, { seq, type, key: userKey, value });
     else if (seq > cur.seq) {
@@ -297,7 +299,7 @@ function buildReuseMap(
     lossy = false;
   const consider: Consider = (userKey, value, seq, type) => {
     raw++;
-    const hex = toLatin1(userKey);
+    const hex = dedupKey(userKey);
     const cur = map.get(hex);
     if (!cur) map.set(hex, { seq, type, key: userKey, value });
     else if (seq > cur.seq) {

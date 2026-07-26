@@ -11,6 +11,8 @@ const asBuf = (u8: Uint8Array): Buffer =>
 
 export const toLatin1: BytesCodec['toLatin1'] = (u8, start, end) =>
   asBuf(u8).toString('latin1', start, end);
+// Dedup key: Buffer's latin1 is already native-speed + injective, so on Node it IS toLatin1.
+export const dedupKey: BytesCodec['dedupKey'] = (u8) => asBuf(u8).toString('latin1');
 export const fromLatin1: BytesCodec['fromLatin1'] = (s) => Buffer.from(s, 'latin1');
 export const toHex: BytesCodec['toHex'] = (u8) => asBuf(u8).toString('hex');
 export const toUtf8: BytesCodec['toUtf8'] = (u8, start, end) =>
