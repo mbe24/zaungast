@@ -3,14 +3,119 @@
 // — it drives a structural `Pool` (see ./pool.ts for the browser Web Worker implementation) and never
 // touches Worker/self itself, so a Node worker_threads pool satisfying `Pool` works identically. This is
 // the intricate part of a fast browser cold read; a consumer supplies a pool and gets back the store.
-import { loadSnapshotFromAsync } from './format/chromium/indexeddb.js';
+import { loadSnapshotFrom, loadSnapshotFromAsync } from './format/chromium/indexeddb.js';
 import { openStoreFromSnapshot, openStoreFromSource } from './store-facade.js';
 import type { BuildPhase, TeamsStore } from './store-facade.js';
+import { extractFromSnapshotAsync, type FullExtract } from './ingest/ingest-core.js';
 import { packRecords, packedRecordsTransferList, unpackTable } from './format/table-transfer.js';
 import type { PackedTable } from './format/table-transfer.js';
 import type { SnapshotSource, Snapshot, TableReadResult, EntityExtract } from './format/types.js';
 import type { SqlDriver } from './ingest/sql-driver.js';
 import type { PoolRequest } from './pool-worker.js';
+
+// The pool's SSV extract executor: pack each record range into 3 transferables (zero-copy) and run it on
+// a worker. Shared by openStoreFromSourceParallel and extractFromSourceParallel.
+function poolExtract(pool: Pool) {
+  return (task: { records: unknown[]; mapping: unknown; entity: string }) => {
+    const packed = packRecords(task.records as never);
+    return pool.run<EntityExtract>(
+      { kind: 'extract', packed, mapping: task.mapping as never, entity: task.entity },
+      packedRecordsTransferList(packed),
+    );
+  };
+}
+
+// Dispatch every `.ldb` parse to the pool eagerly (R-B), then fold via getTable in canonical order so the
+// fold overlaps the parse. Returns the folded Snapshot + the parse+fold wall-clock. Throws on wholesale
+// pool failure (the caller drops the pool and re-folds serially).
+async function foldViaPool(
+  source: SnapshotSource,
+  pool: Pool,
+  onDecode?: (name: string, i: number, total: number) => void,
+): Promise<{ snap: Snapshot; parseMs: number }> {
+  const ldbNames = source.names().filter((n) => n.endsWith('.ldb'));
+  const tParse = performance.now();
+  const pending = new Map<string, Promise<TableReadResult>>();
+  let i = 0;
+  for (const n of ldbNames) {
+    const bytes = source.read(n);
+    pending.set(
+      n,
+      pool.run<PackedTable>({ kind: 'parse', bytes }).then((packed) => {
+        onDecode?.(n, ++i, ldbNames.length);
+        return unpackTable(packed);
+      }),
+    );
+  }
+  const snap = await loadSnapshotFromAsync(source, { getTable: (name) => pending.get(name) });
+  return { snap, parseMs: performance.now() - tParse };
+}
+
+export interface ParallelExtractResult {
+  extract: FullExtract;
+  usedPool: boolean;
+  poolSize: number;
+  parseMs: number; // parse+fold overlap window (0 on the serial path)
+}
+export interface ParallelExtractOptions {
+  pool: Pool | null; // null → serial fold+extract
+  chunkRecords?: number;
+  onPhase?: (phase: BuildPhase, ms: number) => void;
+  onDecode?: (name: string, i: number, total: number) => void;
+}
+
+// The shared parse→fold→extract front half, as a reusable seam: fold `.ldb` across the pool, then fan the
+// SSV extract out across the same pool, returning the engine-agnostic `FullExtract`. Both the SQLite build
+// (buildStore) and a non-SQLite backend (the DuckDB demo → shapeBaseTables/deriveTables) compose this.
+// Same serial-fallback discipline as openStoreFromSourceParallel; consumes/destroys the pool.
+export async function extractFromSourceParallel(
+  source: SnapshotSource,
+  opts: ParallelExtractOptions,
+): Promise<ParallelExtractResult> {
+  const { chunkRecords, onPhase, onDecode } = opts;
+  let pool = opts.pool;
+  const poolSize = pool ? pool.size : 0;
+  let usedPool = false;
+  let parseMs = 0;
+  try {
+    let snap: Snapshot | null = null;
+    if (pool) {
+      const activePool = pool;
+      try {
+        ({ snap, parseMs } = await foldViaPool(source, activePool, onDecode));
+      } catch {
+        snap = null; // parse pool failed → drop it, fold serially below
+        activePool.destroy();
+        pool = null;
+      }
+    }
+    let extract: FullExtract;
+    if (pool && snap) {
+      const activePool = pool;
+      try {
+        extract = await extractFromSnapshotAsync(snap, {
+          chunkRecords,
+          onPhase,
+          runExtract: poolExtract(activePool),
+        });
+        usedPool = true;
+      } catch {
+        activePool.destroy(); // extract pool failed → re-extract over the SAME snapshot, serially
+        pool = null;
+        extract = await extractFromSnapshotAsync(snap, { chunkRecords, onPhase });
+      }
+    } else {
+      // No usable pool: fold serially (timed as the 'decode' phase, matching openStoreFromSource), extract.
+      const tDecode = onPhase ? performance.now() : 0;
+      const folded = loadSnapshotFrom(source);
+      onPhase?.('decode', performance.now() - tDecode);
+      extract = await extractFromSnapshotAsync(folded, { chunkRecords, onPhase });
+    }
+    return { extract, usedPool, poolSize, parseMs };
+  } finally {
+    pool?.destroy();
+  }
+}
 
 // The minimal worker-pool the parallel build drives. Any pool with these three members works (the
 // browser `createPool`, or a Node worker_threads pool) — kept structural + DOM-free (`transfer` is
@@ -49,7 +154,6 @@ export async function openStoreFromSourceParallel(
   const { driver, deferFts, extraStopwords, chunkRecords, onPhase, onDecode } = opts;
   let pool = opts.pool;
   const poolSize = pool ? pool.size : 0;
-  const ldbNames = source.names().filter((n) => n.endsWith('.ldb'));
   let usedPool = false;
   let parseMs = 0;
   try {
@@ -57,25 +161,7 @@ export async function openStoreFromSourceParallel(
     if (pool) {
       const activePool = pool;
       try {
-        const tParse = performance.now();
-        // R-B: dispatch every `.ldb` parse eagerly, then fold each via getTable in canonical sorted order
-        // while the pool parses the rest — the fold overlaps the parse. Byte-identical (the fold still
-        // consumes files in sorted order; only wall-clock interleaving changes). A getTable miss →
-        // inline read+parse at that position (see readTablesIntoAsync), so an undispatched file is safe.
-        const pending = new Map<string, Promise<TableReadResult>>();
-        let i = 0;
-        for (const n of ldbNames) {
-          const bytes = source.read(n);
-          pending.set(
-            n,
-            activePool.run<PackedTable>({ kind: 'parse', bytes }).then((packed) => {
-              onDecode?.(n, ++i, ldbNames.length);
-              return unpackTable(packed);
-            }),
-          );
-        }
-        snap = await loadSnapshotFromAsync(source, { getTable: (name) => pending.get(name) });
-        parseMs = performance.now() - tParse;
+        ({ snap, parseMs } = await foldViaPool(source, activePool, onDecode));
       } catch {
         // Parse pool failed (nested workers unsupported, a parse threw, …). Drop it so stragglers don't
         // contend with the serial re-parse; fall through to the serial build below.
@@ -95,15 +181,7 @@ export async function openStoreFromSourceParallel(
           extraStopwords,
           chunkRecords,
           onPhase,
-          runExtract: (task) => {
-            // Pack the record range into 3 transferables so the whole chunk moves zero-copy — not one
-            // structured-clone per tiny record buffer (the extract-side transfer tax).
-            const packed = packRecords(task.records);
-            return activePool.run<EntityExtract>(
-              { kind: 'extract', packed, mapping: task.mapping, entity: task.entity },
-              packedRecordsTransferList(packed),
-            );
-          },
+          runExtract: poolExtract(activePool),
         });
         usedPool = true;
       } catch {

@@ -78,6 +78,7 @@ export type { ExtractExecutor, ExtractTask } from './ingest/ingest-core.js';
 export {
   shapeBaseTables,
   deriveTables,
+  type FullExtract,
   type BaseTables,
   type ConvMetaRow,
   type DerivedTables,
@@ -92,9 +93,12 @@ export { createPool } from './pool.js';
 export { handlePoolMessage, type PoolRequest, type PoolResponse } from './pool-worker.js';
 export {
   openStoreFromSourceParallel,
+  extractFromSourceParallel,
   type Pool,
   type ParallelBuildOptions,
   type ParallelBuildResult,
+  type ParallelExtractOptions,
+  type ParallelExtractResult,
 } from './parallel.js';
 export type { SqlDriver, SqlDatabase, SqlStatement, SqlParam } from './ingest/sql-driver.js';
 export type { StoreMeta } from './ingest/store.js';
