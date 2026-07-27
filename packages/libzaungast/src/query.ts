@@ -65,6 +65,29 @@ interface EventRow {
   attendees: string | null;
   body_html: string | null;
 }
+interface CallRow {
+  id: string;
+  call_type: string | null;
+  direction: string | null;
+  state: string | null;
+  is_missed: number;
+  start_ts: number;
+  duration_ms: number;
+  counterpart_mri: string | null;
+  group_thread_id: string | null;
+  has_recording: number;
+  recording_link: string | null;
+  has_voicemail: number;
+  spam_level: string | null;
+  is_current_user_part: number;
+  is_deleted: number;
+}
+// Aggregate rows (not a base table): the per-reply-chain summary shape and count/span scalars.
+interface ThreadSummaryRow {
+  root_id: string;
+  n: number;
+  last: number;
+}
 
 // escape LIKE wildcards in user input (used with `escape '\'`). Query-side helper.
 export function likeEscape(s: string): string {
@@ -78,7 +101,8 @@ export function likeEscape(s: string): string {
 // A conversation selector (c:handle or title/participant substring) → matching conversation ids.
 export function convIdsFor(db: DB, arg: string): string[] {
   if (arg.startsWith('c:')) {
-    const r = db.prepare('select id from conversations where handle=?').get(arg) as any;
+    const r = db.prepare('select id from conversations where handle=?').get(arg) as
+      { id: string } | undefined;
     return r ? [r.id] : [];
   }
   const like = `%${likeEscape(arg)}%`;
@@ -87,7 +111,7 @@ export function convIdsFor(db: DB, arg: string): string[] {
       .prepare(
         String.raw`select id from conversations where topic like ? escape '\' or participant_names like ? escape '\'`,
       )
-      .all(like, like) as any[]
+      .all(like, like) as { id: string }[]
   ).map((r) => r.id);
 }
 
@@ -95,7 +119,8 @@ export function convIdsFor(db: DB, arg: string): string[] {
 // `m.`) + params, or a `.miss` when a p:handle doesn't resolve.
 export function senderFilter(db: DB, arg: string): { sql: string; params: any[]; miss?: string } {
   if (arg.startsWith('p:')) {
-    const r = db.prepare('select mri from people where handle=?').get(arg) as any;
+    const r = db.prepare('select mri from people where handle=?').get(arg) as
+      { mri: string } | undefined;
     if (!r) return { sql: '1=0', params: [], miss: `no person matches ${arg}` };
     return { sql: 'm.sender_mri=?', params: [r.mri] };
   }
@@ -130,7 +155,8 @@ export function resolveExcludes(
     const e = String(raw).trim();
     if (!e) continue;
     if (e.startsWith('c:')) {
-      const r = db.prepare('select id from conversations where handle=?').get(e) as any;
+      const r = db.prepare('select id from conversations where handle=?').get(e) as
+        { id: string } | undefined;
       if (!r)
         return {
           convIds,
@@ -140,7 +166,8 @@ export function resolveExcludes(
         };
       convIds.push(r.id);
     } else if (e.startsWith('p:')) {
-      const r = db.prepare('select mri from people where handle=?').get(e) as any;
+      const r = db.prepare('select mri from people where handle=?').get(e) as
+        { mri: string } | undefined;
       if (!r)
         return { convIds, mris, words, miss: { reason: 'no-such-excluded-person', value: e } };
       mris.push(r.mri);
@@ -254,7 +281,7 @@ export type SearchResult =
   | { ok: false; reason: QueryMiss }
   | {
       ok: true;
-      rows: any[];
+      rows: MessageRow[];
       order: 'relevance' | 'time';
       inIds?: string[];
       coverage?: { hi: number; lo: number };
@@ -340,16 +367,15 @@ function computeCoverage(
   const stats = () => {
     const r = db
       .prepare(`select min(m.ts) lo, max(m.ts) hi from messages m where ${scopeSql} and m.ts>0`)
-      .get(...scopeParams) as any;
+      .get(...scopeParams) as { hi: number | null; lo: number | null } | undefined;
     return { hi: r?.hi ?? 0, lo: r?.lo ?? 0 };
   };
   if (rowCount === 0) return stats();
   if (sinceTs) {
     const hi =
       (
-        db
-          .prepare(`select max(m.ts) hi from messages m where ${scopeSql}`)
-          .get(...scopeParams) as any
+        db.prepare(`select max(m.ts) hi from messages m where ${scopeSql}`).get(...scopeParams) as
+          { hi: number | null } | undefined
       )?.hi ?? 0;
     if (sinceTs > hi) return stats();
   }
@@ -366,7 +392,7 @@ function runSearchQuery(
   params: any[],
   limit: number,
   query: string | undefined,
-): { rows: any[]; order: 'relevance' | 'time' } {
+): { rows: MessageRow[]; order: 'relevance' | 'time' } {
   const match = query && String(query).trim() ? ftsMatch(String(query)) : null;
   if (match && ftsEnabled) {
     const rows = db
@@ -376,7 +402,7 @@ function runSearchQuery(
       where messages_fts match ? and ${conds.join(' and ')}
       order by bm25(messages_fts) limit ?`,
       )
-      .all(match, ...params, limit) as any[];
+      .all(match, ...params, limit) as MessageRow[];
     return { rows, order: 'relevance' };
   }
   if (query && String(query).trim()) {
@@ -388,7 +414,7 @@ function runSearchQuery(
       `select m.*, substr(m.content,1,120) snip from messages m
       where ${conds.join(' and ')} order by m.ts desc, m.id desc limit ?`,
     )
-    .all(...params, limit) as any[];
+    .all(...params, limit) as MessageRow[];
   return { rows, order: 'time' };
 }
 
@@ -410,25 +436,25 @@ export function queryConversationMessages(
   store: ChatStore,
   convId: string,
   opts: ConvMessagesOptions,
-): { rows: any[] } | { aroundNotFound: string } {
+): { rows: MessageRow[] } | { aroundNotFound: string } {
   const db = store.db;
   if (opts.around) {
     const aroundId = opts.around.replace(/^m:/, '');
     const a = db
       .prepare('select ts from messages where conv_id=? and id=?')
-      .get(convId, aroundId) as any;
+      .get(convId, aroundId) as { ts: number } | undefined;
     if (!a) return { aroundNotFound: opts.around };
     const half = Math.floor(opts.limit / 2);
     const before = db
       .prepare(
         `select * from messages where conv_id=? and is_system=0 and ts<=? order by ts desc, id desc limit ?`,
       )
-      .all(convId, a.ts, half) as any[];
+      .all(convId, a.ts, half) as MessageRow[];
     const after = db
       .prepare(
         `select * from messages where conv_id=? and is_system=0 and ts>? order by ts asc, id asc limit ?`,
       )
-      .all(convId, a.ts, half) as any[];
+      .all(convId, a.ts, half) as MessageRow[];
     return { rows: [...before.toReversed(), ...after] };
   }
   const conds = ['conv_id=?', 'is_system=0'];
@@ -453,27 +479,27 @@ export function queryConversationMessages(
       .prepare(
         `select * from messages where ${conds.join(' and ')} order by ts desc, id desc limit ?`,
       )
-      .all(...params, opts.limit) as any[]
+      .all(...params, opts.limit) as MessageRow[]
   ).reverse();
   return { rows };
 }
 
 // All non-system messages of one channel reply-chain (root + replies), chronological. Shared by the
 // channel digest and single-thread renderers.
-export function queryThread(db: DB, convId: string, rootId: string): any[] {
+export function queryThread(db: DB, convId: string, rootId: string): MessageRow[] {
   return db
     .prepare(
       `select * from messages where conv_id=? and root_id=? and is_system=0 order by ts asc, id asc`,
     )
-    .all(convId, rootId) as any[];
+    .all(convId, rootId) as MessageRow[];
 }
 
 // A single message by (conv_id, id) — the raw row (or null). The facade's `messages.get` maps it
 // to a Message; it also backs the around→root_id pivot (root_id is on the raw row).
-export function messageById(store: ChatStore, convId: string, id: string): any | null {
+export function messageById(store: ChatStore, convId: string, id: string): MessageRow | null {
   return (
-    (store.db.prepare('select * from messages where conv_id=? and id=?').get(convId, id) as any) ??
-    null
+    (store.db.prepare('select * from messages where conv_id=? and id=?').get(convId, id) as
+      MessageRow | undefined) ?? null
   );
 }
 
@@ -485,7 +511,7 @@ export interface ThreadSummary {
   lastTs: number;
 }
 // Map a raw thread-summary row to a ThreadSummary.
-export function toThreadSummary(r: { root_id: any; n: number; last: number }): ThreadSummary {
+export function toThreadSummary(r: ThreadSummaryRow): ThreadSummary {
   return { rootId: String(r.root_id), count: r.n, lastTs: r.last };
 }
 
@@ -496,7 +522,7 @@ export function queryThreadSummaries(
   store: ChatStore,
   convId: string,
   opts: { sinceTs?: number; untilTs?: number },
-): { root_id: any; n: number; last: number }[] {
+): ThreadSummaryRow[] {
   const db = store.db;
   const conds = ['conv_id=?', 'is_system=0'];
   const params: any[] = [convId];
@@ -512,7 +538,7 @@ export function queryThreadSummaries(
     .prepare(
       `select root_id, count(*) n, max(ts) last from messages where ${conds.join(' and ')} group by root_id`,
     )
-    .all(...params) as any[];
+    .all(...params) as ThreadSummaryRow[];
 }
 
 // A conversation's non-system message count + oldest/newest cached ts — the "showing X/total,
@@ -522,11 +548,13 @@ export function convMessageStats(
   convId: string,
 ): { total: number; earliest: number; newest: number } {
   const total = (
-    db.prepare('select count(*) n from messages where conv_id=? and is_system=0').get(convId) as any
+    db.prepare('select count(*) n from messages where conv_id=? and is_system=0').get(convId) as {
+      n: number;
+    }
   ).n;
   const span = db
     .prepare('select min(ts) lo, max(ts) hi from messages where conv_id=? and is_system=0 and ts>0')
-    .get(convId) as any;
+    .get(convId) as { lo: number | null; hi: number | null } | undefined;
   return { total, earliest: span?.lo ?? 0, newest: span?.hi ?? 0 };
 }
 
@@ -579,7 +607,7 @@ export function queryPeople(
     'pe.handle,pe.mri,pe.name,pe.msg_count,pe.last_ts,pr.given_name,pr.surname,pr.type,pr.org';
   const from = 'from people pe left join profiles pr on pr.mri=pe.mri';
   if (q.startsWith('p:')) {
-    const rows = (db.prepare(`select ${cols} ${from} where pe.handle=?`).all(q) as any[]).map(
+    const rows = (db.prepare(`select ${cols} ${from} where pe.handle=?`).all(q) as PersonRow[]).map(
       toPerson,
     );
     return { mode: 'handle', query: q, total: rows.length, rows };
@@ -588,20 +616,20 @@ export function queryPeople(
     const total = (
       db
         .prepare(String.raw`select count(*) c from people where name like ? escape '\'`)
-        .get(`%${likeEscape(q)}%`) as any
+        .get(`%${likeEscape(q)}%`) as { c: number }
     ).c;
     const rows = (
       db
         .prepare(
           String.raw`select ${cols} ${from} where pe.name like ? escape '\' order by pe.msg_count desc limit ?`,
         )
-        .all(`%${likeEscape(q)}%`, n) as any[]
+        .all(`%${likeEscape(q)}%`, n) as PersonRow[]
     ).map(toPerson);
     return { mode: 'search', query: q, total, rows };
   }
-  const total = (db.prepare('select count(*) c from people').get() as any).c;
+  const total = (db.prepare('select count(*) c from people').get() as { c: number }).c;
   const rows = (
-    db.prepare(`select ${cols} ${from} order by pe.msg_count desc limit ?`).all(n) as any[]
+    db.prepare(`select ${cols} ${from} order by pe.msg_count desc limit ?`).all(n) as PersonRow[]
   ).map(toPerson);
   return { mode: 'roster', query: '', total, rows };
 }
@@ -636,7 +664,7 @@ export function conversationById(store: ChatStore, idOrHandle: string): Conversa
   const col = idOrHandle.startsWith('c:') ? 'handle' : 'id';
   const r = store.db
     .prepare(`select ${CONV_COLS} from conversations where ${col}=?`)
-    .get(idOrHandle) as any;
+    .get(idOrHandle) as ConversationRow | undefined;
   return r ? toConversation(r) : null;
 }
 
@@ -648,7 +676,7 @@ export function resolveConversations(store: ChatStore, sel: string): Conversatio
   if (sel.startsWith('c:')) {
     const rows = db
       .prepare(`select ${CONV_COLS} from conversations where handle=?`)
-      .all(sel) as any[];
+      .all(sel) as ConversationRow[];
     return rows.map(toConversation);
   }
   const like = `%${likeEscape(sel)}%`;
@@ -658,7 +686,7 @@ export function resolveConversations(store: ChatStore, sel: string): Conversatio
       where topic like ? escape '\' or participant_names like ? escape '\'
       order by last_ts desc`,
     )
-    .all(like, like) as any[];
+    .all(like, like) as ConversationRow[];
   return rows.map(toConversation);
 }
 
@@ -705,7 +733,7 @@ export function queryConversations(
       `select ${CONV_COLS}
      from conversations ${w} order by last_ts desc limit ?`,
     )
-    .all(...params, n) as any[];
+    .all(...params, n) as ConversationRow[];
   return rows.map(toConversation);
 }
 
@@ -774,7 +802,7 @@ export function queryCalls(
   }
   const rowsAll = db
     .prepare(`select * from calls where ${where.join(' and ')} order by start_ts desc`)
-    .all(...params) as any[];
+    .all(...params) as CallRow[];
 
   // Resolve each call's display label in JS (the table is tiny; this is what lets `participant`
   // filter on the RESOLVED name — TwoParty target.displayName is often null in the raw data).
@@ -784,7 +812,8 @@ export function queryCalls(
       const conv = r.group_thread_id
         ? (db
             .prepare('select handle,topic,participant_names from conversations where id=?')
-            .get(r.group_thread_id) as any)
+            .get(r.group_thread_id) as
+            { handle: string; topic: string | null; participant_names: string | null } | undefined)
         : null;
       label = conv
         ? `${conv.topic || conv.participant_names || '(group)'} ${conv.handle}`
@@ -914,14 +943,19 @@ export function queryEvents(
   return (
     db
       .prepare(`select * from events ${w} order by start_ts asc limit ?`)
-      .all(...params, limit) as any[]
+      .all(...params, limit) as EventRow[]
   ).map(toCalendarEvent);
 }
 
 // Newest materialized occurrence start across ALL events — the honest bound for list_events'
 // "recurring events may be under-reported" coverage note.
 export function maxEventStart(store: ChatStore): number {
-  return (store.db.prepare('select max(start_ts) t from events').get() as any)?.t ?? 0;
+  return (
+    (
+      store.db.prepare('select max(start_ts) t from events').get() as
+        { t: number | null } | undefined
+    )?.t ?? 0
+  );
 }
 
 // ---------- topics (analytics core) ----------
@@ -937,7 +971,7 @@ export function buildPhraseExtractor(
   extraStopwords?: Iterable<string>,
 ): (content: string) => string[] {
   const nameTokens = new Set<string>();
-  for (const r of db.prepare('select name from people').all() as any[])
+  for (const r of db.prepare('select name from people').all() as { name: string | null }[])
     for (const w of String(r.name || '')
       .toLowerCase()
       .match(/[\p{L}\p{M}]{3,}/gu) || [])
