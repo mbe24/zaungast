@@ -61,11 +61,11 @@ jobs:
         # tools pipeline against it.
 
       - name: Integration suite (synthetic fixture)
-        run: npm run test:integration:ci
+        run: npm run test:integration
         # The vitest `int` project. With no ZAUNGAST_TEST_DIR, the synthetic-capable suites
         # (incremental/reuse == full rebuild, compaction, tombstones; feedback e2e) generate their own
         # .ldb+.log fixture and run; the real-cache-only suites self-skip (green). Locally,
-        # `npm run test:integration` with ZAUNGAST_TEST_DIR set runs them all against a real cache.
+        # `npm run test:integration -- <dir|date>` (or ZAUNGAST_TEST_DIR=<dir>) runs them against a real cache.
 
       - name: Golden tests (synthetic fixture)
         run: npm run test:golden
