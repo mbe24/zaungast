@@ -166,7 +166,7 @@ export function bulkInsertMessages(store: ChatStore, msgRows: any[], selfMri: st
 // drop the snapshot (the extract-then-drop-snapshot ordering — see extractFromSnapshot()).
 // Pure shape: decoded profile records → name-source rows. No snapshot/cross-record state, so it runs
 // identically whether the records were decoded serially or reassembled from parallel extract workers.
-function shapeProfileRows(records: any[]) {
+function shapeProfileRows(records: any[]): ProfileRow[] {
   return records.map((r: any) => {
     const name = String(r.name ?? '');
     const type = String(r.type ?? '') || 'None';
@@ -231,8 +231,8 @@ function compactAttendees(attendees: unknown): string | null {
 // Build the events table rows (calendar) from the snapshot. Split from applyEvents for the
 // extract-then-drop-snapshot ordering. `RecurringMaster` rows are series templates,
 // never rendered as an event, so they're dropped here rather than inserted and filtered later.
-function shapeEventRows(rows: any[]) {
-  const out = [];
+function shapeEventRows(rows: any[]): EventRow[] {
+  const out: EventRow[] = [];
   for (const r of rows as any[]) {
     if (r.eventType === 'RecurringMaster') continue;
     // objectId verified unique+present across all 407 real rows (0 missing, 0 duplicates).
@@ -307,8 +307,8 @@ function recordingLinkOf(r: any): string | null {
 // extract-then-drop-snapshot ordering.
 // `is_missed` maps ONLY callState==='Missed' (the real data's other observed value, 'Declined',
 // is a deliberate reject — not a miss).
-function shapeCallRows(rows: any[]) {
-  const out = [];
+function shapeCallRows(rows: any[]): CallRow[] {
+  const out: CallRow[] = [];
   for (const r of rows as any[]) {
     const direction = r.callDirection != null ? String(r.callDirection) : null;
     const counterpart = direction === 'Outgoing' ? r.target : r.originator;
@@ -411,6 +411,57 @@ function finalMeta(
   };
 }
 
+// The fully-SHAPED profile/event/call rows (camelCase, engine-agnostic — no Buffer slices, no
+// snapshot references) that `shapeProfileRows`/`shapeEventRows`/`shapeCallRows` produce and that
+// FullExtract/BaseTables carry. Named explicitly (rather than left as `ReturnType<typeof build…>`
+// of a private fn) so the exported FullExtract surface documents its own row shapes.
+export interface ProfileRow {
+  mri: string;
+  name: string;
+  givenName: string;
+  surname: string;
+  type: string;
+  org: string;
+}
+export interface EventRow {
+  id: string;
+  seriesId: string | null;
+  kind: string;
+  subject: string | null;
+  startTs: number;
+  endTs: number;
+  isAllDay: number;
+  location: string | null;
+  organizerName: string | null;
+  organizerEmail: string | null;
+  cid: string | null;
+  myResponse: string | null;
+  showAs: string | null;
+  isCancelled: number;
+  isConfidential: number;
+  hasAttach: number;
+  attendees: string | null;
+  bodyHtml: string | null;
+}
+export interface CallRow {
+  id: string;
+  callType: string | null;
+  direction: string | null;
+  state: string | null;
+  isMissed: number;
+  startTs: number;
+  durationMs: number;
+  counterpartMri: string | null;
+  participants: string | null;
+  groupThreadId: string | null;
+  hasRecording: number;
+  recordingLink: string | null;
+  hasVoicemail: number;
+  spamLevel: string | null;
+  isCurrentUserPart: number;
+  isDeleted: number;
+}
+
 // Everything a full ingest extracts from a snapshot, as plain row arrays (no Buffer slices, no
 // snapshot references). `mapping` is null when no schema matched.
 export interface FullExtract {
@@ -423,9 +474,9 @@ export interface FullExtract {
   convTargets: Set<string>;
   msgRows: any[];
   convRows: any[];
-  profileRows: ReturnType<typeof buildProfileRows>;
-  eventRows: ReturnType<typeof buildEventRows>;
-  callRows: ReturnType<typeof buildCallRows>;
+  profileRows: ProfileRow[];
+  eventRows: EventRow[];
+  callRows: CallRow[];
 }
 
 // The engine-agnostic base tables: the fully-SHAPED rows a store loads, before any per-engine derivation
@@ -436,9 +487,9 @@ export interface FullExtract {
 export interface BaseTables {
   conversations: ConvMetaRow[];
   messages: MessageInsert[];
-  profiles: FullExtract['profileRows'];
-  events: FullExtract['eventRows'];
-  calls: FullExtract['callRows'];
+  profiles: ProfileRow[];
+  events: EventRow[];
+  calls: CallRow[];
   selfMri: string | null;
   fp: Fingerprint;
   mapping: Mapping | null;
