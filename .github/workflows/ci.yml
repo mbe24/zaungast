@@ -28,10 +28,7 @@ jobs:
         # support TypeScript 7 — see docs/development.md.)
 
       - name: Typecheck
-        run: npm run typecheck
-
-      - name: Typecheck tests
-        run: npm run typecheck:test
+        run: npm run typecheck && npm run typecheck:test
 
       - name: Native triples consistency (native.yml ⊆ napi.triples)
         run: npm run check:native-triples

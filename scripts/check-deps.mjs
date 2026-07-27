@@ -15,7 +15,10 @@ function walk(dir) {
       const text = fs.readFileSync(p, 'utf8');
       for (const m of text.matchAll(/from\s+['"]([^'"]+)['"]/g)) {
         const spec = m[1];
-        if (/^zaungast(\/|$)/.test(spec) || /zaungast[\\/]/.test(spec.replace(/^\.\.[\\/]/, ''))) {
+        // Match `zaungast` only as a whole path SEGMENT (bare `zaungast`, `zaungast/…`, or a relative
+        // path with a `/zaungast/` segment) — NOT as a substring, so `libzaungast/web` (the library's
+        // own subpath) doesn't false-positive.
+        if (/(^|[\\/])zaungast(?=[\\/]|$)/.test(spec)) {
           offenders.push(`${path.relative('.', p)} -> ${spec}`);
         }
       }
