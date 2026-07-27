@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-27
+
 ### Added
 
 - Add browser support for reading, ingesting, and querying a Teams cache.
@@ -87,7 +89,8 @@ Initial release.
 - Ship extensible English and German stopword sets.
 - Guarantee read-only access — the live Teams directory is only ever read or copied, never opened for writing, locked, or memory-mapped, so the reader cannot corrupt the Teams store.
 
-[Unreleased]: https://github.com/mbe24/zaungast/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/mbe24/zaungast/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/mbe24/zaungast/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/mbe24/zaungast/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/mbe24/zaungast/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/mbe24/zaungast/compare/v0.1.1...v0.2.0
