@@ -511,6 +511,36 @@ export function shapeBaseTables(ex: FullExtract): BaseTables {
   };
 }
 
+// Assemble a StoreMeta for a non-SQLite backend that has no ChatStore to read `.meta` off. The
+// fingerprint/mapping/lossy/selfMri come straight from the shaped BaseTables (identical to what the
+// SQLite path reports); the backend supplies only what it alone can measure — the row `counts` and
+// `earliestTs` (queried from its own tables). It's a fresh full build with no FTS unless the caller
+// says otherwise, so `refreshMode:'full'`, `lastFullAt===asOf`, and `ftsEnabled` defaults false.
+export function baseMeta(
+  base: BaseTables,
+  measured: {
+    counts: StoreMeta['counts'];
+    earliestTs: number;
+    ftsEnabled?: boolean;
+    asOf?: number;
+  },
+): StoreMeta {
+  const asOf = measured.asOf ?? Date.now();
+  return {
+    asOf,
+    fingerprint: base.fp.hash,
+    mappingVersion: base.mapping?.mappingVersion ?? null,
+    schemaMatched: !!base.mapping,
+    counts: measured.counts,
+    earliestTs: measured.earliestTs,
+    ftsEnabled: measured.ftsEnabled ?? false,
+    lastFullAt: asOf,
+    refreshMode: 'full',
+    lossy: base.lossy,
+    selfMri: base.selfMri,
+  };
+}
+
 // The derived tables: one people row per non-system sender + the conversations' derived columns. This is
 // the ENGINE-AGNOSTIC, pure-JS equivalent of ChatStore.recomputeDerived (which is SQLite SQL) — a new
 // backend (DuckDB, …) calls this instead of porting the recompute SQL to its dialect. The SQLite path

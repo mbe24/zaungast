@@ -11,6 +11,7 @@ import {
   openStoreFromSourceParallel,
   extractFromSourceParallel,
   shapeBaseTables,
+  baseMeta,
   createPool,
   MemorySource,
   type SnapshotSource,
@@ -192,7 +193,8 @@ self.onmessage = async (e: MessageEvent<In>) => {
       const duckConn = await getDuck(); // warmed during the picker
       duck = await buildDuckDbStore(base, duckConn, { onPhase }); // emits 'apply' + 'recompute'
       post({ type: 'phase', phase: 'fts', ms: null, note: 'N/A' }); // no FTS5 → search uses LIKE
-      // Synthesize the meta (no ChatStore here): counts from DuckDB, fingerprint/self/lossy from the extract.
+      // Synthesize the meta (no ChatStore here): baseMeta fills the fingerprint/mapping/lossy/self from
+      // the shaped base; the backend supplies only what it alone can measure — counts + earliestTs.
       const cnt = async (tbl: string) =>
         Number(
           (await duckConn.query<{ c: number | bigint }>(`select count(*) c from ${tbl}`))[0]?.c ??
@@ -205,23 +207,14 @@ self.onmessage = async (e: MessageEvent<In>) => {
           )
         )[0]?.e ?? 0,
       );
-      meta = {
-        asOf: Date.now(),
-        fingerprint: res.extract.fp.hash,
-        mappingVersion: res.extract.mapping?.mappingVersion ?? null,
-        schemaMatched: !!res.extract.mapping,
+      meta = baseMeta(base, {
         counts: {
           conversations: await cnt('conversations'),
           messages: base.messages.length,
           people: await cnt('people'),
         },
         earliestTs: earliest,
-        ftsEnabled: false,
-        lastFullAt: Date.now(),
-        refreshMode: 'full',
-        lossy: res.extract.lossy,
-        selfMri: res.extract.selfMri,
-      };
+      });
     } else {
       const res = await openStoreFromSourceParallel(source, { driver: driver!, pool, onPhase }); // extract/apply/recompute/fts
       usedPool = res.usedPool;

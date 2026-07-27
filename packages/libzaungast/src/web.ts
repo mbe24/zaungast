@@ -64,6 +64,7 @@ export {
 export {
   shapeBaseTables,
   deriveTables,
+  baseMeta,
   type FullExtract,
   type BaseTables,
   type ConvMetaRow,

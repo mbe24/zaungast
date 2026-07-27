@@ -74,6 +74,7 @@ test.each(['ChatStore', 'createJsEngine', 'ingest'])(
 // parse / executor primitives were removed here (they live on './format'); assert a few stayed out.
 const WEB_API = [
   'MemorySource',
+  'baseMeta',
   'computeTopicRows',
   'computeTopicsWindow',
   'createPool',
