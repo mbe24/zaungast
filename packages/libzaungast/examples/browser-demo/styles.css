@@ -51,10 +51,42 @@ pre {
   cursor: pointer;
   transition: background 0.15s ease;
 }
-/* Same glyph size as the control icons (.ctl-icon) so buttons + db/threads/parallel icons all match. */
-.btn-icon {
+/* Monochrome icons are CSS masks over an assets/*.svg (not inline <svg>), so the SVG geometry lives in
+   one place and the glyph still inherits color: `background-color: currentColor` is what shows THROUGH
+   the mask, so theming/hover/disabled-dimming all keep working. Brand icons (sqlite/duckdb) stay <img>.
+   Same 18px box for the action buttons (.btn-icon) and the toolbar controls (.ctl-icon) so all match. */
+.btn-icon,
+.ctl-icon {
+  display: inline-block;
   width: 18px;
   height: 18px;
+  background-color: currentColor;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+.icon-shield-check {
+  -webkit-mask-image: url('assets/icon-shield-check.svg');
+  mask-image: url('assets/icon-shield-check.svg');
+}
+.icon-folder-open {
+  -webkit-mask-image: url('assets/icon-folder-open.svg');
+  mask-image: url('assets/icon-folder-open.svg');
+}
+.icon-database {
+  -webkit-mask-image: url('assets/icon-database.svg');
+  mask-image: url('assets/icon-database.svg');
+}
+.icon-layers {
+  -webkit-mask-image: url('assets/icon-layers.svg');
+  mask-image: url('assets/icon-layers.svg');
+}
+.icon-split {
+  -webkit-mask-image: url('assets/icon-split.svg');
+  mask-image: url('assets/icon-split.svg');
 }
 #pickBtn {
   background: #0a84ff;
@@ -82,9 +114,7 @@ pre {
 /* Monochrome control icons replacing the db/threads/parallel text labels (grey on white). Same 18px
    glyph size as the action buttons' .btn-icon, so every icon in the controls row matches. */
 .ctl-icon {
-  width: 18px;
-  height: 18px;
-  color: #8e8e93;
+  color: #8e8e93; /* grey glyph — the currentColor shown through the control-icon masks */
   flex: none;
 }
 /* Right-aligned cluster: the threads stepper then the parallel toggle (master switch stays rightmost). */
@@ -103,8 +133,8 @@ pre {
   user-select: none;
   cursor: pointer;
 }
-/* Query-engine pull-down (iOS pull-down button): a rounded field showing the value + a trailing filled
-   chevron square. Sized to sit with the stepper + toggle. */
+/* Query-engine pull-down (custom macOS-style menu): a rounded field + a soft rounded popover with
+   per-item icons and an inset pill marking the selection. Sized to sit with the stepper + toggle. */
 .db-pick {
   display: flex;
   align-items: center;
@@ -116,52 +146,81 @@ pre {
 .db-pick .pull {
   position: relative;
   display: inline-flex;
-  align-items: center;
-  height: 24px;
-  border: 1px solid #c6c6c8;
-  border-radius: 8px;
-  background: #fff;
-  overflow: hidden;
 }
-.db-pick select {
-  appearance: none;
-  -webkit-appearance: none;
+.db-pick .pull-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between; /* label left, caret pinned right — width stays put as the label changes */
+  gap: 0.5rem;
+  min-width: 110px; /* generous + fixed, so the field doesn't resize between SQLite / DuckDB */
+  height: 24px;
+  padding: 0 0.75rem;
+  border: 1px solid #c6c6c8;
+  border-radius: 999px; /* pill — same roundness as the stepper segment */
+  background: #fff;
   font: inherit;
   font-size: 13px;
   color: #1c1c1e;
-  border: none;
-  background: transparent;
-  margin: 0;
-  padding: 0 1.8rem 0 0.7rem; /* room for the trailing chevron square */
-  height: 100%;
-  line-height: 24px;
   cursor: pointer;
 }
-.db-pick select:focus-visible {
+.db-pick .pull-btn:focus-visible {
   outline: 2px solid #0a84ff;
   outline-offset: 1px;
 }
-/* Trailing filled rounded square with a chevron — the iOS pull-down affordance. */
-.db-pick .chev {
-  position: absolute;
-  right: 3px;
-  top: 3px;
-  bottom: 3px;
-  width: 18px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: #0a84ff;
-  border-radius: 5px;
-  pointer-events: none;
-}
-.db-pick .chev::before {
-  content: '';
+/* A small thin down-chevron (two strokes), not a filled triangle — the arrow-like affordance. */
+.db-pick .pull-caret {
   width: 6px;
   height: 6px;
-  border-right: 1.6px solid #fff;
-  border-bottom: 1.6px solid #fff;
-  transform: translateY(-2px) rotate(45deg);
+  border-right: 1.5px solid #8e8e93;
+  border-bottom: 1.5px solid #8e8e93;
+  transform: translateY(-1px) rotate(45deg);
+}
+/* Soft, rounded popover panel (macOS pull-down). Hidden until the button opens it. The panel's own
+   padding insets the item pills so a selected/hovered row never bleeds to the panel edge. */
+.db-pick .pull-menu {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 0;
+  width: 100%; /* exactly the (fixed-width) button — panel + button edges line up flush */
+  box-sizing: border-box;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 14px; /* rounded but not stadium — the button keeps the fuller pill */
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  z-index: 20;
+  display: none;
+}
+.db-pick .pull[data-open='true'] .pull-menu {
+  display: block;
+}
+.db-pick .pull[data-open='true'] .pull-btn {
+  border-color: #0a84ff;
+}
+.db-pick .pull-menu li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.32rem 0.7rem 0.32rem 0.5rem;
+  border-radius: 7px; /* the segment/pill shape for hover + selection */
+  font-size: 13px;
+  color: #1c1c1e;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.db-pick .pull-menu li:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+.db-pick .pull-menu li.selected {
+  background: rgba(0, 0, 0, 0.08); /* only this segment is marked, not the whole row width */
+}
+.db-pick .opt-ico {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  flex: none;
 }
 /* Threads stepper (iOS-style segmented −/value/+). Dimmed + inert when parallel is off. */
 .stepper {

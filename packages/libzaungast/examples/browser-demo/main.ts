@@ -97,6 +97,43 @@ const parallelToggle = document.getElementById('parallel') as HTMLInputElement;
 // Query engine picker (iOS pull-down): SQLite (full, FTS5) vs DuckDB (analytics; search degrades to LIKE).
 const engineSel = document.getElementById('engine') as HTMLSelectElement;
 
+// Custom pull-down controller: the visible menu mirrors into the hidden #engine <select>, which stays the
+// model — picking an item sets its `.value` and fires 'change', which drives everything downstream that
+// already reads engineSel (build/self-test/prewarm), so no other wiring changes.
+const enginePull = document.querySelector('.db-pick .pull') as HTMLElement;
+const engineBtn = document.getElementById('engine-btn') as HTMLButtonElement;
+const engineMenu = document.getElementById('engine-menu') as HTMLUListElement;
+const engineLabel = document.getElementById('engine-label')!;
+const engineOpts = Array.from(engineMenu.querySelectorAll('li'));
+const setEngineOpen = (open: boolean) => {
+  enginePull.dataset.open = String(open);
+  engineBtn.setAttribute('aria-expanded', String(open));
+};
+const pickEngine = (value: string) => {
+  engineSel.value = value;
+  for (const li of engineOpts) {
+    const on = li.dataset.value === value;
+    li.classList.toggle('selected', on);
+    li.setAttribute('aria-selected', String(on));
+    if (on) engineLabel.textContent = li.querySelector('span')!.textContent;
+  }
+  engineSel.dispatchEvent(new Event('change')); // → doPrewarm re-warms the chosen engine's wasm
+};
+engineBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  setEngineOpen(enginePull.dataset.open !== 'true');
+});
+engineMenu.addEventListener('click', (e) => e.stopPropagation()); // keep outside-click dismiss off menu clicks
+for (const li of engineOpts)
+  li.addEventListener('click', () => {
+    pickEngine(li.dataset.value!);
+    setEngineOpen(false);
+  });
+document.addEventListener('click', () => setEngineOpen(false));
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') setEngineOpen(false);
+});
+
 // Threads stepper: worker-pool size for parallel mode, 2 … min(10, cores), default 8. (10 not 8 so the
 // degradation past the sweet spot is visible.) Disabled when parallel is off.
 const stepper = document.getElementById('threads-stepper')!;

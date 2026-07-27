@@ -37,45 +37,20 @@ C:\Users\&lt;you&gt;\AppData\Local\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Mic
         aria-label="Self-test (no data)"
         title="Self-test — build an empty store to verify the wasm engine(s)"
       >
-        <!-- stopwatch / timer -->
-        <svg
-          class="btn-icon"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.8"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M9.5 3h5" />
-          <path d="M12 3v3" />
-          <circle cx="12" cy="13.5" r="7.5" />
-          <path d="M12 13.5L15 10.5" />
-        </svg>
+        <!-- shield-check (verify the engine built OK) — assets/icon-shield-check.svg via CSS mask -->
+        <span class="btn-icon icon-shield-check" aria-hidden="true"></span>
       </button>
       <button
         id="pickBtn"
         aria-label="Pick Teams cache folder and run"
         title="Pick your Teams cache folder — decode, build, and query it"
       >
-        <!-- play circle -->
-        <svg
-          class="btn-icon"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.8"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <circle cx="12" cy="12" r="9" />
-          <path d="M9.8 7.7L16.5 12L9.8 16.3Z" fill="currentColor" stroke="none" />
-        </svg>
+        <!-- folder-open (pick a directory) — assets/icon-folder-open.svg via CSS mask -->
+        <span class="btn-icon icon-folder-open" aria-hidden="true"></span>
       </button>
       <!-- Hidden real input (webkitdirectory: folder pick, cross-browser); the button triggers it. -->
       <input id="pick" type="file" webkitdirectory hidden />
-      <!-- Right-aligned cluster: threads stepper (left) then the parallel master toggle (right). -->
+      <!-- Right-aligned cluster: parallel master toggle (left) then the threads stepper (right). -->
       <div class="right-controls">
         <!-- Query-engine pull-down (iOS pull-down button): SQLite (full, FTS5) vs DuckDB (analytics;
              search degrades to a content LIKE scan — no FTS5). Picks which engine answers the queries. -->
@@ -84,28 +59,56 @@ C:\Users\&lt;you&gt;\AppData\Local\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Mic
           title="Query engine — SQLite (full, FTS5) or DuckDB (analytics; search via LIKE)"
           aria-label="query engine"
         >
-          <!-- database (cylinder) -->
-          <svg class="ctl-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <ellipse cx="12" cy="5.5" rx="7" ry="2.8" stroke="currentColor" stroke-width="1.7" />
-            <path
-              d="M5 5.5v13c0 1.55 3.13 2.8 7 2.8s7-1.25 7-2.8v-13"
-              stroke="currentColor"
-              stroke-width="1.7"
-            />
-            <path
-              d="M5 12c0 1.55 3.13 2.8 7 2.8s7-1.25 7-2.8"
-              stroke="currentColor"
-              stroke-width="1.7"
-            />
-          </svg>
-          <span class="pull">
-            <select id="engine" aria-label="query engine">
+          <!-- database (cylinder) — assets/icon-database.svg via CSS mask -->
+          <span class="ctl-icon icon-database" aria-hidden="true"></span>
+          <!-- Custom pull-down (a native <select> popup can't have rounded corners, a pill-segment
+               selection, or per-item icons). The hidden <select id="engine"> stays the source of truth
+               so main.ts keeps reading `.value` + the `change` event; the menu just mirrors into it. -->
+          <span class="pull" data-open="false">
+            <button
+              type="button"
+              class="pull-btn"
+              id="engine-btn"
+              aria-haspopup="listbox"
+              aria-expanded="false"
+            >
+              <span class="pull-label" id="engine-label">SQLite</span>
+              <span class="pull-caret" aria-hidden="true"></span>
+            </button>
+            <ul class="pull-menu" id="engine-menu" role="listbox" aria-label="query engine">
+              <li
+                role="option"
+                class="selected"
+                data-value="sqlite"
+                aria-selected="true"
+              >
+                <img class="opt-ico" src="assets/icon.sqlite.svg" alt="" />
+                <span>SQLite</span>
+              </li>
+              <li role="option" data-value="duckdb" aria-selected="false">
+                <img class="opt-ico" src="assets/icon.duckdb.lightmode.svg" alt="" />
+                <span>DuckDB</span>
+              </li>
+            </ul>
+            <select id="engine" hidden tabindex="-1" aria-hidden="true">
               <option value="sqlite">SQLite</option>
               <option value="duckdb">DuckDB</option>
             </select>
-            <span class="chev" aria-hidden="true"></span>
           </span>
         </span>
+        <!-- Build-mode toggle: on = parallel worker pool, off = serial. Label text first, switch after. -->
+        <label
+          class="mode"
+          title="Parse .ldb + run extract across a Web Worker pool"
+          aria-label="parallel"
+        >
+          <!-- layers (parallel worker pool) — assets/icon-layers.svg via CSS mask -->
+          <span class="ctl-icon icon-layers" aria-hidden="true"></span>
+          <span class="switch">
+            <input id="parallel" type="checkbox" checked />
+            <span class="slider"></span>
+          </span>
+        </label>
         <!-- Thread-count stepper — pool size for parallel mode; disabled when parallel is off. -->
         <span
           class="stepper"
@@ -113,21 +116,8 @@ C:\Users\&lt;you&gt;\AppData\Local\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Mic
           title="Worker-pool size for parallel decode/extract"
           aria-label="worker threads"
         >
-          <!-- cpu / threads -->
-          <svg
-            class="ctl-icon"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.7"
-            stroke-linecap="round"
-            aria-hidden="true"
-          >
-            <rect x="7" y="7" width="10" height="10" rx="2" />
-            <path
-              d="M10 3.5v3M14 3.5v3M10 17.5v3M14 17.5v3M3.5 10h3M3.5 14h3M17.5 10h3M17.5 14h3"
-            />
-          </svg>
+          <!-- split (one job fanning out to workers) — assets/icon-split.svg via CSS mask -->
+          <span class="ctl-icon icon-split" aria-hidden="true"></span>
           <span class="seg">
             <button type="button" id="thread-dec" class="step-btn" aria-label="fewer threads">
               −
@@ -138,31 +128,6 @@ C:\Users\&lt;you&gt;\AppData\Local\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Mic
             </button>
           </span>
         </span>
-        <!-- Build-mode toggle: on = parallel worker pool, off = serial. Label text first, switch after. -->
-        <label
-          class="mode"
-          title="Parse .ldb + run extract across a Web Worker pool"
-          aria-label="parallel"
-        >
-          <!-- parallel lanes (two arrows) -->
-          <svg
-            class="ctl-icon"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.7"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M3 8.5h13.5M13 5.5l3.5 3-3.5 3" />
-            <path d="M3 15.5h13.5M13 12.5l3.5 3-3.5 3" />
-          </svg>
-          <span class="switch">
-            <input id="parallel" type="checkbox" checked />
-            <span class="slider"></span>
-          </span>
-        </label>
       </div>
     </div>
 

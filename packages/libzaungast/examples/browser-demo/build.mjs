@@ -5,7 +5,7 @@
 // per-phase progress. Serve with any static host: `npx serve browser-demo/dist`, VS Code Live Server,
 // GitHub Pages, …
 import esbuild from 'esbuild';
-import { copyFileSync, mkdirSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
@@ -48,6 +48,12 @@ copyFileSync(wasm, `${dist}/sqlite3.wasm`);
 for (const a of duckdbAssets) copyFileSync(path.join(duckdbDist, a), `${dist}/${a}`);
 copyFileSync(`${here}index.html`, `${dist}/index.html`);
 copyFileSync(`${here}styles.css`, `${dist}/styles.css`);
+// Hand-authored SVG icons under assets/ → dist/assets/ (index.html references them by that relative
+// path: engine-menu brand icons via <img>, monochrome control icons via CSS mask). Copy every .svg so
+// new icons are picked up automatically.
+mkdirSync(`${dist}/assets`, { recursive: true });
+for (const a of readdirSync(`${here}assets`).filter((f) => f.endsWith('.svg')))
+  copyFileSync(`${here}assets/${a}`, `${dist}/assets/${a}`);
 
 console.log(
   '\n✓ built browser-demo/dist: index.html + styles.css + main.js + worker.js + sqlite3.wasm' +
