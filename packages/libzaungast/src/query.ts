@@ -986,19 +986,28 @@ export interface Topic {
 // "updated/status" chatter isn't a topic you discussed. Excluded from BOTH window and baseline
 // so lift isn't skewed. (Scope/exclude conds are built by the MCP layer, which owns the shared
 // conversation/person resolvers.)
+// One scoped message as the topics scorer sees it — camelCase, DB-dialect-free (so a non-SQLite
+// backend can build the same array). `senderMri` is `sender_mri` projected out of the store.
+export interface TopicMessage {
+  ts: number;
+  senderMri: string;
+  content: string;
+}
 function loadTopicsMessages(
   db: DB,
   conds: string[],
   params: any[],
   includeBots: boolean | undefined,
-): { all: any[]; botExcluded: number } {
+): { all: TopicMessage[]; botExcluded: number } {
   let all = db
-    .prepare(`select ts, sender_mri, content from messages where ${conds.join(' and ')}`)
-    .all(...params) as any[];
+    .prepare(
+      `select ts, sender_mri as senderMri, content from messages where ${conds.join(' and ')}`,
+    )
+    .all(...params) as TopicMessage[];
   let botExcluded = 0;
   if (!includeBots) {
     const before = all.length;
-    all = all.filter((m) => !isBotMri(m.sender_mri));
+    all = all.filter((m) => !isBotMri(m.senderMri));
     botExcluded = before - all.length;
   }
   return { all, botExcluded };
@@ -1020,7 +1029,7 @@ export type TopicsScopeResult =
   | { ok: false; reason: QueryMiss }
   | {
       ok: true;
-      all: any[];
+      all: TopicMessage[];
       botExcluded: number;
       minSenders: number;
       excludeWords: string[];
@@ -1067,13 +1076,11 @@ export function loadTopicsInScope(store: ChatStore, opts: TopicsScopeOptions): T
 // Score each candidate phrase by lift (window rate ÷ Laplace-smoothed baseline rate) weighted by
 // log-frequency, requiring ≥3 window mentions and ≥minSenders distinct senders (anti-spam gate).
 export function computeTopicRows(
-  all: any[],
+  all: readonly TopicMessage[],
   phrases: (content: string) => string[],
-  sinceTs: number,
-  untilTs: number,
-  minSenders: number,
-  n: number,
-): { rows: Topic[]; baseTotal: number; win: any[] } {
+  opts: { sinceTs: number; untilTs: number; minSenders: number; n: number },
+): { rows: Topic[]; baseTotal: number; winCount: number } {
+  const { sinceTs, untilTs, minSenders, n } = opts;
   const baseDf = new Map<string, number>();
   let baseTotal = 0;
   for (const m of all)
@@ -1095,7 +1102,7 @@ export function computeTopicRows(
         df.set(ph, (df.get(ph) || 0) + 1);
         seen.add(ph);
       }
-      (senders.get(ph) || senders.set(ph, new Set()).get(ph)!).add(m.sender_mri);
+      (senders.get(ph) || senders.set(ph, new Set()).get(ph)!).add(m.senderMri);
       if (!example.has(ph)) example.set(ph, m);
     }
   }
@@ -1114,7 +1121,7 @@ export function computeTopicRows(
     .filter((r) => r.count >= 3 && r.senderCount >= minSenders)
     .sort((a, b) => b.lift * Math.log2(1 + b.count) - a.lift * Math.log2(1 + a.count))
     .slice(0, n);
-  return { rows, baseTotal, win };
+  return { rows, baseTotal, winCount: win.length };
 }
 
 // Topics window policy: an explicit range (already-parsed sinceTs/untilTs) overrides the enum
@@ -1122,7 +1129,7 @@ export function computeTopicRows(
 // anchors to the newest message actually IN SCOPE (`all`), not wall-clock now. `explicit` is passed
 // in (the MCP layer computes it from arg presence + does the parseTime/validation).
 export function computeTopicsWindow(
-  all: any[],
+  all: readonly { ts: number }[],
   opts: { explicit: boolean; sinceTs?: number; untilTs?: number; windowKey?: string },
 ): { sinceTs: number; untilTs: number } {
   let maxTs = 0;

@@ -202,13 +202,13 @@ export async function buildDuckDbStore(
         .filter((r) => !isBotMri(r.sender_mri))
         .map((r) => ({
           ts: num(r.ts),
-          sender_mri: r.sender_mri,
+          senderMri: String(r.sender_mri ?? ''),
           content: String(r.content ?? ''),
         }));
       if (!all.length) return { ok: false, reason: { reason: 'no messages' } };
 
       const { sinceTs, untilTs } = computeTopicsWindow(all, { explicit: false, windowKey });
-      const { rows } = computeTopicRows(all, phrases, sinceTs, untilTs, 2, n);
+      const { rows } = computeTopicRows(all, phrases, { sinceTs, untilTs, minSenders: 2, n });
       return { ok: true, rows };
     },
   };

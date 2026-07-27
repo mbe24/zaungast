@@ -282,19 +282,17 @@ export function makeApis(
         windowKey: opts.window,
       });
       const n = Math.min(Number(opts.n) || 8, 15);
-      const { rows, baseTotal, win } = computeTopicRows(
-        scoped.all,
-        phrases,
+      const { rows, baseTotal, winCount } = computeTopicRows(scoped.all, phrases, {
         sinceTs,
         untilTs,
-        scoped.minSenders,
+        minSenders: scoped.minSenders,
         n,
-      );
+      });
       return {
         ok: true,
         rows,
         window: { sinceTs, untilTs },
-        windowCount: win.length,
+        windowCount: winCount,
         scopeTotal: scoped.all.length,
         baseTotal,
         botExcluded: scoped.botExcluded,
