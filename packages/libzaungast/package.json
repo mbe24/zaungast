@@ -70,6 +70,9 @@
   "engines": {
     "node": ">=22.5.0"
   },
+  "devDependencies": {
+    "@sqlite.org/sqlite-wasm": "3.53.0-build1"
+  },
   "license": "Apache-2.0",
   "keywords": [
     "microsoft-teams",
