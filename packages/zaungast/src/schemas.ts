@@ -132,6 +132,13 @@ export const describeSchemaShape = {
   limit: z.number().int().min(1).max(60).optional().describe('max stores to list (default 20)'),
 };
 
+export const getAttachmentsShape = {
+  conversation: z.string().describe('conversation handle (c:xxxx) or title/participant substring'),
+  message: z.string().describe('the message id — the m:… value from a search hit or get_message'),
+  index: z.number().int().min(1).optional().describe('only the Nth attachment (1-based)'),
+  no_inline: z.boolean().optional().describe('list only, without returning image content'),
+};
+
 export type ListConversationsArgs = z.infer<z.ZodObject<typeof listConversationsShape>>;
 export type ReadConversationArgs = z.infer<z.ZodObject<typeof readConversationShape>>;
 export type ReadThreadArgs = z.infer<z.ZodObject<typeof readThreadShape>>;
@@ -142,3 +149,4 @@ export type FindPersonArgs = z.infer<z.ZodObject<typeof findPersonShape>>;
 export type ListEventsArgs = z.infer<z.ZodObject<typeof listEventsShape>>;
 export type ListCallsArgs = z.infer<z.ZodObject<typeof listCallsShape>>;
 export type DescribeSchemaArgs = z.infer<z.ZodObject<typeof describeSchemaShape>>;
+export type GetAttachmentsArgs = z.infer<z.ZodObject<typeof getAttachmentsShape>>;

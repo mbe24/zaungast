@@ -13,6 +13,7 @@ import { findPerson, findPersonTool } from './tools/findPerson.js';
 import { listEvents, listEventsTool } from './tools/listEvents.js';
 import { listCalls, listCallsTool } from './tools/listCalls.js';
 import { describeSchemaTool } from './tools/describeSchema.js';
+import { getAttachments, getAttachmentsTool } from './tools/getAttachments.js';
 
 export { fmtTs, parseTime } from './tools/shared.js';
 export {
@@ -25,6 +26,7 @@ export {
   findPerson,
   listEvents,
   listCalls,
+  getAttachments,
 };
 
 export const TOOLS: Tool[] = [
@@ -32,6 +34,7 @@ export const TOOLS: Tool[] = [
   readConversationTool,
   readThreadTool,
   getMessageTool,
+  getAttachmentsTool,
   searchTool,
   rankTopicsTool,
   findPersonTool,

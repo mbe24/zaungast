@@ -31,6 +31,21 @@ field **mapping**, so the volatile Teams schema is separated from the stable Chr
 The exact byte layouts of each of these layers are documented in the
 [Chromium IndexedDB format reference](reference/chromium-indexeddb-format.md).
 
+## Images (`get_attachments`)
+
+Message bodies reference pasted images as AMS objects
+(`…/v1/objects/<id>/views/imgo`); the bytes are not in IndexedDB. When Teams displays an image,
+WebView2 keeps the HTTP response in its **blockfile disk cache** (`<profile>\Cache\Cache_Data`:
+`index`, `data_0..N`, `f_XXXXXX`). `get_attachments` reads it directly:
+
+1. Scan the 256-byte entry blocks of `data_1` (and its `next_file` chain) for live entries
+   whose key contains `/objects/<id>/`. An entry counts as live only if its block, and later its
+   body blocks, are set in the block file's **allocation bitmap**: freed blocks keep their old
+   bytes, so this keeps a stale entry from returning another image's body.
+2. Prefer the full-size view (`imgo`) over thumbnails, read stream 1 (the response body) from
+   its block file or external `f_` file, and accept it only if it sniffs as JPEG, PNG, GIF or
+   WebP.
+
 ## Indexing & serving
 
 Decoded records are loaded into an in-memory **SQLite** database (`node:sqlite`) with an

@@ -112,6 +112,7 @@ fails or to pin a specific profile. From-source setup and other clients are cove
 | `read_conversation`  | Browse one conversation's messages in story order (window / date-range / page back).                  |
 | `read_thread`        | Read one channel reply-chain in full (root + all replies).                                            |
 | `get_message`        | One message in full — complete untruncated body + reactions, by conversation + `m:<id>`.              |
+| `get_attachments`    | A message's pasted images, read from Teams' local HTTP cache; files and cards listed with their URLs. |
 | `search`             | Full-text search + filters (from, in, kind, `mentions_me`, has-attachment, date).                     |
 | `list_events`        | Calendar meetings & appointments (forward window by default); metadata-only, join-URLs never exposed. |
 | `list_calls`         | Call history — 1:1/group calls with direction, duration, missed, and recording pointers.              |
@@ -131,6 +132,7 @@ block (as above).
 | `TEAMS_LEVELDB_DIR`    | auto-discovered | Absolute path to the `…indexeddb.leveldb` folder (examples below). Set only if auto-discovery fails, or to pin one profile when you have several. |
 | `ZAUNGAST_INCREMENTAL` | `copy-reuse`    | Refresh mode: `copy-reuse` (faster) or `reparse` (simpler).                                                                                       |
 | `ZAUNGAST_DB_DIR`      | unset           | Read a static _copy_ of the database directly (offline analysis); skips discovery and live refresh.                                               |
+| `TEAMS_HTTP_CACHE_DIR` | derived         | Teams HTTP cache read by `get_attachments`. Derived from the profile (`<profile>CacheCache_Data`); set it when using `ZAUNGAST_DB_DIR`.           |
 | `ZAUNGAST_ENGINE`      | `js`            | Ingest engine: `js` (built-in, zero-dep), `native` (require the optional `libzaungast-native` accelerator; errors if unavailable), or `auto` (native when available, else JS). See [Configuration → Native engine](docs/configuration.md). |
 
 `TEAMS_LEVELDB_DIR` points at the folder ending in **`.indexeddb.leveldb`** (the one holding
@@ -153,8 +155,10 @@ Desktop) — environment placeholders like `~` or `%LOCALAPPDATA%` aren't expand
   local agent over stdio.
 - **Cannot harm Teams** — no code path writes to, locks, or memory-maps the Teams directory;
   only read-and-copy.
-- **Images/files are URL-only** — chat images live in Teams' cloud behind auth; zaungast notes
-  that an attachment exists but never fetches it and never handles credentials.
+- **Images only from the local cache** — `get_attachments` returns a pasted image only if Teams
+  already displayed it on this device and it is still in Teams' local HTTP cache. Anything else
+  (images not in the cache, shared files) is listed by URL; zaungast never downloads it and never
+  handles credentials.
 
 More in the [privacy & safety docs](https://zaungast.readthedocs.io/en/latest/privacy/).
 

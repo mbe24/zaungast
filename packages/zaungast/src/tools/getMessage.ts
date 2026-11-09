@@ -60,8 +60,13 @@ export function getMessage(
       ? `in thread m:${row.rootId} · read_thread(thread: m:${row.rootId})`
       : '';
   const legend = row.isMine ? viewerLegend(ownerNm) : '';
+  const attach = row.hasAttachment
+    ? `attachments: get_attachments(conversation: ${conv.handle}, message: m:${id}) shows images/files`
+    : '';
 
-  return [envelope(view, ctx), head, msgLine, rxLine, pivot, legend].filter(Boolean).join('\n');
+  return [envelope(view, ctx), head, msgLine, rxLine, pivot, attach, legend]
+    .filter(Boolean)
+    .join('\n');
 }
 
 export const getMessageTool: QueryTool = {

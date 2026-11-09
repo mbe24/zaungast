@@ -117,7 +117,41 @@ The header names the conversation, the `m:<id>`, and the character window
 (`full body · chars 0..N/total`); a body longer than ~4000 characters ends with a
 `… +N chars · get_message(offset:<n>)` continuation you can follow. If the message sits inside a
 thread, an `in thread m:<root> · read_messages(thread: m:<root>)` pointer lets you pivot to its
-surrounding context.
+surrounding context. A message marked `[attachment]` ends with an
+`attachments: get_attachments(…)` pointer.
+
+## `get_attachments`
+
+List the attachments of **one** message and show its pasted images. The search index keeps only
+the text of a message, so this tool re-reads the message's raw record (its HTML body plus
+`properties.files` / `properties.cards`) from the snapshot behind the current index.
+
+| Arg            | Description                                                                         |
+| -------------- | ----------------------------------------------------------------------------------- |
+| `conversation` | `c:` handle or title/participant substring (**required**).                          |
+| `message`      | The message id — the `m:…` value from a search hit or `get_message` (**required**). |
+| `index`        | Only the Nth attachment (1-based).                                                  |
+| `no_inline`    | List only, without returning image content.                                         |
+
+One line per attachment, numbered `#1`, `#2`, …:
+
+- **Pasted image** (an AMS object, `…/v1/objects/<id>/views/imgo`): looked up in Teams' local
+  Chromium HTTP cache. If found, the line reads `cached image/jpeg 31.8 KB · shown below`, and
+  the image is returned as MCP image content (JPEG, PNG, GIF or WebP, up to 3.5 MB each). If not,
+  the line gives the object id and URL. Teams caches an image when it displays it, so opening the
+  chat in Teams usually makes it available.
+- **External image** (e.g. a Giphy GIF): URL only.
+- **File** (SharePoint/OneDrive): name, type and share URL; not downloadable offline.
+- **Card** (Adaptive Card, hero card, …): content type and title.
+
+Nothing is downloaded: images come only from the local cache (see
+[Privacy & safety](privacy.md#attachments-and-images)).
+
+```
+c:7d3e10 · m:1700000000000 · 11-09 11:25 Ada Lovelace · 2 attachment(s)
+#1 image "image" 735x250 · ams 0-weu-d1-0123… · cached image/jpeg 31.8 KB (view imgo) · shown below
+#2 file "notes.pdf" (pdf) · https://contoso.sharepoint.com/… · not downloadable offline (SharePoint/OneDrive, needs auth)
+```
 
 ## `search`
 
