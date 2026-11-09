@@ -8,6 +8,7 @@ auto-discovered and there are no credentials. All variables below are optional.
 | `TEAMS_LEVELDB_DIR` | Absolute path to the Teams `…\IndexedDB\https_teams.microsoft.com_0.indexeddb.leveldb` directory. Set only if auto-discovery fails, or to pin a specific profile when you have several. | auto-discovered |
 | `ZAUNGAST_INCREMENTAL` | Refresh mode: `copy-reuse` (faster — reuses immutable `.ldb` parses, re-reads only the write-ahead log) or `reparse` (simpler — re-reads everything each refresh). Both produce identical results. | `copy-reuse` |
 | `ZAUNGAST_DB_DIR` | Read a static *copy* of the leveldb directory directly instead of discovering/snapshotting the live one. Useful for offline analysis or tests; disables live refresh. | unset |
+| `TEAMS_HTTP_CACHE_DIR` | Teams' Chromium HTTP disk cache, where `get_attachments` looks for pasted images. By default it is derived from the database's profile (`<profile>\Cache\Cache_Data`). Set it when the database is a static copy (`ZAUNGAST_DB_DIR`), which has no profile next to it. | derived from the database path |
 | `ZAUNGAST_ENGINE` | Ingest engine. `js` (default): the built-in pure-TypeScript engine — no extra dependencies. `native`: require the optional `libzaungast-native` Rust accelerator, and error loudly if it is not installed or fails the conformance handshake. `auto`: use native when it is present and conformant, otherwise fall back to JS. See [Native engine](#native-engine-optional). | `js` |
 
 ## Native engine (optional)

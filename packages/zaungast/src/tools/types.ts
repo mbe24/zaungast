@@ -30,4 +30,22 @@ export interface RawTool {
   inputSchema: any;
   run(snap: Snapshot, args: any): string;
 }
-export type Tool = QueryTool | RawTool;
+// A `media` tool (get_attachments) returns MCP content blocks (text + images), and may re-load the
+// snapshot backing the current build to reach raw record fields the ingest store doesn't keep.
+export type MediaContent =
+  { type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string };
+export interface MediaCtx {
+  view: StoreReading;
+  render: RenderCtx;
+  reloadSnapshot(): Snapshot;
+  httpCacheDir: string | null; // Teams' Chromium HTTP disk cache (Cache/Cache_Data), if found
+}
+export interface MediaTool {
+  kind: 'media';
+  name: string;
+  title: string;
+  description: string;
+  inputSchema: any;
+  run(args: any, ctx: MediaCtx): MediaContent[];
+}
+export type Tool = QueryTool | RawTool | MediaTool;

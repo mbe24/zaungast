@@ -22,11 +22,17 @@ This was verified by design review and is covered by tests.
 
 ## Attachments and images
 
-Images and files shared in chat are **not** stored locally — Teams keeps them in its cloud
-behind authentication. zaungast surfaces *that* an attachment exists (an `[attachment]`
-marker, and the URL is preserved in the data) but **never fetches the bytes** and never
-handles any auth token. Fetching them would require live, authenticated calls — out of scope
-for a local, credential-free reader.
+Images and files shared in chat live in Teams' cloud behind authentication. zaungast surfaces
+*that* an attachment exists (an `[attachment]` marker) and **never downloads anything** or
+handles any auth token.
+
+One local copy does exist: when Teams displays a pasted image, the client keeps the response
+in its Chromium HTTP disk cache (`<profile>\Cache\Cache_Data`). `get_attachments` reads that
+cache, under the same rules as the database: files are opened read-only and read into memory,
+never written, locked, or memory-mapped. So an image is available only if Teams already showed
+it on this device and has not evicted it yet. Everything else (images not in the cache, files
+shared via SharePoint/OneDrive) is listed with its URL only: fetching it would require live,
+authenticated calls, which are out of scope for a local, credential-free reader.
 
 ## What's on disk
 

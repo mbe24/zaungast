@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Add a `get_attachments` tool that shows the images pasted in a message, read from Teams' local HTTP cache, and lists its files and cards with their URLs. `get_message` points to it for messages marked `[attachment]`.
+- Add a `TEAMS_HTTP_CACHE_DIR` variable to set the cache location when it can't be derived from the database path.
+
 ## [0.5.0] - 2026-07-27
 
 ### Added
